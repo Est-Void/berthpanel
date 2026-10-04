@@ -1,0 +1,15 @@
+Mozilla CA bundle — vendored, embedded into the binary at build time
+====================================================================
+
+Source:  https://curl.se/ca/cacert.pem (Mozilla-derived CA bundle)
+SHA-256: a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505
+Mozilla data as of: Fri Sep 25 03:12:01 2026 GMT
+
+The panel never reads a system CA path (dev.md §2): trust comes from this
+file, converted to a C array by scripts/gen-trust-store.py during the
+build ($(BUILD)/generated/trust_store.cpp). Updating the bundle is a
+deliberate commit: replace the PEM, recompute this manifest, state the
+new "Mozilla as of" date.
+
+Why not fetch at build time: the build must not depend on the network,
+and the trust set must be reviewable in-tree before it is built in.

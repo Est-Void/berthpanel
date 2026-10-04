@@ -1,0 +1,9 @@
+nlohmann/json — vendored single header
+======================================
+
+Tag:     v3.11.3
+Source:  https://raw.githubusercontent.com/nlohmann/json/v3.11.3/single_include/nlohmann/json.hpp
+SHA-256: 9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6
+
+Pinned by tag + SHA-256 (same discipline as the catalog recipes). Update by
+replacing the header and this file in one commit.

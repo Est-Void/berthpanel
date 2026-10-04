@@ -1,0 +1,13 @@
+sha2 (SHA-256) — vendored
+=========================
+
+Source:  https://github.com/B-Con/crypto-algorithms (public domain)
+Commit:  cfbde48414baacf51fc7c74f275190881f037d32 (master at vendoring time)
+Files:   sha256.c, sha256.h
+SHA-256: 4cbc93d30c28cee2a056d6f52cbce6e66ff9450f1d712ee4f59761b9b4486fad  sha256.c
+         a946e621775fd8251624e77d19f25407c4b6074ab780027e5797b77c7acf79b5  sha256.h
+
+Used for tool (toolbox.cpp) and plugin content pins. Compiled as C with
+relaxed flags on purpose (third-party code must not gate on our warning
+set); the C++ wrapper is src/util/sha256.h. Update by replacing the files
+and this manifest in one commit.

@@ -1,0 +1,23 @@
+# Minimal CI (docs/plan.md stage 2.6): build + test suite only. The full
+# release pipeline (signature verify, reproducibility check, musl container)
+# lands in stage 8.5. Network tests are opt-in by design and never run here.
+
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # git describe needs history for the version header
+      - name: Build (debug)
+        run: make -j2
+      - name: Build (release)
+        run: make -j2 release
+      - name: Test
+        run: make test
