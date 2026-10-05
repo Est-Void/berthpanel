@@ -21,6 +21,7 @@
 #include "../berth/httpclient.h"
 #include "validate.h"
 #include "../util/errno.h"
+#include "../util/gzip.h"
 #include "../util/fd.h"
 #include "../util/strutil.h"
 
@@ -414,6 +415,7 @@ Result<std::vector<TarEntry>> tar_list(const std::string_view bytes) {
     entry.typeflag = e.typeflag;
     entry.link_target = std::move(e.link_target);
     entry.mode = e.mode;
+    entry.data_offset = e.data_offset;
     out.push_back(std::move(entry));
   }
   return out;
@@ -432,6 +434,14 @@ Result<std::size_t> tar_extract(const std::string_view bytes,
     ++extracted;
   }
   return extracted;
+}
+
+Result<std::size_t> tar_extract_gz(const std::string_view gzipped,
+                                   const std::filesystem::path& dest,
+                                   const std::size_t max_out) {
+  Result<std::string> plain = gunzip(gzipped, max_out);
+  if (plain.is_err()) return std::move(plain).error();
+  return tar_extract(plain.value(), dest);
 }
 
 Result<std::vector<TreeFile>> parse_tree_response(const std::string_view body) {
@@ -519,7 +529,7 @@ Result<std::filesystem::path> fetch_and_extract(
   }
 
   Result<std::size_t> extracted =
-      tar_extract(reply.value().body, dest_dir);
+      tar_extract_gz(reply.value().body, dest_dir);
   if (extracted.is_err()) return std::move(extracted).error();
 
   // The tarball carries exactly one top-level directory (owner-repo-sha).

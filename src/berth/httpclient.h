@@ -95,6 +95,11 @@ struct HttpGetOptions {
   std::string purpose = "https-get";  // net.log purpose field
   int max_redirect_hops = 0;          // 0 = never follow; capped by
                                       // kMaxRedirectHops (excess = Err)
+  // Explicit opt-in for callers that KNOW their upstream redirects
+  // (GitHub release assets 302 to release-assets.githubusercontent.com,
+  // which is on the allowlist for exactly that reason). Every hop is still
+  // gated per hop; a redirect to a non-allowlisted host is refused.
+  bool follow_allowlisted_redirects = false;
   std::chrono::milliseconds per_attempt_timeout{30000};
   int max_attempts = 3;               // transport failures only
   std::size_t max_body_bytes = kMaxBodyBytes;
@@ -115,6 +120,9 @@ struct RedirectDecision {
   RedirectAction action = RedirectAction::kNotRedirect;
   std::string next_url;
 };
+
+// The hop budget a request actually gets: 0 unless the caller opted in.
+[[nodiscard]] int effective_redirect_budget(const HttpGetOptions& options);
 
 // The pure redirect-loop driver. `hops_done` is the number of redirects
 // already followed for this logical request. A target is followable only

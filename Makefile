@@ -34,6 +34,7 @@ LIB_SRC := \
 	src/json.cpp \
 	src/state.cpp \
 	src/flags.cpp \
+	src/deploylog.cpp \
 	src/netlog.cpp \
 	src/berth/httpclient.cpp \
 	src/berth/resolver.cpp \
@@ -49,7 +50,16 @@ LIB_SRC := \
 	src/berth/gitclone.cpp \
 	src/berth/toolcheck.cpp \
 	src/berth/toolbox.cpp \
+	src/berth/goenv.cpp \
+	src/berth/preflight.cpp \
+	src/berth/prefetch.cpp \
+ 	src/berth/sandbox.cpp \
+ 	src/berth/cancel.cpp \
+ 	src/berth/recipes.cpp \
+	src/berth/catalog.cpp \
+	src/berth/deploy.cpp \
 	src/util/which.cpp \
+	src/util/gzip.cpp \
 	src/util/subprocess.cpp
 
 # Vendored C sources, compiled per mode (relaxed warnings on purpose; see
@@ -91,10 +101,19 @@ TEST_SRC := \
 	tests/which_test.cpp \
 	tests/gitclone_test.cpp \
 	tests/toolcheck_test.cpp \
-	tests/toolbox_test.cpp
+	tests/toolbox_test.cpp \
+	tests/goenv_test.cpp \
+	tests/preflight_test.cpp \
+	tests/prefetch_test.cpp \
+	tests/sandbox_test.cpp \
+	tests/recipes_test.cpp \
+	tests/catalog_test.cpp \
+ 	tests/deploy_test.cpp \
+ 	tests/cancel_test.cpp \
+ 	tests/gzip_test.cpp
 
 INCLUDES := -Iinclude -Isrc -I$(BUILD)/generated -isystem third_party -isystem third_party/mbedtls/include
-LDLIBS   :=
+LDLIBS   := -lz
 DEPFLAGS := -MMD -MP
 
 # Reproducible release (dev.md §3): fixed epoch, no absolute build paths in

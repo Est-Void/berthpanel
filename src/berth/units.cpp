@@ -3,6 +3,7 @@
 #include "units.h"
 
 #include <algorithm>
+#include <atomic>
 #include <string>
 #include <utility>
 
@@ -82,6 +83,20 @@ Result<std::string> quote_unit_value(const std::string_view value) {
   return out;
 }
 
+Result<std::string> raw_systemd_path(const std::filesystem::path& path) {
+  const std::string value = path.string();
+  if (value.empty()) return Error("units: refusing an empty path");
+  if (value.front() != '/') {
+    return Error("units: path directives need an absolute path: " + value);
+  }
+  for (const char c : value) {
+    if (c == '\n' || c == '\r' || c == '\0') {
+      return Error("units: path contains a control character");
+    }
+  }
+  return value;
+}
+
 Result<std::string> render_exec_start(const std::string_view binary,
                                       const std::vector<std::string>& args) {
   Result<std::string> head = quote_exec_word(binary);
@@ -149,12 +164,12 @@ Result<std::string> render_unit(const UnitSpec& spec) {
   out += "Type=simple\n";
 
   if (!spec.working_dir.empty()) {
-    Result<std::string> wd = quote_unit_value(spec.working_dir.string());
+    Result<std::string> wd = raw_systemd_path(spec.working_dir);
     if (wd.is_err()) return std::move(wd).error();
     out += "WorkingDirectory=" + std::move(wd).value() + "\n";
   }
   if (!spec.secrets_file.empty()) {
-    Result<std::string> env_file = quote_unit_value(spec.secrets_file.string());
+    Result<std::string> env_file = raw_systemd_path(spec.secrets_file);
     if (env_file.is_err()) return std::move(env_file).error();
     out += "EnvironmentFile=" + std::move(env_file).value() + "\n";
   }
@@ -203,7 +218,7 @@ Result<std::string> render_unit(const UnitSpec& spec) {
   // One directive per path — a space-joined list would become two
   // nonexistent paths and the namespace would fail to set up (§11).
   for (const std::filesystem::path& path : spec.read_write_paths) {
-    Result<std::string> value = quote_unit_value(path.string());
+    Result<std::string> value = raw_systemd_path(path);
     if (value.is_err()) return std::move(value).error();
     out += "ReadWritePaths=" + std::move(value).value() + "\n";
   }
@@ -229,14 +244,34 @@ Result<std::filesystem::path> write_unit(const Paths& paths,
   return target;
 }
 
-Result<void> systemctl_user(const std::vector<std::string>& args) {
+namespace {
+
+Result<RunOutput> systemctl_user_run(const std::vector<std::string>& args,
+                                     const std::chrono::milliseconds timeout,
+                                     std::atomic<bool>* cancel) {
   Result<std::string> binary = resolve_executable("systemctl");
   if (binary.is_err()) return std::move(binary).error();
   std::vector<std::string> argv{std::move(binary).value(), "--user"};
   argv.insert(argv.end(), args.begin(), args.end());
   RunLimits limits;
-  limits.timeout = std::chrono::milliseconds(20000);
-  Result<RunOutput> out = run(argv, limits);
+  limits.timeout = timeout;
+  limits.cancel = cancel;
+  return run(argv, limits);
+}
+
+}  // namespace
+
+Result<int> systemctl_user_code(const std::vector<std::string>& args,
+                                const std::chrono::milliseconds timeout,
+                                std::atomic<bool>* cancel) {
+  Result<RunOutput> out = systemctl_user_run(args, timeout, cancel);
+  if (out.is_err()) return std::move(out).error();
+  return out.value().exit_code;
+}
+
+Result<void> systemctl_user(const std::vector<std::string>& args) {
+  Result<RunOutput> out =
+      systemctl_user_run(args, std::chrono::milliseconds(20000), nullptr);
   if (out.is_err()) return std::move(out).error();
   if (out.value().exit_code != 0) {
     return Error("units: systemctl --user " + (args.empty() ? "" : args[0]) +

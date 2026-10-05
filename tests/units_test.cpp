@@ -15,6 +15,7 @@
 
 using berth::quote_exec_word;
 using berth::quote_unit_value;
+using berth::raw_systemd_path;
 using berth::render_exec_start;
 using berth::render_unit;
 using berth::substitute_placeholders;
@@ -133,7 +134,8 @@ TEST(units_read_write_paths_are_one_directive_each) {
     ++count;
   }
   CHECK(count == 2);
-  CHECK(unit.value().find("ReadWritePaths=\"/home/u/My Apps/data\"") !=
+  // Path directives use systemd-escape --path semantics, not quotes.
+  CHECK(unit.value().find("ReadWritePaths=/home/u/My Apps/data") !=
         std::string::npos);
 }
 
@@ -144,12 +146,23 @@ TEST(units_workspace_with_spaces_survives_rendering) {
   spec.exec_binary = spec.working_dir.string() + "/memos";
   const auto unit = render_unit(spec);
   CHECK(unit.is_ok());
-  CHECK(unit.value().find(
-            "WorkingDirectory=\"/home/u/My Apps/berthpanel-memos\"") !=
-        std::string::npos);
+  CHECK(
+      unit.value().find("WorkingDirectory=/home/u/My Apps/berthpanel-memos") !=
+      std::string::npos);
   CHECK(unit.value().find(
             "ExecStart=\"/home/u/My Apps/berthpanel-memos/memos\"") !=
         std::string::npos);
+}
+
+TEST(units_path_directives_take_the_raw_path) {
+  // systemd parses path directives verbatim: quotes would become part of
+  // the path, but spaces are fine (verified against a live user manager).
+  CHECK(raw_systemd_path("/home/u/data").value() == "/home/u/data");
+  CHECK(raw_systemd_path("/home/u/My Apps").value() == "/home/u/My Apps");
+  CHECK(raw_systemd_path("/a/../b").value() == "/a/../b");
+  CHECK(raw_systemd_path("").is_err());
+  CHECK(raw_systemd_path("relative/path").is_err());
+  CHECK(raw_systemd_path("/home/u/line\nbreak").is_err());
 }
 
 TEST(units_placeholders_substitute_or_fail_loudly) {

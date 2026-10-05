@@ -19,6 +19,8 @@
 // The unit name is validated with the ONE shared validator from state.h
 // (§11: a creator that sanitises and a remover that does not disagree).
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -52,8 +54,19 @@ struct UnitSpec {
 // argument is quoted, '"' and '\' are escaped, '%' doubled.
 [[nodiscard]] Result<std::string> quote_exec_word(std::string_view arg);
 
-// Quotes one directive VALUE that is not a word list (paths, Environment=).
+// Quotes a directive value that systemd parses like a shell word
+// (Environment=K=V, Environment=).
 [[nodiscard]] Result<std::string> quote_unit_value(std::string_view value);
+
+// Path directives (WorkingDirectory=, ReadWritePaths=, EnvironmentFile=)
+// take the RAW path: systemd parses the rest of the line verbatim, so
+// quotes would become part of the path (verified against a live user
+// manager: "WorkingDirectory=/tmp/with space" starts fine). Spaces are
+// therefore safe; quoting is not. ExecStart is the opposite case and is
+// quoted per argument. Getting either one wrong is the same class of bug
+// as the whitespace-splitting one (dev.md §11).
+[[nodiscard]] Result<std::string> raw_systemd_path(
+    const std::filesystem::path& path);
 
 // Joins argv into an ExecStart= value with per-argument quoting.
 [[nodiscard]] Result<std::string> render_exec_start(
@@ -74,6 +87,14 @@ struct UnitSpec {
 
 // systemctl --user with an argv array (absolute binary, 20s timeout).
 [[nodiscard]] Result<void> systemctl_user(const std::vector<std::string>& args);
+
+// systemctl --user with an explicit budget and cancellation, returning
+// the child's exit code as a VALUE: systemctl exit codes are data (e.g.
+// `is-active` exits nonzero for "not active" without being broken). Err
+// only on spawn/wait/timeout/cancellation.
+[[nodiscard]] Result<int> systemctl_user_code(
+    const std::vector<std::string>& args, std::chrono::milliseconds timeout,
+    std::atomic<bool>* cancel);
 [[nodiscard]] Result<void> systemctl_daemon_reload();
 [[nodiscard]] Result<void> systemctl_enable_now(const std::string& service_name);
 [[nodiscard]] Result<void> systemctl_disable(const std::string& service_name);

@@ -35,6 +35,7 @@ struct TarEntry {
                         // 'x'/'g' pax records are applied or skipped
   std::string link_target;
   std::uint32_t mode = 0;
+  std::size_t data_offset = 0;  // into the archive bytes (files only)
 };
 
 // Lists entries. Err on any malformed or truncated structure.
@@ -45,6 +46,12 @@ struct TarEntry {
 // remain on disk and are the caller's work-dir to clean up.
 [[nodiscard]] Result<std::size_t> tar_extract(std::string_view bytes,
                                               const std::filesystem::path& dest);
+
+// Same, for a gzipped tar — what codeload and GitHub release assets
+// actually serve. The gzip layer is explicit rather than sniffed.
+[[nodiscard]] Result<std::size_t> tar_extract_gz(
+    std::string_view gzipped, const std::filesystem::path& dest,
+    std::size_t max_out = 1024ull * 1024 * 1024);
 
 struct TreeFile {
   std::string path;

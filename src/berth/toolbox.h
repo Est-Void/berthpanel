@@ -17,13 +17,19 @@
 
 namespace berth {
 
+enum class ToolArchive {
+  kRaw,     // the body IS the file
+  kTarGz,   // a .tar.gz; `inner_path` is the member to extract
+};
+
 struct PinnedTool {
   std::string name;
   std::string url;
   std::string sha256;
-  std::string inner_path;  // path inside the archive, e.g. "go/bin/go"
+  std::string inner_path;  // member inside the archive, e.g. "go/bin/go"
   std::filesystem::path install_dir;  // where the tool lands
   bool executable = true;
+  ToolArchive archive = ToolArchive::kTarGz;
 };
 
 [[nodiscard]] Result<void> verify_sha256_file(

@@ -4,6 +4,7 @@
 
 #include "../atomic.h"
 #include "fs.h"
+#include "../util/gzip.h"
 #include "../util/sha256.h"
 #include "../util/strutil.h"
 #include "httpclient.h"
@@ -13,6 +14,8 @@
 namespace berth {
 
 namespace {
+
+constexpr std::size_t toolbox_max_tool_bytes = 512ull * 1024 * 1024;
 
 Result<std::string> sha256_of_file(const std::filesystem::path& path) {
   Result<std::string> bytes = read_file(path);
@@ -52,6 +55,7 @@ Result<std::filesystem::path> download_verified(
   HttpGetOptions options;
   options.kind = RequestKind::kApi;
   options.purpose = "toolbox";
+  options.follow_allowlisted_redirects = true;
   options.cancel = cancel;
   Result<HttpReply> reply = http_get(url, options, paths);
   if (reply.is_err()) return std::move(reply).error();
@@ -88,19 +92,49 @@ Result<std::filesystem::path> install_pinned_tool(
   if (install_dir.is_err()) return std::move(install_dir).error();
   const std::filesystem::path target = tool.install_dir / tool.inner_path;
 
-  std::string body = "";
-  Result<std::string> raw = read_file(downloaded.value());
-  if (raw.is_ok()) body = std::move(raw).value();
+  std::string payload;
+  if (tool.archive == ToolArchive::kTarGz) {
+    Result<std::string> compressed = read_file(downloaded.value());
+    if (compressed.is_err()) return std::move(compressed).error();
+    Result<std::string> plain =
+        gunzip(compressed.value(), toolbox_max_tool_bytes);
+    if (plain.is_err()) return std::move(plain).error();
+    std::string archive_bytes = std::move(plain).value();
+    Result<std::vector<TarEntry>> entries = tar_list(archive_bytes);
+    if (entries.is_err()) return std::move(entries).error();
+    std::string_view want = tool.inner_path;
+    const auto found = std::find_if(
+        entries.value().begin(), entries.value().end(),
+        [&](const TarEntry& entry) {
+          return entry.name == want || entry.name == "./" + std::string(want);
+        });
+    if (found == entries.value().end()) {
+      return Error("toolbox: " + tool.name + " archive has no member '" +
+                   tool.inner_path + "'");
+    }
+    if (found->size > toolbox_max_tool_bytes) {
+      return Error("toolbox: " + tool.name + " member exceeds the size cap");
+    }
+    payload = std::string_view(archive_bytes).substr(
+        found->data_offset, static_cast<std::size_t>(found->size));
+  } else {
+    Result<std::string> raw = read_file(downloaded.value());
+    if (raw.is_err()) return std::move(raw).error();
+    payload = std::move(raw).value();
+  }
 
-  std::string payload = body;
   std::filesystem::perms perms = std::filesystem::perms::owner_read |
                                  std::filesystem::perms::owner_write;
   if (tool.executable) {
     perms = perms | std::filesystem::perms::owner_exec |
+           std::filesystem::perms::group_read |
            std::filesystem::perms::group_exec |
+           std::filesystem::perms::others_read |
            std::filesystem::perms::others_exec;
   }
 
+  Result<void> parent_dir = ensure_dir(target.parent_path());
+  if (parent_dir.is_err()) return std::move(parent_dir).error();
   Result<void> placed = atomic_write(target, payload, perms);
   if (placed.is_err()) return std::move(placed).error();
 

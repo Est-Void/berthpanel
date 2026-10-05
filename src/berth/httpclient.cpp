@@ -353,6 +353,11 @@ bool response_is_complete(const std::string& wire, const std::size_t head_len,
   return false;
 }
 
+int effective_redirect_budget(const HttpGetOptions& options) {
+  if (options.follow_allowlisted_redirects) return kMaxRedirectHops;
+  return std::min(options.max_redirect_hops, kMaxRedirectHops);
+}
+
 RedirectDecision next_redirect(const HttpReply& reply,
                                const HttpGetOptions& options,
                                const std::string& current_url,
@@ -373,7 +378,7 @@ RedirectDecision next_redirect(const HttpReply& reply,
   if (!endpoint_permitted(cls, options.kind)) {
     return {RedirectAction::kStopDenied, target};
   }
-  const int budget = std::min(options.max_redirect_hops, kMaxRedirectHops);
+  const int budget = effective_redirect_budget(options);
   if (hops_done >= budget) {
     return {RedirectAction::kStopCap, target};
   }

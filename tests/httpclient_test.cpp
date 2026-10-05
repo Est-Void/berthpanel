@@ -246,6 +246,16 @@ TEST(response_completeness) {
                              BodyMode::kChunked, 0));
 }
 
+TEST(redirect_budget_is_zero_unless_explicitly_opted_in) {
+  CHECK(berth::effective_redirect_budget(
+            HttpGetOptions{.max_redirect_hops = 0}) == 0);
+  CHECK(berth::effective_redirect_budget(
+            HttpGetOptions{.max_redirect_hops = 3}) == 3);
+  CHECK(berth::effective_redirect_budget(HttpGetOptions{
+            .max_redirect_hops = 0, .follow_allowlisted_redirects = true}) ==
+        berth::kMaxRedirectHops);
+}
+
 TEST(refusals_are_marked_and_never_confused_with_outages) {
   const auto bad = parse_http_url("https://user@host/");
   CHECK(bad.is_err());
