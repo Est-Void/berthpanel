@@ -56,8 +56,7 @@ class AppComponent final : public ftxui::ComponentBase {
     // The confirmation is modal: it takes the key and, for now, nothing else
     // on the screen reacts.
     if (panel_->confirming_uninstall) {
-      const bool handled = handle_uninstall_key(*panel_, key);
-      if (!handled && key == "q") {
+      if (handle_uninstall_key(*panel_, key) == UninstallKey::kQuit) {
         quit();
       }
       return true;
@@ -100,9 +99,7 @@ class AppComponent final : public ftxui::ComponentBase {
           refresh_services(panel_, panel_->paths);
           return true;
         }
-        if (!handle_services_key(key)) {
-          return true;
-        }
+        handle_services_key(key);
         return true;
       case Tab::kDeploy:
       case Tab::kLogs:
@@ -137,10 +134,9 @@ class AppComponent final : public ftxui::ComponentBase {
 
   void move_cursor(const int delta);
 
-  // s / x / u on My Services. Returns false when there is nothing selected or
-  // an action is already in flight — a key press that cannot act must not
-  // queue another subprocess.
-  bool handle_services_key(const std::string& key);
+  // s / x / u on My Services. A key press that cannot act (nothing selected,
+  // or an action already in flight) must not queue another subprocess.
+  void handle_services_key(const std::string& key);
 
   Element render_content();
 
@@ -167,41 +163,38 @@ void AppComponent::move_cursor(const int delta) {
   if (cursor == nullptr || count == 0) {
     return;
   }
-  // Wrapping in both directions, without ever computing count - 1.
-  const std::size_t offset = static_cast<std::size_t>(
-      (delta + static_cast<int>(count)) % static_cast<int>(count));
+  // Wrapping in both directions without a signed modulo: stepping up by one
+  // is +1, stepping down by one is +(count - 1).
+  const std::size_t offset =
+      delta >= 0 ? static_cast<std::size_t>(delta) : count - 1;
   *cursor = (*cursor + offset) % count;
 }
 
-bool AppComponent::handle_services_key(const std::string& key) {
-  berth::ServiceRow selected;
+void AppComponent::handle_services_key(const std::string& key) {
   std::string name;
   {
     std::lock_guard lock(panel_->mutex);
     if (panel_->rows.empty() || !panel_->action.empty()) {
-      return false;
+      return;
     }
     if (panel_->services_cursor >= panel_->rows.size()) {
       abort_bug("no service row selected");
     }
-    selected = panel_->rows[panel_->services_cursor];
+    const berth::ServiceRow selected = panel_->rows[panel_->services_cursor];
     name = selected.service_name;
     if (key == "u") {
       // Uninstall deletes things: it asks first, and the dialog says what
       // stays behind.
       panel_->uninstall_target = selected;
       panel_->confirming_uninstall = true;
-      return false;
+      return;
     }
   }
   if (key == "s") {
     service_action_start(panel_, name);
   } else if (key == "x") {
     service_action_stop(panel_, name);
-  } else {
-    return false;
   }
-  return true;
 }
 
 Element AppComponent::render_content() {

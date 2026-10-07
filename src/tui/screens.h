@@ -47,8 +47,13 @@ void service_action_uninstall(const std::shared_ptr<Panel>& panel,
 [[nodiscard]] ftxui::Element render_services_screen(const Panel& panel);
 [[nodiscard]] ftxui::Element confirm_uninstall_screen(const Panel& panel);
 
-// The uninstall confirmation. Returns false when the dialog is up, so the
-// caller knows the key was eaten and must not act on it.
-bool handle_uninstall_key(Panel& panel, const std::string& key);
+// What the modal confirmation did with a key.
+enum class UninstallKey {
+  kEaten,      // the dialog consumed it; nothing below it may react
+  kDismissed,  // n / Escape: the dialog closed
+  kQuit,       // q: the dialog closed AND the panel should quit
+};
+[[nodiscard]] UninstallKey handle_uninstall_key(Panel& panel,
+                                                const std::string& key);
 
 }  // namespace tui

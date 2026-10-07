@@ -239,16 +239,21 @@ Element confirm_uninstall_screen(const Panel& panel) {
   });
 }
 
-bool handle_uninstall_key(Panel& panel, const std::string& key) {
+UninstallKey handle_uninstall_key(Panel& panel, const std::string& key) {
   if (key == "y" || key == "Y") {
     panel.confirming_uninstall = false;
-    return true;  // consumed: the caller runs the uninstall
+    return UninstallKey::kEaten;  // the caller runs the uninstall
   }
-  if (key == "n" || key == "N" || key == "q" || key == "\x1b") {
+  if (key == "q") {
+    // "q" keeps meaning quit; the dialog only lets it out.
     panel.confirming_uninstall = false;
-    return key == "q";  // "q" keeps meaning quit; the dialog only lets it out
+    return UninstallKey::kQuit;
   }
-  return true;  // anything else is eaten by the modal
+  if (key == "n" || key == "N" || key == "\x1b") {
+    panel.confirming_uninstall = false;
+    return UninstallKey::kDismissed;
+  }
+  return UninstallKey::kEaten;  // anything else is eaten by the modal
 }
 
 }  // namespace tui

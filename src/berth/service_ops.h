@@ -27,10 +27,15 @@
 
 namespace berth {
 
+// The three answers `systemctl --user is-active` can give that matter here.
+// kUnknown is deliberately distinct from kInactive: an unloaded transient
+// unit exits 4 ("unknown"), and reporting that as "inactive" would claim to
+// know something systemctl did not.
 enum class ServiceState {
   kActive,    // is-active exited 0
-  kInactive,  // is-active exited nonzero — a real answer, not a failure
-  kUnknown,   // systemctl itself failed, or the call was cancelled
+  kInactive,  // is-active exited 3 — a real answer, not a failure
+  kUnknown,   // some other exit (4 = unknown), a cancellation, or a broken
+              // systemctl
 };
 
 [[nodiscard]] std::string_view service_state_label(ServiceState state);
