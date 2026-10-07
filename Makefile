@@ -83,6 +83,14 @@ VENDOR_SRC := \
 MBEDTLS_SRC := $(sort $(wildcard third_party/mbedtls/library/*.c))
 ALL_VENDOR_SRC := $(VENDOR_SRC) $(MBEDTLS_SRC)
 
+# Vendored C++ (FTXUI, dev.md §2): only the three module dirs are vendored,
+# and `sort` over the wildcards keeps parallel make deterministic.
+FTXUI_SRC := $(sort \
+	$(wildcard third_party/ftxui/src/ftxui/dom/*.cpp) \
+	$(wildcard third_party/ftxui/src/ftxui/screen/*.cpp) \
+	$(wildcard third_party/ftxui/src/ftxui/component/*.cpp))
+ALL_VENDOR_CXX_SRC := $(FTXUI_SRC)
+
 TRUST_PEM := third_party/trust/cacert.pem
 GEN_TRUST_CPP := $(BUILD)/generated/trust_store.cpp
 
@@ -128,8 +136,8 @@ TEST_SRC := \
  	tests/cancel_test.cpp \
  	tests/gzip_test.cpp
 
-INCLUDES := -Iinclude -Isrc -I$(BUILD)/generated -isystem third_party -isystem third_party/mbedtls/include
-LDLIBS   := -lz
+INCLUDES := -Iinclude -Isrc -I$(BUILD)/generated -isystem third_party -isystem third_party/mbedtls/include -isystem third_party/ftxui/include -isystem third_party/ftxui/src
+LDLIBS   := -lz -pthread
 DEPFLAGS := -MMD -MP
 
 # Reproducible release (dev.md §3): fixed epoch, no absolute build paths in
@@ -173,6 +181,7 @@ define mode_template
 $(1)_DIR   := $(BUILD)/$(1)
 $(1)_OBJ   := $$(addprefix $$($(1)_DIR)/obj/,$$(patsubst src/%.cpp,%.o,$$(SRC) $$(LIB_SRC)))
 $(1)_VOBJ  := $$(addprefix $$($(1)_DIR)/obj/,$$(patsubst third_party/%.c,%.o,$$(ALL_VENDOR_SRC)))
+$(1)_VCXXOBJ := $$(addprefix $$($(1)_DIR)/obj/,$$(patsubst third_party/%.cpp,%.o,$$(ALL_VENDOR_CXX_SRC)))
 $(1)_GOBJ  := $$($(1)_DIR)/obj/trust_store.o
 $(1)_BIN   := $$($(1)_DIR)/berthpanel
 $(1)_FLAGS := $(2)
@@ -192,19 +201,26 @@ $$($(1)_VOBJ): $$($(1)_DIR)/obj/%.o: third_party/%.c | $$($(1)_DIR)/obj
 	@mkdir -p $$(@D)
 	$$(CC) $$($(1)_VFLAGS) -Ithird_party/mbedtls/include $(DEPFLAGS) -c $$< -o $$@
 
+# Vendored C++ (FTXUI, dev.md §2): -w, because third-party code must not
+# gate on our -Werror set, and -isystem so their headers never trip our
+# warning flags either. Mode-aware, so sanitizers still see it.
+$$($(1)_VCXXOBJ): $$($(1)_DIR)/obj/%.o: third_party/%.cpp | $$($(1)_DIR)/obj
+	@mkdir -p $$(@D)
+	$(CXX) $(CXXSTD) -isystem third_party/ftxui/include -isystem third_party/ftxui/src $($(1)_VFLAGS) -w $$(DEPFLAGS) -c $$< -o $$@
+
 # The generated trust store compiles with our strict C++ flags; the
 # generator emits plain, warning-free code (dev.md §2: no system CA paths).
 $$($(1)_GOBJ): $$($(1)_DIR)/obj/%.o: $(GEN_TRUST_CPP) | $$($(1)_DIR)/obj
 	@mkdir -p $$(@D)
 	$$(CXX) $(INCLUDES) $(CXXSTD) $(WARNFLAGS) $$($(1)_FLAGS) $(DEPFLAGS) -c $$< -o $$@
 
-$$($(1)_BIN): $$($(1)_OBJ) $$($(1)_VOBJ) $$($(1)_GOBJ) | $$($(1)_DIR)
+$$($(1)_BIN): $$($(1)_OBJ) $$($(1)_VOBJ) $$($(1)_VCXXOBJ) $$($(1)_GOBJ) | $$($(1)_DIR)
 	$$(CXX) $$($(1)_FLAGS) $(REPROFLAGS) $$(filter %.o,$$^) $(LDLIBS) -o $$@
 
 $$($(1)_DIR)/obj $$($(1)_DIR):
 	mkdir -p $$@
 
--include $$($(1)_OBJ:.o=.d) $$($(1)_VOBJ:.o=.d) $$($(1)_GOBJ:.o=.d)
+-include $$($(1)_OBJ:.o=.d) $$($(1)_VOBJ:.o=.d) $$($(1)_VCXXOBJ:.o=.d) $$($(1)_GOBJ:.o=.d)
 endef
 
 $(eval $(call mode_template,debug,$(OPTFLAGS),-O2))
