@@ -328,11 +328,14 @@ int recipe_draft_command(const std::string_view url_arg,
   }
 
   // Scratch checkout with a random suffix (§9); removed however detection
-  // ends. Detection only READS this tree (detect.h).
+  // ends. Detection only READS this tree (detect.h). The clone lands in a
+  // nested dir on purpose: clone_pinned manages its destination's parent
+  // (chmod included), and the only parent a TempDir owns is the TempDir
+  // itself — the wizard must not point it at /tmp.
   const berth::Result<berth::TempDir> scratch = berth::TempDir::create("draft");
   if (scratch.is_err())
     return fail(scratch.error().ctx());
-  const std::filesystem::path dir = scratch.value().path();
+  const std::filesystem::path dir = scratch.value().path() / "repo";
 
   std::cout << "cloning " << owner_repo.value() << "@" << commit.substr(0, 7)
             << "...\n";

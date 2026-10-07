@@ -175,6 +175,7 @@ TEST(detect_refuses_an_npm_lockfile) {
 TEST(detect_prefetch_steps_download_without_executing) {
   const TempDir tmp;
   CHECK(berth::atomic_write(tmp.path() / "go.mod", kGoMod).is_ok());
+  CHECK(berth::atomic_write(tmp.path() / "go.sum", "deps here\n").is_ok());
   const auto go = berth::detect_recipe(request_for(tmp.path()));
   CHECK(go.is_ok());
   CHECK((go.value().recipe.prefetch_steps.front() ==
@@ -190,6 +191,17 @@ TEST(detect_prefetch_steps_download_without_executing) {
   // §6.5: the host downloads dependencies, it never runs their scripts.
   CHECK((bun.value().recipe.prefetch_steps.front() ==
          std::vector<std::string>{"bun", "install", "--ignore-scripts"}));
+}
+
+TEST(detect_a_dependency_free_go_module_gets_no_prefetch) {
+  const TempDir tmp;
+  CHECK(berth::atomic_write(tmp.path() / "go.mod", kGoMod).is_ok());
+  // No go.sum: 'go mod download' would exit 1 with "no modules specified"
+  // (the http-echo demo failure), so the draft must not add it.
+  const auto go = berth::detect_recipe(request_for(tmp.path()));
+  CHECK(go.is_ok());
+  CHECK(go.value().recipe.prefetch_steps.empty());
+  CHECK(berth::validate_recipe(go.value().recipe).is_ok());
 }
 
 TEST(detect_cmd_exec_form_hints_loopback_flags) {

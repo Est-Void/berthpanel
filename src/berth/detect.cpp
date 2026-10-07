@@ -302,7 +302,15 @@ Result<RecipeDraft> detect_recipe(const DetectRequest& request) {
     r.language = "go";
     r.tools = {"go"};
     r.build_steps = {{"go", "build", "-o", "{project}/" + binary, "."}};
-    r.prefetch_steps = {{"go", "mod", "download"}};
+    // `go mod download` on a dependency-free module (no go.sum) exits 1:
+    // the prefetch belongs to trees that HAVE something to download.
+    if (present(dir / "go.sum")) {
+      r.prefetch_steps = {{"go", "mod", "download"}};
+    } else {
+      warnings.push_back(
+          "no go.sum: the module builds with the standard library only, so "
+          "the draft adds no prefetch step");
+    }
     r.binary_name = binary;
     // CMD may know the real flags; the loopback template is the fallback.
     const Result<std::vector<std::string>> cmd = dockerfile_cmd_hint(dir);
