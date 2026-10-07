@@ -2,9 +2,9 @@
 // resolution strictly opt-in via BERTHPANEL_RUN_NETWORK_TESTS (never in
 // CI, dev.md §9).
 
+#include "berth/net/resolver.h"
 #include "berth/net/doh.h"
 #include "berth/net/fetch.h"
-#include "berth/net/resolver.h"
 
 #include <string>
 
@@ -72,9 +72,9 @@ TEST(resolver_live_resolution_opt_in) {
   paths.state_dir = tmp.path() / "state";
   paths.net_log = paths.state_dir / "net.log";
 
-  const auto r = berth::resolve_host("github.com",
-                                     std::chrono::milliseconds(15000), paths,
-                                     nullptr, berth::doh_fallback());
+  const auto r =
+      berth::resolve_host("github.com", std::chrono::milliseconds(15000), paths,
+                          nullptr, berth::doh_fallback());
   CHECK(r.is_ok());
   CHECK(!r.value().empty());
 }
