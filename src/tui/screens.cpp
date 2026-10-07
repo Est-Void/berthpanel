@@ -28,15 +28,15 @@ void refresh_catalog(const std::shared_ptr<Panel>& panel,
   }
   run_on_worker<Catalog>(
       panel,
-      [paths](std::atomic<bool>* cancel) -> Result<Catalog> {
+      [paths](std::atomic<bool>* cancel) -> berth::Result<Catalog> {
         // Cancelled before it started is not a failure worth rendering; the
         // load simply never happens.
         if (cancel->load()) {
-          return Error("cancelled before the catalog read");
+          return berth::Error("cancelled before the catalog read");
         }
         return load_catalog(paths);
       },
-      [](Panel& state, Result<Catalog>&& loaded) {
+      [](Panel& state, berth::Result<Catalog>&& loaded) {
         state.catalog_loading = false;
         if (loaded.is_err()) {
           state.catalog_error = loaded.error().ctx();
@@ -116,7 +116,7 @@ void refresh_services(const std::shared_ptr<Panel>& panel,
       [paths](std::atomic<bool>* cancel) {
         return berth::service_rows(paths, cancel);
       },
-      [](Panel& state, Result<std::vector<berth::ServiceRow>>&& rows) {
+      [](Panel& state, berth::Result<std::vector<berth::ServiceRow>>&& rows) {
         state.services_loading = false;
         if (rows.is_err()) {
           state.services_status = rows.error().ctx();
@@ -138,7 +138,7 @@ namespace {
 // the outcome folded into the status line. Only the call differs.
 void service_action(const std::shared_ptr<Panel>& panel,
                     const std::string& label,
-                    const std::function<Result<void>()>& op) {
+                    const std::function<berth::Result<void>()>& op) {
   {
     std::lock_guard lock(panel->mutex);
     if (!panel->action.empty()) {
@@ -148,7 +148,7 @@ void service_action(const std::shared_ptr<Panel>& panel,
   }
   run_on_worker<void>(
       panel, [op](std::atomic<bool>* /*cancel*/) { return op(); },
-      [label](Panel& state, Result<void>&& done) {
+      [label](Panel& state, berth::Result<void>&& done) {
         state.action.clear();
         if (done.is_err()) {
           state.services_status = done.error().ctx();

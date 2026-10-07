@@ -28,9 +28,12 @@
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/color.hpp>
 
+#include "../berth/service_ops.h"
 #include "../core/paths.h"
 #include "chrome.h"
 #include "ring.h"
+#include "view_catalog.h"
+#include "view_services.h"
 
 namespace tui {
 
@@ -57,6 +60,22 @@ struct Panel {
   // Bounded log buffer, owned here so the deploy and logs screens cannot
   // invent their own unbounded vector (dev.md §5).
   RingBuffer<std::string> log{kLogCapacity};
+
+  // Catalog (6.2)
+  bool catalog_loading = false;
+  std::string catalog_error;
+  Catalog catalog;
+  std::size_t catalog_cursor = 0;
+  bool catalog_details = false;
+
+  // My Services (6.4)
+  bool services_loading = false;
+  std::string services_status;
+  std::vector<berth::ServiceRow> rows;
+  std::size_t services_cursor = 0;
+  std::string action;  // non-empty while a start/stop/uninstall is running
+  bool confirming_uninstall = false;
+  berth::ServiceRow uninstall_target;
 
   std::size_t tab = 0;
 };

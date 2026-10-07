@@ -31,6 +31,7 @@ VERSION_H := $(BUILD)/generated/version.h
 SRC := \
 	src/main.cpp \
 	src/tui/panel.cpp \
+	src/tui/screens.cpp \
 	src/tui/app.cpp
 
 LIB_SRC := \
@@ -80,7 +81,9 @@ LIB_SRC := \
 	src/util/which.cpp \
 	src/util/gzip.cpp \
 	src/util/subprocess.cpp \
-	src/tui/chrome.cpp
+	src/tui/chrome.cpp \
+	src/tui/view_catalog.cpp \
+	src/tui/view_services.cpp
 
 # Vendored C sources, compiled per mode (relaxed warnings on purpose; see
 # the vendor rule below). Manifests with pins live next to each source.
@@ -143,7 +146,8 @@ TEST_SRC := \
  	tests/deploy_test.cpp \
  	tests/cancel_test.cpp \
  	tests/gzip_test.cpp \
-	tests/ring_test.cpp
+	tests/ring_test.cpp \
+	tests/tui_view_test.cpp
 
 INCLUDES := -Iinclude -Isrc -I$(BUILD)/generated -isystem third_party -isystem third_party/mbedtls/include -isystem third_party/ftxui/include -isystem third_party/ftxui/src
 LDLIBS   := -lz -pthread
