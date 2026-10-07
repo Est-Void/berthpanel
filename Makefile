@@ -109,6 +109,7 @@ TEST_SRC := \
 	tests/lock_test.cpp \
 	tests/journal_test.cpp \
 	tests/fs_test.cpp \
+	tests/recipe_draft_test.cpp \
 	tests/units_test.cpp \
 	tests/secrets_test.cpp \
 	tests/which_test.cpp \

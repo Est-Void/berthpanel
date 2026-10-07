@@ -287,7 +287,8 @@ int cleanup_command(const bool install, const bool quiet) {
 }
 
 int recipe_draft_command(const std::string_view url_arg,
-                         const std::string_view ref_arg) {
+                         const std::string_view ref_arg, const bool apply,
+                         const bool force) {
   const berth::Result<berth::Paths> paths = berth::paths_from_env();
   if (paths.is_err())
     return fail(paths.error().ctx());
@@ -309,16 +310,17 @@ int recipe_draft_command(const std::string_view url_arg,
     return fail(signalling.error().ctx());
 
   // The pin: an explicit 40-hex SHA is taken as-is, anything else is
-  // resolved over ls-remote NOW (§6.6 anti-TOFU — the draft freezes one
-  // commit, it never tracks a branch).
+  // resolved through the API NOW — repos/<o>/<r> for the default branch,
+  // commits/<branch> for its head, both GETs net.log-logged (§6.6 anti-TOFU
+  // — the draft freezes one commit, it never tracks a branch). Public
+  // repos only: no token is attached (§6.3).
   std::string commit(ref_arg);
   if (commit.empty() || !berth::validate_commit_sha(commit).is_ok()) {
-    const std::string ref = ref_arg.empty() ? "HEAD" : std::string(ref_arg);
-    std::cout << "resolving " << owner_repo.value() << "@" << ref << "...\n";
-    const berth::Result<std::string> resolved = berth::resolve_ref_sha(
-        "https://" + std::string(berth::kTokenHost) + "/" + owner_repo.value() +
-            ".git",
-        ref, std::chrono::milliseconds(60000), &cancel_flag);
+    const std::string ref(ref_arg);
+    std::cout << "resolving " << owner_repo.value() << "@"
+              << (ref.empty() ? "default branch" : ref) << " via api...\n";
+    const berth::Result<std::string> resolved = berth::resolve_head_sha(
+        paths.value(), owner_repo.value(), ref, &cancel_flag);
     if (resolved.is_err())
       return fail(resolved.error().ctx());
     commit = resolved.value();
@@ -360,15 +362,17 @@ int recipe_draft_command(const std::string_view url_arg,
 
   const berth::DetectRequest detect{
       .dir = dir, .owner = owner, .name = name, .commit = commit};
-  const berth::Result<berth::Recipe> draft = berth::detect_recipe(detect);
-  if (draft.is_err())
-    return fail(draft.error().ctx());
+  const berth::Result<berth::RecipeDraft> detected =
+      berth::detect_recipe(detect);
+  if (detected.is_err())
+    return fail(detected.error().ctx());
+  const berth::Recipe& draft = detected.value().recipe;
 
   // The draft is ALWAYS saved, untouched or not: what can be deployed is
-  // what is on disk (reproducibility, plan 4.21). Re-saving a draft is an
-  // explicit act, so it overwrites its own earlier version.
+  // what is on disk (reproducibility, plan 4.21). Overwriting an existing
+  // recipe needs --force, like __recipe-add.
   const berth::Result<std::filesystem::path> stored =
-      berth::user_recipe_store(paths.value(), draft.value(), true);
+      berth::user_recipe_store(paths.value(), draft, force);
   if (stored.is_err())
     return fail(stored.error().ctx());
 
@@ -376,19 +380,28 @@ int recipe_draft_command(const std::string_view url_arg,
   // install it, then deploy. The draft deploys through the same preflight
   // gate either way.
   const berth::Result<std::vector<berth::ToolStatus>> tools =
-      berth::check_tools(draft.value().tools, &cancel_flag);
+      berth::check_tools(draft.tools, &cancel_flag);
   if (tools.is_err())
     return fail(tools.error().ctx());
 
-  std::cout << "draft " << draft.value().service_name << " ("
-            << draft.value().language << ", " << draft.value().res.memory_max
-            << "/" << draft.value().res.tasks_max << ")\n"
+  std::cout << "draft " << draft.service_name << " (" << draft.language
+            << ", " << draft.res.memory_max << "/" << draft.res.tasks_max
+            << ")\n"
             << "  saved: " << stored.value().string() << "\n"
-            << "  start: " << draft.value().start_cmd << "\n"
+            << "  start: " << draft.start_cmd << "\n"
             << "  tools:\n"
-            << berth::render_tool_report(tools.value())
-            << "the heuristics may be wrong — edit the recipe, then:\n"
-            << "  berthpanel __deploy " << draft.value().service_name << "\n";
+            << berth::render_tool_report(tools.value());
+  for (const std::string& warning : detected.value().warnings) {
+    std::cout << "  warning: " << warning << "\n";
+  }
+  std::cout << "the heuristics may be wrong — edit " << stored.value().string()
+            << ", then:\n"
+            << "  berthpanel __recipe-add " << stored.value().string()
+            << " --force\n";
+  if (apply) {
+    std::cout << "deploy it with:\n"
+              << "  berthpanel __deploy " << draft.service_name << "\n";
+  }
   return 0;
 }
 
@@ -413,8 +426,21 @@ int run(const std::span<const char* const> args) {
       return recipe_add_command(args[1], true);
     if (first == "__recipe-remove" && args.size() == 2)
       return recipe_remove_command(args[1]);
-    if (first == "__recipe-draft" && args.size() >= 2)
-      return recipe_draft_command(args[1], args.size() >= 3 ? args[2] : "");
+    if (first == "__recipe-draft" && args.size() >= 2) {
+      std::string_view ref;
+      bool apply = false;
+      bool force = false;
+      for (std::size_t i = 2; i < args.size(); ++i) {
+        if (std::string_view(args[i]) == "--apply") {
+          apply = true;
+        } else if (std::string_view(args[i]) == "--force") {
+          force = true;
+        } else if (ref.empty()) {
+          ref = args[i];
+        }
+      }
+      return recipe_draft_command(args[1], ref, apply, force);
+    }
     if (first == "__deploy" && args.size() >= 2) {
       const std::string_view service = args[1];
       std::string_view port_arg;
@@ -456,7 +482,8 @@ int run(const std::span<const char* const> args) {
                "       berthpanel __recipe-list | __recipe-add <file.json> "
                "[--force] | "
                "__recipe-remove <service>\n"
-               "       berthpanel __recipe-draft <github_url> [ref]\n"
+               "       berthpanel __recipe-draft <github_url> [ref] [--apply] "
+               "[--force]\n"
                "       berthpanel __deploy <service_name> [port] [--upgrade]\n"
                "       berthpanel __cleanup [--install] [--quiet]\n";
   return 2;

@@ -32,6 +32,21 @@ struct TreeFile {
 [[nodiscard]] Result<std::vector<TreeFile>> parse_tree_response(
     std::string_view body);
 
+// Pure: the default branch of a repo, from the repos API response.
+[[nodiscard]] Result<std::string> parse_default_branch(std::string_view body);
+
+// Pure: the 40-hex SHA of a commits/<ref> API response.
+[[nodiscard]] Result<std::string> parse_commit_sha(std::string_view body);
+
+// Networked: the head SHA of `ref` (a branch name or an explicit
+// default-branch resolution). Two allowlisted GETs to api.github.com —
+// both net.log-logged by the client (stage 4.21 wizard pin). Public repos
+// only: no token is attached (§6.3).
+[[nodiscard]] Result<std::string> resolve_head_sha(const Paths& paths,
+                                                   const std::string& owner_repo,
+                                                   const std::string& ref,
+                                                   std::atomic<bool>* cancel);
+
 [[nodiscard]] Result<std::vector<TreeFile>> fetch_tree(
     const std::string& owner_repo, const std::string& sha, const Paths& paths,
     const std::string* token, std::atomic<bool>* cancel);

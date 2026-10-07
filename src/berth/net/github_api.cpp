@@ -125,6 +125,67 @@ Result<std::vector<TreeFile>> fetch_tree(const std::string& owner_repo,
   return parse_tree_response(reply.value().body);
 }
 
+Result<std::string> parse_default_branch(const std::string_view body) {
+  nlohmann::json doc;
+  try {
+    doc = nlohmann::json::parse(body);
+  } catch (const nlohmann::json::parse_error& e) {
+    return Error("repos api: parse: " + std::string(e.what()));
+  }
+  if (!doc.is_object() || !doc.contains("default_branch") ||
+      !doc["default_branch"].is_string() ||
+      doc["default_branch"].get<std::string>().empty()) {
+    return Error("repos api: no default_branch in the response");
+  }
+  return doc["default_branch"].get<std::string>();
+}
+
+Result<std::string> parse_commit_sha(const std::string_view body) {
+  nlohmann::json doc;
+  try {
+    doc = nlohmann::json::parse(body);
+  } catch (const nlohmann::json::parse_error& e) {
+    return Error("commits api: parse: " + std::string(e.what()));
+  }
+  if (!doc.is_object() || !doc.contains("sha") || !doc["sha"].is_string()) {
+    return Error("commits api: no sha in the response");
+  }
+  const std::string sha = doc["sha"].get<std::string>();
+  const Result<void> valid = validate_commit_sha(sha);
+  if (valid.is_err())
+    return std::move(valid).error();
+  return sha;
+}
+
+Result<std::string> resolve_head_sha(const Paths& paths,
+                                     const std::string& owner_repo,
+                                     const std::string& ref,
+                                     std::atomic<bool>* cancel) {
+  const Result<void> repo = validate_owner_repo(owner_repo);
+  if (repo.is_err())
+    return std::move(repo).error();
+
+  const auto repo_url = "https://api.github.com/repos/" + owner_repo;
+  // Token never attached: the wizard resolves public repos only (§6.3).
+  Result<HttpReply> reply =
+      get_ok(repo_url, github_options("github-repos", nullptr, cancel), paths,
+             "repos api", owner_repo, "default branch");
+  if (reply.is_err())
+    return std::move(reply).error();
+  Result<std::string> branch = parse_default_branch(reply.value().body);
+  if (branch.is_err())
+    return std::move(branch).error();
+
+  const std::string target = ref.empty() ? branch.value() : ref;
+  Result<HttpReply> head = get_ok(
+      repo_url + "/commits/" + target,
+      github_options("github-commits", nullptr, cancel), paths, "commits api",
+      owner_repo, "ref " + target);
+  if (head.is_err())
+    return std::move(head).error();
+  return parse_commit_sha(head.value().body);
+}
+
 Result<std::filesystem::path> fetch_and_extract(
     const std::string& owner_repo, const std::string& sha,
     const std::filesystem::path& dest_dir, const Paths& paths,
