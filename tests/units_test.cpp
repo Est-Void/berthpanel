@@ -211,10 +211,14 @@ TEST(units_cleanup_units_render_and_write) {
       berth::render_cleanup_units("/home/user name/bin/berthpanel");
   CHECK(rendered.is_ok());
   CHECK(rendered.value().service.find("ExecStart=") != std::string::npos);
-  CHECK(rendered.value().service.find("__cleanup") != std::string::npos);
+  // The timer fires hourly: the oneshot must run quiet and still fail
+  // loudly on stderr, so the report never reaches the journal on success.
+  CHECK(rendered.value().service.find("__cleanup --quiet") !=
+        std::string::npos);
   CHECK(rendered.value().service.find("\"/home/user name/bin/berthpanel\"") !=
         std::string::npos);
-  CHECK(rendered.value().timer.find("OnCalendar=daily") != std::string::npos);
+  CHECK(rendered.value().timer.find("OnCalendar=hourly") != std::string::npos);
+  CHECK(rendered.value().timer.find("OnCalendar=daily") == std::string::npos);
   CHECK(rendered.value().timer.find("Persistent=true") != std::string::npos);
   CHECK(rendered.value().timer.find("WantedBy=timers.target") !=
         std::string::npos);

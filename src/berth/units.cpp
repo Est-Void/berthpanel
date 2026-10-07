@@ -395,14 +395,16 @@ Result<CleanupUnitTexts> render_cleanup_units(
   texts.service += "Description=berthpanel cleanup of interrupted deploys\n\n";
   texts.service += "[Service]\n";
   texts.service += "Type=oneshot\n";
-  texts.service += "ExecStart=" + exec.value() + " __cleanup\n";
+  // --quiet: the timer fires hourly and must not spam the journal with
+  // "nothing to clean up" on every pass; failures still go to stderr.
+  texts.service += "ExecStart=" + exec.value() + " __cleanup --quiet\n";
 
   texts.timer = std::string(kUnitComment);
   texts.timer += "[Unit]\n";
   texts.timer +=
       "Description=Periodic cleanup of interrupted berthpanel deploys\n\n";
   texts.timer += "[Timer]\n";
-  texts.timer += "OnCalendar=daily\n";
+  texts.timer += "OnCalendar=hourly\n";
   texts.timer += "Persistent=true\n\n";
   texts.timer += "[Install]\n";
   texts.timer += "WantedBy=timers.target\n";

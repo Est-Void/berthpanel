@@ -6,6 +6,7 @@
 // PATH is environment, so each test runs under env_test_lock).
 
 #include "berth/cancel.h"
+#include "berth/units.h"
 
 #include <sys/stat.h>
 #include <unistd.h>
@@ -17,11 +18,14 @@
 #include <mutex>
 #include <string>
 
+#include "core/flags.h"
 #include "core/names.h"
 #include "core/state.h"
 #include "runner.h"
 #include "test_env.h"
 #include "util/env.h"
+#include "util/subprocess.h"
+#include "util/which.h"
 
 using berth::Result;
 using berth::StopPolicy;
@@ -227,4 +231,47 @@ TEST(terminator_refuses_an_invalid_unit_name) {
 
   SystemdUnitTerminator terminator(fast_policy());
   CHECK(terminator.stop("memos", nullptr).is_err());  // missing prefix
+}
+
+// The fake-systemctl tests above prove the protocol; this one proves the
+// kill lands on a REAL orphan under a REAL systemd user manager (stage
+// 4.17 kill scenario). Opt-in like the sandbox live test: needs a user
+// session, never runs in CI.
+TEST(terminator_kills_a_real_orphan_unit_opt_in) {
+  std::lock_guard lock(berth::env_test_lock());
+  ScopedEnv flag("BERTHPANEL_RUN_SANDBOX_TESTS");
+  const auto enabled = berth::env_flag("BERTHPANEL_RUN_SANDBOX_TESTS");
+  if (!(enabled.is_ok() && enabled.value().value_or(false))) {
+    return;
+  }
+
+  const Result<std::string> stem =
+      berth::build_unit_name("berthpanel-killtest");
+  CHECK(stem.is_ok());
+
+  // Orphan shape: a transient unit outliving its launcher, holding a
+  // process that would run for another minute if nobody stopped it.
+  const Result<std::string> systemd_run =
+      berth::resolve_executable("systemd-run");
+  CHECK(systemd_run.is_ok());
+  berth::RunLimits limits;
+  limits.timeout = std::chrono::milliseconds(10000);
+  const berth::Result<berth::RunOutput> started =
+      berth::run({systemd_run.value(), "--user", "--unit", stem.value(),
+                  "--collect", "sleep", "60"},
+                 limits);
+  CHECK(started.is_ok());
+
+  SystemdUnitTerminator terminator(fast_policy());
+  const Result<bool> stopped = terminator.stop(stem.value(), nullptr);
+  CHECK(stopped.is_ok());
+  CHECK(stopped.value());  // the unit ran and is confirmed inactive now
+
+  // The orphan is really gone, not just believed gone: is-active exits
+  // nonzero for anything but a live unit.
+  const Result<int> verdict =
+      berth::systemctl_user_code({"is-active", stem.value() + ".service"},
+                                 std::chrono::milliseconds(5000), nullptr);
+  CHECK(verdict.is_ok());
+  CHECK(verdict.value() != 0);
 }

@@ -122,6 +122,12 @@ struct ReconcileReport {
   // journal entries stay so a later sweep retries. One stuck entry must
   // not block sweeping the others.
   std::vector<std::pair<std::string, std::string>> failed;
+  // Belt-and-suspenders (§6.7): the entry's service IS in the registry,
+  // so the deploy completed and only the journal write-back was lost
+  // (crash between register and journal_remove). The stale entry is
+  // dropped loudly; the deployed service is NOT touched — cleanup works
+  // on the journal alone and the registry owns that service now.
+  std::vector<std::string> skipped_registry;
   // A live deploy owns the journal (we could not take the lock); nothing
   // was read as interrupted and nothing was touched.
   bool lock_busy = false;

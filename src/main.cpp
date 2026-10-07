@@ -21,9 +21,9 @@
 #include "berth/catalog.h"
 #include "berth/deploy.h"
 #include "berth/detect.h"
-#include "berth/net/egress.h"
 #include "berth/gitclone.h"
 #include "berth/lock.h"
+#include "berth/net/egress.h"
 #include "berth/recipes.h"
 #include "berth/sandbox.h"
 #include "berth/toolcheck.h"
@@ -247,7 +247,7 @@ int recipe_remove_command(const std::string_view service) {
   return 0;
 }
 
-int cleanup_command(const bool install) {
+int cleanup_command(const bool install, const bool quiet) {
   const berth::Result<berth::Paths> paths = berth::paths_from_env();
   if (paths.is_err())
     return fail(paths.error().ctx());
@@ -257,7 +257,8 @@ int cleanup_command(const bool install) {
       berth::reconcile_interrupted(paths.value(), ops, nullptr);
   if (report.is_err())
     return fail(report.error().ctx());
-  std::cout << berth::render_reconcile_report(report.value());
+  if (!quiet)
+    std::cout << berth::render_reconcile_report(report.value());
 
   if (install) {
     char self[4096];
@@ -273,9 +274,8 @@ int cleanup_command(const bool install) {
     const berth::Result<void> reloaded = berth::systemctl_daemon_reload();
     if (reloaded.is_err())
       return fail(reloaded.error().ctx());
-    const berth::Result<void> enabled =
-        berth::systemctl_user(
-            {"enable", "--now", std::string(berth::kCleanupUnitStem) + ".timer"});
+    const berth::Result<void> enabled = berth::systemctl_user(
+        {"enable", "--now", std::string(berth::kCleanupUnitStem) + ".timer"});
     if (enabled.is_err())
       return fail(enabled.error().ctx());
     std::cout << "cleanup timer installed: " << timer.value().string() << "\n";
@@ -424,8 +424,10 @@ int run(const std::span<const char* const> args) {
       }
       return deploy_command(service, port_arg, upgrade);
     }
-    if (first == "__cleanup")
-      return cleanup_command(contains_flag(args, "--install"));
+    if (first == "__cleanup") {
+      return cleanup_command(contains_flag(args, "--install"),
+                             contains_flag(args, "--quiet"));
+    }
     // Test hook for the SIGKILL flock scenario (stage 4.3); not a user
     // command, documented in berth/lock.h.
     if (first == "__test-lock-child" && args.size() == 2) {
@@ -435,8 +437,8 @@ int run(const std::span<const char* const> args) {
   for (const char* const arg : args) {
     const std::string_view a(arg);
     if (a == "--version") {
-      std::cout << berth::kAppName << " " << BERTH_VERSION << " (" << BERTH_COMMIT
-                << ")\n";
+      std::cout << berth::kAppName << " " << BERTH_VERSION << " ("
+                << BERTH_COMMIT << ")\n";
       return 0;
     }
     if (a == "--show-endpoints")
@@ -451,7 +453,7 @@ int run(const std::span<const char* const> args) {
                "__recipe-remove <service>\n"
                "       berthpanel __recipe-draft <github_url> [ref]\n"
                "       berthpanel __deploy <service_name> [port] [--upgrade]\n"
-               "       berthpanel __cleanup [--install]\n";
+               "       berthpanel __cleanup [--install] [--quiet]\n";
   return 2;
 }
 

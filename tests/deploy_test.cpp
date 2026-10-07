@@ -459,3 +459,65 @@ TEST(sweep_keeps_an_entry_whose_work_dir_leaves_the_services_layout) {
   CHECK(berth::journal_load(p).value().size() == 1);
   CHECK(std::filesystem::exists("/etc"));  // untouched, obviously
 }
+
+TEST(sweep_drops_a_stale_entry_when_the_service_is_in_the_registry) {
+  const TempDir tmp;
+  const berth::Paths p = test_paths(tmp.path());
+  CHECK(berth::journal_upsert(p, stale_entry(p, "berthpanel-memos", "cloning"))
+            .is_ok());
+  // Leftovers the guard must NOT delete: a registered service owns them.
+  CHECK(berth::ensure_dir(p.services_dir / "berthpanel-memos").is_ok());
+  CHECK(
+      berth::atomic_write(p.services_dir / "berthpanel-memos" / "data", "live")
+          .is_ok());
+  CHECK(berth::ensure_dir(p.units_dir).is_ok());
+  CHECK(
+      berth::atomic_write(p.units_dir / "berthpanel-memos.service", "[Unit]\n")
+          .is_ok());
+  berth::ServiceRecord record;
+  record.service_name = "berthpanel-memos";
+  record.port = 8234;
+  CHECK(berth::registry_register(p, record).is_ok());
+
+  FakeOps ops;
+  const auto report = berth::reconcile_interrupted(p, ops, nullptr);
+  CHECK(report.is_ok());
+  CHECK(!report.value().lock_busy);
+  CHECK(report.value().swept.empty());
+  CHECK(report.value().failed.empty());
+  CHECK(report.value().skipped_registry.size() == 1);
+  CHECK(report.value().skipped_registry.front() == "berthpanel-memos");
+  CHECK(ops.calls.empty());  // a live service is never stopped by cleanup
+  CHECK(std::filesystem::exists(p.services_dir / "berthpanel-memos" / "data"));
+  CHECK(std::filesystem::exists(p.units_dir / "berthpanel-memos.service"));
+  // The entry was the stale part: dropped loudly, nothing else touched.
+  CHECK(berth::journal_load(p).value().empty());
+  const auto logged = berth::read_file(p.deploy_log);
+  CHECK(logged.is_ok());
+  CHECK(logged.value().find("is in the registry") != std::string::npos);
+}
+
+TEST(sweep_refuses_to_run_when_the_registry_is_unreadable) {
+  const TempDir tmp;
+  const berth::Paths p = test_paths(tmp.path());
+  CHECK(berth::journal_upsert(p, stale_entry(p, "berthpanel-memos", "cloning"))
+            .is_ok());
+  CHECK(berth::ensure_dir(p.services_dir / "berthpanel-memos").is_ok());
+  CHECK(berth::ensure_dir(p.units_dir).is_ok());
+  CHECK(
+      berth::atomic_write(p.units_dir / "berthpanel-memos.service", "[Unit]\n")
+          .is_ok());
+  // Without a readable registry no entry can be proven unregistered, so
+  // the sweep must refuse rather than delete unguarded (§11: a corrupt
+  // state never reads as empty).
+  CHECK(
+      berth::atomic_write(p.state_json, "{oops", berth::kPermPrivate).is_ok());
+
+  FakeOps ops;
+  const auto report = berth::reconcile_interrupted(p, ops, nullptr);
+  CHECK(report.is_err());
+  CHECK(ops.calls.empty());
+  CHECK(std::filesystem::exists(p.services_dir / "berthpanel-memos"));
+  CHECK(std::filesystem::exists(p.units_dir / "berthpanel-memos.service"));
+  CHECK(berth::journal_load(p).value().size() == 1);
+}

@@ -10,6 +10,7 @@
 #include "../core/deploylog.h"
 #include "../core/names.h"
 #include "../core/netlog.h"
+#include "../core/state.h"
 #include "../util/fs.h"
 #include "../util/sleep.h"
 #include "../util/subprocess.h"
@@ -274,8 +275,22 @@ Result<ReconcileReport> sweep_interrupted_entries(
     const Paths& paths, DeployOps& ops,
     const std::vector<JournalEntry>& entries, std::atomic<bool>* cancel) {
   // PRECONDITION (deploy.h): the deploy lock is held or proven free. Under
-  // that lock, "journal entry present" IS an interrupted deploy (§6.7).
+  // that lock, "journal entry present" IS an interrupted deploy (§6.7) —
+  // unless the service is in the registry, which means the deploy completed
+  // and only the journal write-back was lost. The registry is read once,
+  // up front: if it cannot be read, no entry can be proven unregistered and
+  // nothing may be deleted.
   ReconcileReport report;
+  Result<std::vector<ServiceRecord>> registry = registry_list(paths);
+  if (registry.is_err())
+    return std::move(registry).error();
+  const auto in_registry = [&](const std::string& service_name) {
+    for (const ServiceRecord& record : registry.value()) {
+      if (record.service_name == service_name)
+        return true;
+    }
+    return false;
+  };
   for (const JournalEntry& entry : entries) {
     if (cancel != nullptr && cancel->load(std::memory_order_relaxed)) {
       report.failed.emplace_back(entry.service_name, "sweep cancelled");
@@ -294,6 +309,21 @@ Result<ReconcileReport> sweep_interrupted_entries(
       // journal entry never steers a delete outside the services layout.
       fail("journal work_dir '" + entry.work_dir + "' is not " +
            (paths.services_dir / entry.service_name).string());
+      continue;
+    }
+
+    // Registry guard: a registered service was fully deployed — its
+    // journal entry is stale, its files are NOT cleanup's to remove.
+    if (in_registry(entry.service_name)) {
+      log_sweep(paths, "cleanup: " + entry.service_name +
+                           " is in the registry — stale journal entry "
+                           "dropped, nothing deleted");
+      Result<void> cleared = journal_remove(paths, entry.service_name);
+      if (cleared.is_err()) {
+        fail(cleared.error().ctx());
+        continue;
+      }
+      report.skipped_registry.push_back(entry.service_name);
       continue;
     }
 
@@ -420,13 +450,18 @@ std::string render_reconcile_report(const ReconcileReport& report) {
     out += "a deploy is running right now; nothing was swept\n";
     return out;
   }
-  if (report.swept.empty() && report.failed.empty()) {
+  if (report.swept.empty() && report.failed.empty() &&
+      report.skipped_registry.empty()) {
     out += "nothing to clean up\n";
     return out;
   }
   for (const ReconcileReport::Swept& swept : report.swept) {
     out += "reconciled " + swept.service_name + " (interrupted at '" +
            swept.stage + "')\n";
+  }
+  for (const std::string& skipped : report.skipped_registry) {
+    out += "SKIPPED " + skipped +
+           ": in the registry — stale journal entry dropped, nothing deleted\n";
   }
   for (const std::pair<std::string, std::string>& failure : report.failed) {
     out += "FAILED " + failure.first + ": " + failure.second + "\n";
