@@ -7,9 +7,10 @@
 #include <filesystem>
 #include <string>
 
-#include "atomic.h"
+#include "core/atomic.h"
 #include "runner.h"
 #include "test_env.h"
+#include "util/fs.h"
 
 using berth::journal_load;
 using berth::journal_remove;

@@ -2,13 +2,14 @@
 // files quarantined loudly (never silent defaults, §11), progressive
 // backup naming, missing files are a normal error.
 
-#include "json.h"
+#include "core/json.h"
 
 #include <filesystem>
 
-#include "atomic.h"
+#include "core/atomic.h"
 #include "runner.h"
 #include "test_env.h"
+#include "util/fs.h"
 
 TEST(json_store_load_round_trip) {
   const TempDir tmp;

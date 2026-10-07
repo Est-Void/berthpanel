@@ -3,13 +3,15 @@
 // rejection of invalid names, corrupt-file quarantine, 0600 storage.
 // Paths are constructed by hand — no environment is touched here.
 
-#include "state.h"
+#include "core/state.h"
+#include "core/names.h"
 
 #include <filesystem>
 
-#include "atomic.h"
+#include "core/atomic.h"
 #include "runner.h"
 #include "test_env.h"
+#include "util/fs.h"
 
 namespace {
 

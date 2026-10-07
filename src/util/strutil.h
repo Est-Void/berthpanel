@@ -26,7 +26,8 @@ inline void abort_empty_delimiter() {
 // Never trims; whitespace is data, not a delimiter.
 inline std::vector<std::string> split(std::string_view text,
                                       std::string_view delim) {
-  if (delim.empty()) detail::abort_empty_delimiter();
+  if (delim.empty())
+    detail::abort_empty_delimiter();
   std::vector<std::string> parts;
   std::size_t pos = 0;
   while (true) {
@@ -43,10 +44,12 @@ inline std::vector<std::string> split(std::string_view text,
 // Inverse of split(): join(split(x, d), d) == x.
 inline std::string join(const std::vector<std::string>& parts,
                         std::string_view delim) {
-  if (delim.empty()) detail::abort_empty_delimiter();
+  if (delim.empty())
+    detail::abort_empty_delimiter();
   std::string out;
   for (std::size_t i = 0; i < parts.size(); ++i) {
-    if (i > 0) out += delim;
+    if (i > 0)
+      out += delim;
     out += parts[i];
   }
   return out;
@@ -56,7 +59,8 @@ inline std::string join(const std::vector<std::string>& parts,
 inline std::string_view trim(std::string_view s) {
   constexpr std::string_view kWhitespace = " \t\n\v\f\r";
   const std::size_t begin = s.find_first_not_of(kWhitespace);
-  if (begin == std::string_view::npos) return {};
+  if (begin == std::string_view::npos)
+    return {};
   const std::size_t end = s.find_last_not_of(kWhitespace);
   return s.substr(begin, end - begin + 1);
 }

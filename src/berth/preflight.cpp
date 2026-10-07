@@ -2,7 +2,7 @@
 
 #include <string>
 
-#include "../state.h"
+#include "../core/names.h"
 #include "validate.h"
 
 namespace berth {
@@ -16,13 +16,12 @@ bool language_supported(const std::string& language) {
 
 }  // namespace
 
-Result<PreflightReport> preflight_recipe(
-    const RecipeLike& recipe, const std::vector<ToolStatus>& tools) {
+Result<PreflightReport> preflight_recipe(const RecipeLike& recipe,
+                                         const std::vector<ToolStatus>& tools) {
   PreflightReport report;
 
   if (!validate_unit_name(recipe.service_name)) {
-    report.items.push_back(
-        {Blocker::kInvalidName, recipe.service_name});
+    report.items.push_back({Blocker::kInvalidName, recipe.service_name});
   }
   const Result<void> repo = validate_owner_repo(recipe.owner_repo);
   if (repo.is_err()) {
@@ -39,7 +38,8 @@ Result<PreflightReport> preflight_recipe(
   for (const std::string& tool : recipe.tools) {
     bool present = false;
     for (const ToolStatus& status : tools) {
-      if (status.name == tool && status.present) present = true;
+      if (status.name == tool && status.present)
+        present = true;
     }
     if (!present) {
       report.items.push_back({Blocker::kMissingTool, tool});
@@ -69,7 +69,8 @@ Result<PreflightReport> preflight_recipe(
 }
 
 std::string render_preflight(const PreflightReport& report) {
-  if (report.ready()) return "preflight: ready\n";
+  if (report.ready())
+    return "preflight: ready\n";
   std::string out = "preflight: blocked by " +
                     std::to_string(report.items.size()) + " problem(s)\n";
   for (const PreflightItem& item : report.items) {

@@ -4,12 +4,13 @@
 #include <set>
 #include <string>
 
-#include "berth/httpclient.h"
+#include "berth/net/fetch.h"
 #include "berth/recipes.h"
 #include "berth/validate.h"
-#include "netlog.h"
+#include "core/names.h"
+#include "core/netlog.h"
+#include "core/state.h"
 #include "runner.h"
-#include "state.h"
 
 using berth::builtin_catalog;
 using berth::Recipe;

@@ -6,9 +6,9 @@
 #include <filesystem>
 #include <string>
 
-#include "atomic.h"
 #include "runner.h"
 #include "test_env.h"
+#include "util/fs.h"
 
 using berth::render_environment_file;
 using berth::SecretEntry;

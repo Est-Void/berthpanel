@@ -8,9 +8,9 @@
 #include <string>
 #include <vector>
 
-#include "atomic.h"
 #include "runner.h"
 #include "test_env.h"
+#include "util/fs.h"
 
 using berth::check_tools;
 using berth::render_tool_report;

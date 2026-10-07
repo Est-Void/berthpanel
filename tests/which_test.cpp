@@ -9,9 +9,9 @@
 #include <mutex>
 #include <string>
 
-#include "atomic.h"
 #include "runner.h"
 #include "test_env.h"
+#include "util/fs.h"
 
 using berth::resolve_executable;
 

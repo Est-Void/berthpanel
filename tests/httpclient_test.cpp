@@ -2,7 +2,7 @@
 // The redirect tests DRIVE the loop decisions through the cap boundary —
 // the exact test the old implementation faked (dev.md §11, §6.2).
 
-#include "berth/httpclient.h"
+#include "berth/net/fetch.h"
 
 #include <optional>
 #include <string>
@@ -94,67 +94,65 @@ TEST(redirect_loop_exercises_cap_boundary_for_real) {
   // hops_done 0..4 and stop at exactly 5 — both sides of the boundary.
   const HttpReply redirect = reply_with(301, "https://github.com/next");
   for (int hops = 0; hops < 5; ++hops) {
-    const auto d =
-        next_redirect(redirect, HttpGetOptions{.max_redirect_hops = 5},
-                      "https://github.com/start", hops);
+    const auto d = next_redirect(redirect, berth::RequestKind::kApi,
+                                 "https://github.com/start", hops, 5);
     CHECK(d.action == RedirectAction::kFollow);
     CHECK(d.next_url == "https://github.com/next");
   }
-  const auto capped =
-      next_redirect(redirect, HttpGetOptions{.max_redirect_hops = 5},
-                    "https://github.com/start", 5);
+  const auto capped = next_redirect(redirect, berth::RequestKind::kApi,
+                                    "https://github.com/start", 5, 5);
   CHECK(capped.action == RedirectAction::kStopCap);
 
   // A smaller requested budget stops earlier.
-  const auto two =
-      next_redirect(redirect, HttpGetOptions{.max_redirect_hops = 2},
-                    "https://github.com/start", 2);
+  const auto two = next_redirect(redirect, berth::RequestKind::kApi,
+                                 "https://github.com/start", 2,
+                                 berth::effective_redirect_budget(2, false));
   CHECK(two.action == RedirectAction::kStopCap);
 
   // A caller requesting more than the hard cap is clamped to it: at 5
   // hops the loop stops even though the caller asked for 50.
-  const auto greedy =
-      next_redirect(redirect, HttpGetOptions{.max_redirect_hops = 50},
-                    "https://github.com/start", 5);
+  const auto greedy = next_redirect(
+      redirect, berth::RequestKind::kApi, "https://github.com/start", 5,
+      berth::effective_redirect_budget(50, false));
   CHECK(greedy.action == RedirectAction::kStopCap);
-  const auto greedy_at_4 =
-      next_redirect(redirect, HttpGetOptions{.max_redirect_hops = 50},
-                    "https://github.com/start", 4);
+  const auto greedy_at_4 = next_redirect(redirect, berth::RequestKind::kApi,
+                                         "https://github.com/start", 4, 5);
   CHECK(greedy_at_4.action == RedirectAction::kFollow);
 }
 
 TEST(redirect_target_denied_by_allowlist) {
-  const auto denied = next_redirect(reply_with(302, "https://evil.io/steal"),
-                                    HttpGetOptions{.max_redirect_hops = 5},
-                                    "https://github.com/a", 0);
+  const auto denied =
+      next_redirect(reply_with(302, "https://evil.io/steal"),
+                    berth::RequestKind::kApi, "https://github.com/a", 0, 5);
   CHECK(denied.action == RedirectAction::kStopDenied);
 
   // A near-miss host is denied exactly like a foreign one (§6.3).
-  const auto near_miss = next_redirect(
-      reply_with(302, "https://api.github.com.evil.io/x"),
-      HttpGetOptions{.max_redirect_hops = 5}, "https://github.com/a", 0);
+  const auto near_miss =
+      next_redirect(reply_with(302, "https://api.github.com.evil.io/x"),
+                    berth::RequestKind::kApi, "https://github.com/a", 0, 5);
   CHECK(near_miss.action == RedirectAction::kStopDenied);
 
   // Loopback is not an API target.
-  const auto loopback = next_redirect(
-      reply_with(302, "http://127.0.0.1:8080/x"),
-      HttpGetOptions{.kind = berth::RequestKind::kApi, .max_redirect_hops = 5},
-      "https://github.com/a", 0);
+  const auto loopback =
+      next_redirect(reply_with(302, "http://127.0.0.1:8080/x"),
+                    berth::RequestKind::kApi, "https://github.com/a", 0, 5);
   CHECK(loopback.action == RedirectAction::kStopDenied);
 }
 
 TEST(redirect_non_redirects_and_bad_locations) {
-  const HttpGetOptions opts{.max_redirect_hops = 5};
-  CHECK(next_redirect(reply_with(200), opts, "https://github.com/", 0).action ==
-        RedirectAction::kNotRedirect);
-  CHECK(next_redirect(reply_with(301), opts, "https://github.com/", 0).action ==
-        RedirectAction::kStopBadLocation);
-  CHECK(next_redirect(reply_with(301, ""), opts, "https://github.com/", 0)
+  CHECK(next_redirect(reply_with(200), berth::RequestKind::kApi,
+                      "https://github.com/", 0, 5)
+            .action == RedirectAction::kNotRedirect);
+  CHECK(next_redirect(reply_with(301), berth::RequestKind::kApi,
+                      "https://github.com/", 0, 5)
+            .action == RedirectAction::kStopBadLocation);
+  CHECK(next_redirect(reply_with(301, ""), berth::RequestKind::kApi,
+                      "https://github.com/", 0, 5)
             .action == RedirectAction::kStopBadLocation);
   // Scheme-only Location: no host, unresolvable.
-  CHECK(
-      next_redirect(reply_with(301, "http://"), opts, "https://github.com/", 0)
-          .action == RedirectAction::kStopBadLocation);
+  CHECK(next_redirect(reply_with(301, "http://"), berth::RequestKind::kApi,
+                      "https://github.com/", 0, 5)
+            .action == RedirectAction::kStopBadLocation);
 }
 
 TEST(head_parse_ok_and_rejects) {
@@ -247,13 +245,10 @@ TEST(response_completeness) {
 }
 
 TEST(redirect_budget_is_zero_unless_explicitly_opted_in) {
-  CHECK(berth::effective_redirect_budget(
-            HttpGetOptions{.max_redirect_hops = 0}) == 0);
-  CHECK(berth::effective_redirect_budget(
-            HttpGetOptions{.max_redirect_hops = 3}) == 3);
-  CHECK(berth::effective_redirect_budget(HttpGetOptions{
-            .max_redirect_hops = 0, .follow_allowlisted_redirects = true}) ==
-        berth::kMaxRedirectHops);
+  CHECK(berth::effective_redirect_budget(0, false) == 0);
+  CHECK(berth::effective_redirect_budget(3, false) == 3);
+  CHECK(berth::effective_redirect_budget(0, true) == berth::kMaxRedirectHops);
+  CHECK(berth::effective_redirect_budget(50, false) == berth::kMaxRedirectHops);
 }
 
 TEST(refusals_are_marked_and_never_confused_with_outages) {

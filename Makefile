@@ -29,22 +29,31 @@ SRC := \
 	src/main.cpp
 
 LIB_SRC := \
-	src/paths.cpp \
-	src/atomic.cpp \
-	src/json.cpp \
-	src/state.cpp \
-	src/flags.cpp \
-	src/deploylog.cpp \
-	src/netlog.cpp \
-	src/berth/httpclient.cpp \
-	src/berth/resolver.cpp \
-	src/berth/egress.cpp \
-	src/berth/rawfetch.cpp \
+	src/core/paths.cpp \
+	src/core/atomic.cpp \
+	src/core/json.cpp \
+	src/core/state.cpp \
+	src/core/flags.cpp \
+	src/core/deploylog.cpp \
+	src/core/netlog.cpp \
+	src/core/names.cpp \
+	src/core/applog.cpp \
+	src/core/allowlist.cpp \
+	src/berth/net/client.cpp \
+	src/berth/net/doh.cpp \
+	src/berth/net/egress.cpp \
+	src/berth/net/fetch.cpp \
+	src/berth/net/github_api.cpp \
+	src/berth/net/protocol.cpp \
+	src/berth/net/resolver.cpp \
+	src/berth/net/socket.cpp \
+	src/berth/net/tar.cpp \
+	src/berth/net/tls.cpp \
+	src/berth/net/url.cpp \
 	src/berth/validate.cpp \
 	src/berth/port.cpp \
 	src/berth/lock.cpp \
 	src/berth/journal.cpp \
-	src/berth/fs.cpp \
 	src/berth/units.cpp \
 	src/berth/secrets.cpp \
 	src/berth/gitclone.cpp \
@@ -56,8 +65,12 @@ LIB_SRC := \
  	src/berth/sandbox.cpp \
  	src/berth/cancel.cpp \
  	src/berth/recipes.cpp \
-	src/berth/catalog.cpp \
+ 	src/berth/userrecipes.cpp \
+ 	src/berth/detect.cpp \
+ 	src/berth/catalog.cpp \
 	src/berth/deploy.cpp \
+	src/util/fs.cpp \
+	src/util/tmpdir.cpp \
 	src/util/which.cpp \
 	src/util/gzip.cpp \
 	src/util/subprocess.cpp
@@ -107,7 +120,9 @@ TEST_SRC := \
 	tests/prefetch_test.cpp \
 	tests/sandbox_test.cpp \
 	tests/recipes_test.cpp \
-	tests/catalog_test.cpp \
+ 	tests/catalog_test.cpp \
+ 	tests/userrecipes_test.cpp \
+ 	tests/detect_test.cpp \
  	tests/deploy_test.cpp \
  	tests/cancel_test.cpp \
  	tests/gzip_test.cpp
@@ -238,7 +253,7 @@ $(TEST_DIR)/obj $(TEST_DIR):
 
 # --- format: clang-format rewrites; deliberately NOT a CI gate (dev.md §12.7) ---
 
-FORMAT_FILES := $(SRC) $(TEST_SRC)
+FORMAT_FILES := $(SRC) $(LIB_SRC) $(TEST_SRC)
 
 .PHONY: format
 format:

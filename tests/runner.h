@@ -42,21 +42,21 @@ inline int run_all() {
 
 }  // namespace test
 
-#define CHECK(cond)                                                            \
-  do {                                                                         \
-    if (!(cond)) {                                                             \
-      throw std::runtime_error(std::string(__FILE__) + ":" +                   \
-                               std::to_string(__LINE__) +                      \
-                               ": CHECK failed: " #cond);                      \
-    }                                                                          \
+#define CHECK(cond)                                          \
+  do {                                                       \
+    if (!(cond)) {                                           \
+      throw std::runtime_error(std::string(__FILE__) + ":" + \
+                               std::to_string(__LINE__) +    \
+                               ": CHECK failed: " #cond);    \
+    }                                                        \
   } while (false)
 
-#define TEST(name)                                                             \
-  static void test_fn_##name();                                                \
-  namespace {                                                                  \
-  [[maybe_unused]] const bool test_reg_##name = [] {                           \
-    ::test::registry().push_back({#name, &test_fn_##name});                    \
-    return true;                                                               \
-  }();                                                                         \
-  }                                                                            \
+#define TEST(name)                                          \
+  static void test_fn_##name();                             \
+  namespace {                                               \
+  [[maybe_unused]] const bool test_reg_##name = [] {        \
+    ::test::registry().push_back({#name, &test_fn_##name}); \
+    return true;                                            \
+  }();                                                      \
+  }                                                         \
   static void test_fn_##name()

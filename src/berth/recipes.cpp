@@ -3,10 +3,12 @@
 #include <algorithm>
 #include <string>
 
-#include "../netlog.h"
-#include "../state.h"
+#include "../core/names.h"
+#include "../core/netlog.h"
+#include "../util/argv.h"
+#include "../util/ascii.h"
 #include "../util/strutil.h"
-#include "httpclient.h"
+#include "net/fetch.h"
 #include "units.h"
 #include "validate.h"
 
@@ -20,42 +22,37 @@ bool language_supported(const std::string& language) {
 }
 
 bool valid_sha256(const std::string& value) {
-  if (value.size() != 64) return false;
-  return std::all_of(value.begin(), value.end(), [](const char c) {
-    const unsigned char u = static_cast<unsigned char>(c);
-    return (u >= '0' && u <= '9') || (u >= 'a' && u <= 'f');
-  });
+  return value.size() == 64 && all_chars(value, is_lower_hex);
 }
 
 // memory_max must look like systemd's: digits with an optional K/M/G/T.
 bool valid_memory_max(const std::string& value) {
-  if (value.empty() || value.size() > 16) return false;
+  if (value.empty() || value.size() > 16)
+    return false;
   std::size_t index = 0;
   while (index < value.size() && value[index] >= '0' && value[index] <= '9') {
     ++index;
   }
-  if (index == 0) return false;
+  if (index == 0)
+    return false;
   const std::string suffix = value.substr(index);
-  if (suffix.empty()) return true;
+  if (suffix.empty())
+    return true;
   return suffix == "K" || suffix == "M" || suffix == "G" || suffix == "T";
 }
 
 bool pin_is_allowlisted(const std::string& url) {
   const Result<HttpUrl> parsed = parse_http_url(url);
-  if (parsed.is_err()) return false;
+  if (parsed.is_err())
+    return false;
   return classify_endpoint(parsed.value().host) == EndpointClass::kAllowed;
-}
-
-std::string program_of(const std::vector<std::string>& step) {
-  const std::string first = step.front();
-  const std::size_t slash = first.rfind('/');
-  return slash == std::string::npos ? first : first.substr(slash + 1);
 }
 
 Result<std::vector<std::vector<std::string>>> steps_from_json(
     const nlohmann::json& doc, const char* field) {
   std::vector<std::vector<std::string>> steps;
-  if (!doc.contains(field)) return steps;
+  if (!doc.contains(field))
+    return steps;
   const nlohmann::json& list = doc.at(field);
   if (!list.is_array()) {
     return Error(std::string("recipe: ") + field + " must be an array");
@@ -76,7 +73,8 @@ Result<std::vector<std::vector<std::string>>> steps_from_json(
 
 }  // namespace
 
-Result<std::vector<std::string>> split_command_template(const std::string_view tmpl) {
+Result<std::vector<std::string>> split_command_template(
+    const std::string_view tmpl) {
   std::vector<std::string> tokens;
   std::string current;
   bool in_quotes = false;
@@ -98,19 +96,31 @@ Result<std::vector<std::string>> split_command_template(const std::string_view t
     }
     current += c;
   }
-  if (in_quotes) return Error("recipe: unbalanced quote in command template");
-  if (!current.empty()) tokens.push_back(current);
-  if (tokens.empty()) return Error("recipe: empty command template");
+  if (in_quotes)
+    return Error("recipe: unbalanced quote in command template");
+  if (!current.empty())
+    tokens.push_back(current);
+  if (tokens.empty())
+    return Error("recipe: empty command template");
   return tokens;
 }
 
-bool tool_covers_step(const Recipe& recipe, const std::vector<std::string>& step) {
-  if (step.empty()) return false;
-  const std::string program = program_of(step);
+bool tool_covers_step(const Recipe& recipe,
+                      const std::vector<std::string>& step) {
+  if (step.empty())
+    return false;
+  const std::string program = program_name(step);
   // Interpreting a script needs the interpreter named in tools, and every
   // build step's own program does too (§8 audit lesson).
   std::vector<std::string> required = {program};
-  if (program == "sh" || program == "bash") required = {"sh"};
+  if (program == "sh" || program == "bash") {
+    required = {"sh"};
+  } else if (program == "python") {
+    // A venv interpreter (…/venv/bin/python) IS python3: without this
+    // alias, every venv-based python recipe fails validation while its
+    // toolcheck-declared tool is exactly python3.
+    required = {"python3"};
+  }
   for (const std::string& needed : required) {
     if (std::find(recipe.tools.begin(), recipe.tools.end(), needed) ==
         recipe.tools.end()) {
@@ -125,9 +135,11 @@ Result<void> validate_recipe(const Recipe& recipe) {
     return Error("recipe: invalid service_name: '" + recipe.service_name + "'");
   }
   const Result<void> repo = validate_owner_repo(recipe.owner_repo());
-  if (repo.is_err()) return std::move(repo).error();
+  if (repo.is_err())
+    return std::move(repo).error();
   const Result<void> sha = validate_commit_sha(recipe.commit);
-  if (sha.is_err()) return std::move(sha).error();
+  if (sha.is_err())
+    return std::move(sha).error();
   if (!language_supported(recipe.language)) {
     return Error("recipe: unsupported language: '" + recipe.language + "'");
   }
@@ -139,13 +151,19 @@ Result<void> validate_recipe(const Recipe& recipe) {
 
   const Result<std::vector<std::string>> start =
       split_command_template(recipe.start_cmd);
-  if (start.is_err()) return std::move(start).error();
+  if (start.is_err())
+    return std::move(start).error();
   for (const std::string& token : start.value()) {
-    if (token.find('\'') != std::string::npos || token.find(';') != std::string::npos ||
-        token.find('|') != std::string::npos || token.find('$') != std::string::npos ||
-        token.find('`') != std::string::npos || token.find('>') != std::string::npos) {
-      return Error("recipe: start_cmd must be an argv template, not shell "
-                   "syntax: '" + token + "'");
+    if (token.find('\'') != std::string::npos ||
+        token.find(';') != std::string::npos ||
+        token.find('|') != std::string::npos ||
+        token.find('$') != std::string::npos ||
+        token.find('`') != std::string::npos ||
+        token.find('>') != std::string::npos) {
+      return Error(
+          "recipe: start_cmd must be an argv template, not shell "
+          "syntax: '" +
+          token + "'");
     }
   }
   if (!matched_dangerous_patterns(recipe.start_cmd).empty()) {
@@ -158,15 +176,17 @@ Result<void> validate_recipe(const Recipe& recipe) {
 
   const auto all_steps = [&recipe]() {
     std::vector<std::vector<std::string>> steps = recipe.pre_build;
-    steps.insert(steps.end(), recipe.build_steps.begin(), recipe.build_steps.end());
+    steps.insert(steps.end(), recipe.build_steps.begin(),
+                 recipe.build_steps.end());
     return steps;
   };
   for (const std::vector<std::string>& step : all_steps()) {
     if (!matched_dangerous_patterns(step).empty()) {
-      return Error("recipe: a build step matches the dangerous-command denylist");
+      return Error(
+          "recipe: a build step matches the dangerous-command denylist");
     }
     if (!tool_covers_step(recipe, step)) {
-      return Error("recipe: build step program '" + program_of(step) +
+      return Error("recipe: build step program '" + program_name(step) +
                    "' is not declared in tools (§8: a green preflight with an "
                    "undeclared tool fails at build time)");
     }
@@ -180,16 +200,18 @@ Result<void> validate_recipe(const Recipe& recipe) {
 
   for (const ContentPin& pin : recipe.plugins) {
     if (!pin_is_allowlisted(pin.url) || !valid_sha256(pin.sha256)) {
-      return Error("recipe: plugin pin must be an allowlisted https url with a "
-                   "sha256");
+      return Error(
+          "recipe: plugin pin must be an allowlisted https url with a "
+          "sha256");
     }
   }
 
   if (recipe.prebuilt.has_value()) {
     const PrebuiltBinary& prebuilt = recipe.prebuilt.value();
     if (!pin_is_allowlisted(prebuilt.url) || !valid_sha256(prebuilt.sha256)) {
-      return Error("recipe: prebuilt binary must be an allowlisted https url "
-                   "with a sha256 pin");
+      return Error(
+          "recipe: prebuilt binary must be an allowlisted https url "
+          "with a sha256 pin");
     }
     if (prebuilt.member.empty()) {
       return Error("recipe: prebuilt binary needs a member file name");
@@ -239,7 +261,8 @@ Result<void> validate_recipe(const Recipe& recipe) {
 }
 
 Result<Recipe> recipe_from_json(const nlohmann::json& doc) {
-  if (!doc.is_object()) return Error("recipe: not an object");
+  if (!doc.is_object())
+    return Error("recipe: not an object");
   Recipe r;
   r.owner = doc.value("owner", "");
   r.name = doc.value("name", "");
@@ -252,20 +275,24 @@ Result<Recipe> recipe_from_json(const nlohmann::json& doc) {
   r.start_cmd = doc.value("start_cmd", "");
   r.health_path = doc.value("health_path", "/");
   r.port = doc.value("port", static_cast<std::uint16_t>(0));
-  for (const nlohmann::json& tool : doc.value("tools", nlohmann::json::array())) {
+  for (const nlohmann::json& tool :
+       doc.value("tools", nlohmann::json::array())) {
     r.tools.push_back(tool.get<std::string>());
   }
   const Result<std::vector<std::vector<std::string>>> pre_build =
       steps_from_json(doc, "pre_build");
-  if (pre_build.is_err()) return std::move(pre_build).error();
+  if (pre_build.is_err())
+    return std::move(pre_build).error();
   r.pre_build = std::move(pre_build).value();
   const Result<std::vector<std::vector<std::string>>> build =
       steps_from_json(doc, "build_steps");
-  if (build.is_err()) return std::move(build).error();
+  if (build.is_err())
+    return std::move(build).error();
   r.build_steps = std::move(build).value();
   const Result<std::vector<std::vector<std::string>>> prefetch =
       steps_from_json(doc, "prefetch_steps");
-  if (prefetch.is_err()) return std::move(prefetch).error();
+  if (prefetch.is_err())
+    return std::move(prefetch).error();
   r.prefetch_steps = std::move(prefetch).value();
   if (doc.contains("plugins")) {
     for (const nlohmann::json& pin : doc.at("plugins")) {

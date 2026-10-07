@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-#include "../paths.h"
+#include "../core/paths.h"
 #include "../util/result.h"
 
 namespace berth {

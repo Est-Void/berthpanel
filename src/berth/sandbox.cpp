@@ -1,18 +1,17 @@
 #include "sandbox.h"
 
-#include <stdlib.h>
 #include <cstdio>
-#include <cstdlib>
 
 #include <string>
 
-#include "../atomic.h"
+#include "../core/atomic.h"
+#include "../core/names.h"
+#include "../util/fs.h"
 #include "../util/strutil.h"
-#include "fs.h"
-#include "state.h"
-#include "units.h"
 #include "../util/subprocess.h"
+#include "../util/tmpdir.h"
 #include "../util/which.h"
+#include "units.h"
 
 namespace berth {
 
@@ -20,34 +19,17 @@ namespace {
 
 constexpr std::chrono::milliseconds kProbeTimeout{30000};
 
-class ScratchDir {
- public:
-  ScratchDir() {
-    std::string tmpl = "/tmp/berthpanel-verify-XXXXXX";
-    const char* made = ::mkdtemp(tmpl.data());
-    path_ = made != nullptr ? std::string(made) : std::string("/tmp");
-  }
-  ScratchDir(const ScratchDir&) = delete;
-  ScratchDir& operator=(const ScratchDir&) = delete;
-  ~ScratchDir() {
-    const Result<std::size_t> removed = remove_tree(path_);
-    static_cast<void>(removed);
-  }
-  [[nodiscard]] std::string path() const { return path_; }
-
- private:
-  std::string path_;
-};
-
 Result<int> probe(const std::vector<std::string>& body) {
   Result<std::string> binary = resolve_executable("systemd-run");
-  if (binary.is_err()) return std::move(binary).error();
+  if (binary.is_err())
+    return std::move(binary).error();
   std::vector<std::string> argv{std::move(binary).value()};
   argv.insert(argv.end(), body.begin(), body.end());
   RunLimits limits;
   limits.timeout = kProbeTimeout;
   Result<RunOutput> out = run(argv, limits);
-  if (out.is_err()) return std::move(out).error();
+  if (out.is_err())
+    return std::move(out).error();
   return out.value().exit_code;
 }
 
@@ -62,30 +44,19 @@ std::vector<std::string> sandbox_argv_body(const SandboxSpec& spec) {
       "--collect",
       "--property=MemoryMax=" + std::to_string(spec.memory_max_mb) + "M",
       "--property=TasksMax=" + std::to_string(spec.tasks_max),
-      "--property=NoNewPrivileges=yes",
-      "--property=PrivateTmp=yes",
-      "--property=PrivateDevices=yes",
-      "--property=ProtectSystem=strict",
-      "--property=ProtectHome=read-only",
-      "--property=ProtectKernelTunables=yes",
-      "--property=ProtectKernelModules=yes",
-      "--property=ProtectControlGroups=yes",
-      "--property=RestrictSUIDSGID=yes",
-      "--property=RestrictNamespaces=yes",
-      "--property=LockPersonality=yes",
-      "--property=SystemCallArchitectures=native",
-      "--property=CapabilityBoundingSet=",
-      "--property=AmbientCapabilities=",
-      "--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
   };
+  // The same hardening set the produced unit gets, from the same table: a
+  // build must not be less contained than the service it builds.
+  for (const std::string_view directive : hardening_directives()) {
+    argv.push_back("--property=" + std::string(directive));
+  }
   if (!spec.working_dir.empty()) {
     const Result<std::string> raw = raw_systemd_path(spec.working_dir);
     if (raw.is_err()) {
       // Invariant violation: a caller-supplied spec with a bad working dir
       // must not silently lose its ReadWritePaths. run_in_sandbox validates
       // first and returns a clean error.
-      std::fputs("berth: fatal: sandbox working_dir is invalid: ",
-                 stderr);
+      std::fputs("berth: fatal: sandbox working_dir is invalid: ", stderr);
       std::fputs(spec.working_dir.c_str(), stderr);
       std::fputc('\n', stderr);
       std::abort();
@@ -116,7 +87,8 @@ std::vector<std::string> sandbox_argv_body(const SandboxSpec& spec) {
 Result<int> run_in_sandbox(const SandboxSpec& spec) {
   if (!spec.working_dir.empty()) {
     Result<std::string> raw = raw_systemd_path(spec.working_dir);
-    if (raw.is_err()) return std::move(raw).error();
+    if (raw.is_err())
+      return std::move(raw).error();
   }
   Result<std::string> binary = resolve_executable("systemd-run");
   if (binary.is_err()) {
@@ -130,29 +102,35 @@ Result<int> run_in_sandbox(const SandboxSpec& spec) {
   limits.timeout = spec.timeout;
   limits.cancel = spec.cancel;
   Result<RunOutput> out = run(argv, limits);
-  if (out.is_err()) return std::move(out).error();
+  if (out.is_err())
+    return std::move(out).error();
   return out.value().exit_code;
 }
 
 bool SandboxAudit::full_grade() const {
-  if (items.empty()) return false;
+  if (items.empty())
+    return false;
   for (const SandboxAuditItem& item : items) {
-    if (item.required && !item.ok) return false;
+    if (item.required && !item.ok)
+      return false;
   }
   return true;
 }
 
 Result<SandboxAudit> verify_sandbox() {
   Result<std::string> binary = resolve_executable("systemd-run");
-  if (binary.is_err()) return std::move(binary).error();
+  if (binary.is_err())
+    return std::move(binary).error();
 
-  const ScratchDir scratch;
-  const std::filesystem::path work = scratch.path();
+  const Result<TempDir> scratch = TempDir::create("verify");
+  if (scratch.is_err())
+    return std::move(scratch).error();
+  const std::filesystem::path work = scratch.value().path();
 
   SandboxAudit audit;
 
-  const std::vector<std::string> base = {
-      "--user", "--wait", "--pipe", "--quiet", "--collect"};
+  const std::vector<std::string> base = {"--user", "--wait", "--pipe",
+                                         "--quiet", "--collect"};
 
   auto with_probe = [&](const std::vector<std::string>& properties,
                         const std::string& shell) {
@@ -172,11 +150,11 @@ Result<SandboxAudit> verify_sandbox() {
   const Result<int> exit_code =
       probe({"--user", "--wait", "--pipe", "--quiet", "--collect", "--",
              "/bin/sh", "-c", "exit 7"});
-  audit.items.push_back({.check = "exit code passthrough",
-                         .ok = exit_code.is_ok() && exit_code.value() == 7,
-                         .detail = exit_code.is_ok()
-                                       ? "got " + std::to_string(exit_code.value())
-                                       : exit_code.error().ctx()});
+  audit.items.push_back(
+      {.check = "exit code passthrough",
+       .ok = exit_code.is_ok() && exit_code.value() == 7,
+       .detail = exit_code.is_ok() ? "got " + std::to_string(exit_code.value())
+                                   : exit_code.error().ctx()});
 
   const std::filesystem::path memprobe = work / "memprobe.sh";
   const std::string memprobe_body =
@@ -186,7 +164,8 @@ Result<SandboxAudit> verify_sandbox() {
       "test \"$max\" = 67108864\n";
   Result<void> probe_written =
       atomic_write(memprobe, memprobe_body, kPermPrivateDir);
-  if (probe_written.is_err()) return std::move(probe_written).error();
+  if (probe_written.is_err())
+    return std::move(probe_written).error();
   std::vector<std::string> mem_argv = base;
   mem_argv.push_back("--property=MemoryMax=64M");
   mem_argv.push_back("--working-directory=" + work.string());
@@ -195,11 +174,11 @@ Result<SandboxAudit> verify_sandbox() {
   mem_argv.push_back("/bin/sh");
   mem_argv.push_back(std::string(memprobe.string()));
   const Result<int> memory = probe(mem_argv);
-  audit.items.push_back({.check = "MemoryMax applied",
-                         .ok = memory.is_ok() && memory.value() == 0,
-                         .detail = memory.is_ok()
-                                       ? "exit " + std::to_string(memory.value())
-                                       : memory.error().ctx()});
+  audit.items.push_back(
+      {.check = "MemoryMax applied",
+       .ok = memory.is_ok() && memory.value() == 0,
+       .detail = memory.is_ok() ? "exit " + std::to_string(memory.value())
+                                : memory.error().ctx()});
 
   const std::filesystem::path privprobe = work / "privprobe.sh";
   const std::string privprobe_body =
@@ -208,7 +187,8 @@ Result<SandboxAudit> verify_sandbox() {
       "/proc/self/status\n";
   Result<void> priv_written =
       atomic_write(privprobe, privprobe_body, kPermPrivateDir);
-  if (priv_written.is_err()) return std::move(priv_written).error();
+  if (priv_written.is_err())
+    return std::move(priv_written).error();
   std::vector<std::string> priv_argv = base;
   priv_argv.push_back("--property=NoNewPrivileges=yes");
   priv_argv.push_back("--working-directory=" + work.string());
@@ -217,42 +197,44 @@ Result<SandboxAudit> verify_sandbox() {
   priv_argv.push_back("/bin/sh");
   priv_argv.push_back(std::string(privprobe.string()));
   const Result<int> no_privs = probe(priv_argv);
-  audit.items.push_back({.check = "NoNewPrivileges applied",
-                         .ok = no_privs.is_ok() && no_privs.value() == 0,
-                         .detail = no_privs.is_ok()
-                                       ? "exit " + std::to_string(no_privs.value())
-                                       : no_privs.error().ctx()});
+  audit.items.push_back(
+      {.check = "NoNewPrivileges applied",
+       .ok = no_privs.is_ok() && no_privs.value() == 0,
+       .detail = no_privs.is_ok() ? "exit " + std::to_string(no_privs.value())
+                                  : no_privs.error().ctx()});
 
-  const Result<int> write_outside = probe(with_probe(
-      {"ProtectSystem=strict"},
-      "! touch /etc/berthpanel-sandbox-probe 2>/dev/null"));
-  audit.items.push_back({.check = "writes outside the work dir are refused",
-                         .ok = write_outside.is_ok() && write_outside.value() == 0,
-                         .detail = write_outside.is_ok()
-                                       ? "exit " + std::to_string(write_outside.value())
-                                       : write_outside.error().ctx()});
+  const Result<int> write_outside =
+      probe(with_probe({"ProtectSystem=strict"},
+                       "! touch /etc/berthpanel-sandbox-probe 2>/dev/null"));
+  audit.items.push_back(
+      {.check = "writes outside the work dir are refused",
+       .ok = write_outside.is_ok() && write_outside.value() == 0,
+       .detail = write_outside.is_ok()
+                     ? "exit " + std::to_string(write_outside.value())
+                     : write_outside.error().ctx()});
 
   const Result<int> write_inside = probe(with_probe(
       {"ProtectSystem=strict"}, "touch sandbox-ok && test -f sandbox-ok"));
-  audit.items.push_back({.check = "the work dir stays writable",
-                         .ok = write_inside.is_ok() && write_inside.value() == 0,
-                         .detail = write_inside.is_ok()
-                                       ? "exit " + std::to_string(write_inside.value())
-                                       : write_inside.error().ctx()});
+  audit.items.push_back(
+      {.check = "the work dir stays writable",
+       .ok = write_inside.is_ok() && write_inside.value() == 0,
+       .detail = write_inside.is_ok()
+                     ? "exit " + std::to_string(write_inside.value())
+                     : write_inside.error().ctx()});
 
   Result<std::string> strace = resolve_executable("strace");
   if (strace.is_err()) {
-    audit.items.push_back({.check = "syscall audit (strace)",
-                           .ok = true,
-                           .required = false,
-                           .detail =
-                               "skipped: strace is not installed on this host"});
+    audit.items.push_back(
+        {.check = "syscall audit (strace)",
+         .ok = true,
+         .required = false,
+         .detail = "skipped: strace is not installed on this host"});
   } else {
     audit.strace_available = true;
-    const std::filesystem::path trace = std::filesystem::path(scratch.path()) / "trace.log";
+    const std::filesystem::path trace = work / "trace.log";
     SandboxSpec spec{
-        .argv = {std::move(strace).value(), "-f", "-e", "trace=network",
-                 "-o", trace.string(), "/bin/sh", "-c", "echo probe"},
+        .argv = {std::move(strace).value(), "-f", "-e", "trace=network", "-o",
+                 trace.string(), "/bin/sh", "-c", "echo probe"},
         .working_dir = work,
         .env_extra = {},
         .unit_name = {},
@@ -274,8 +256,9 @@ Result<SandboxAudit> verify_sandbox() {
     audit.items.push_back({.check = "syscall audit (strace)",
                            .ok = traced.is_ok() && network_calls.empty(),
                            .required = false,
-                           .detail = traced.is_err() ? traced.error().ctx()
-                                                     : "no socket/connect seen"});
+                           .detail = traced.is_err()
+                                         ? traced.error().ctx()
+                                         : "no socket/connect seen"});
   }
 
   return audit;

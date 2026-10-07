@@ -1,64 +1,69 @@
+// src/berth/gitclone.cpp — see gitclone.h for the contract.
+
 #include "gitclone.h"
 
-#include <stdlib.h>
-
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "../atomic.h"
-#include "fs.h"
+#include "../core/atomic.h"
+#include "../util/strutil.h"
 #include "../util/subprocess.h"
+#include "../util/tmpdir.h"
 #include "../util/which.h"
-#include "httpclient.h"
+#include "net/fetch.h"
 #include "validate.h"
 
 namespace berth {
 
 namespace {
 
-struct Askpass {
-  std::filesystem::path dir;
-  ~Askpass() {
-    if (!dir.empty()) {
-      Result<std::size_t> ignored = remove_tree(dir);
-      static_cast<void>(ignored);
-    }
-  }
+// A 0700 directory holding the token and a GIT_ASKPASS shim. Both vanish
+// with the TempDir, so the token never outlives the clone that needed it.
+class Askpass {
+ public:
+  [[nodiscard]] static Result<Askpass> create(const std::string& token);
+  [[nodiscard]] const std::filesystem::path& dir() const { return dir_.path(); }
+
+ private:
+  explicit Askpass(TempDir dir) : dir_(std::move(dir)) {}
+  TempDir dir_;
 };
 
-Result<std::filesystem::path> make_askpass(const std::string& token) {
-  std::string tmpl = (std::string("/tmp/berthpanel-askpass-XXXXXX"));
-  const char* made = ::mkdtemp(tmpl.data());
-  if (made == nullptr) return Error("gitclone: mkdtemp failed");
-  const std::filesystem::path dir(made);
-  Result<void> chmod_dir = ensure_dir(dir);
-  if (chmod_dir.is_err()) return std::move(chmod_dir).error();
+Result<Askpass> Askpass::create(const std::string& token) {
+  Result<TempDir> made = TempDir::create("askpass");
+  if (made.is_err())
+    return std::move(made).error();
+  const std::filesystem::path dir = made.value().path();
 
-  const std::filesystem::path token_file = dir / "token";
-  Result<void> written = atomic_write(token_file, token, kPermPrivate);
-  if (written.is_err()) return std::move(written).error();
+  const Result<void> token_written =
+      atomic_write(dir / "token", token, kPermPrivate);
+  if (token_written.is_err())
+    return std::move(token_written).error();
 
-  const std::string script = "#!/bin/sh\n"
-                             "case \"$1\" in\n"
-                             "  *[Uu]sername*) printf '%s\\n' 'x-access-token' ;;\n"
-                             "  *) exec cat " +
-                             dir.string() + "/token ;;\n"
-                             "esac\n";
-  const std::filesystem::path script_path = dir / "askpass";
-  Result<void> script_written =
-      atomic_write(script_path, script,
-                   std::filesystem::perms::owner_read |
-                       std::filesystem::perms::owner_write |
-                       std::filesystem::perms::owner_exec);
-  if (script_written.is_err()) return std::move(script_written).error();
-  return dir;
+  const std::string script =
+      "#!/bin/sh\n"
+      "case \"$1\" in\n"
+      "  *[Uu]sername*) printf '%s\\n' 'x-access-token' ;;\n"
+      "  *) exec cat " +
+      dir.string() +
+      "/token ;;\n"
+      "esac\n";
+  const Result<void> script_written = atomic_write(
+      dir / "askpass", script,
+      std::filesystem::perms::owner_read | std::filesystem::perms::owner_write |
+          std::filesystem::perms::owner_exec);
+  if (script_written.is_err())
+    return std::move(script_written).error();
+  return Askpass(std::move(made).value());
 }
 
 Result<void> run_git(const std::vector<std::string>& args,
                      const CloneRequest& request,
                      const std::filesystem::path& askpass_dir) {
   Result<std::string> binary = resolve_executable("git");
-  if (binary.is_err()) return std::move(binary).error();
+  if (binary.is_err())
+    return std::move(binary).error();
 
   std::vector<std::string> env = {
       "GIT_TERMINAL_PROMPT=0",
@@ -75,88 +80,61 @@ Result<void> run_git(const std::vector<std::string>& args,
 
   std::vector<std::string> argv{std::move(binary).value()};
   argv.insert(argv.end(), args.begin(), args.end());
-  Result<RunOutput> out = run(argv, limits);
-  if (out.is_err()) return std::move(out).error();
+  const Result<RunOutput> out = run(argv, limits);
+  if (out.is_err())
+    return std::move(out).error();
   if (out.value().exit_code != 0) {
     return Error("gitclone: git " + args.front() + " failed with exit " +
-                 std::to_string(out.value().exit_code) + ": " + out.value().err);
+                 std::to_string(out.value().exit_code) + ": " +
+                 out.value().err);
   }
   return {};
 }
 
-}  // namespace
+// The four git invocations that materialise one pinned commit.
+Result<void> fetch_pinned_commit(const CloneRequest& request,
+                                 const std::filesystem::path& dest,
+                                 const std::filesystem::path& askpass_dir) {
+  const Result<void> init =
+      run_git({"init", "--quiet", dest.string()}, request, askpass_dir);
+  if (init.is_err())
+    return init;
 
-bool token_allowed_for_url(const std::string& url, const std::string_view host) {
-  const Result<HttpUrl> parsed = parse_http_url(url);
-  if (parsed.is_err()) return false;
-  const HttpUrl& target = parsed.value();
-  if (target.scheme != "https") return false;
-  return target.host == host;
+  const Result<void> remote =
+      run_git({"-C", dest.string(), "remote", "add", "origin", request.url},
+              request, askpass_dir);
+  if (remote.is_err())
+    return remote;
+
+  const Result<void> fetched =
+      run_git({"-C", dest.string(), "fetch", "--depth", "1", "--quiet",
+               "origin", request.commit},
+              request, askpass_dir);
+  if (fetched.is_err())
+    return fetched;
+
+  return run_git({"-C", dest.string(), "-c", "advice.detachedHead=false",
+                  "checkout", "--quiet", "--detach", "FETCH_HEAD"},
+                 request, askpass_dir);
 }
 
-Result<void> clone_pinned(const CloneRequest& request) {
-  Result<void> sha_ok = validate_commit_sha(request.commit);
-  if (sha_ok.is_err()) return std::move(sha_ok).error();
-  if (request.url.empty()) return Error("gitclone: empty url");
+// §6.6: a checkout is not proof. HEAD is read back and compared against the
+// requested SHA, so a moved branch can never pass for a pin.
+Result<void> verify_head_is(const CloneRequest& request,
+                            const std::filesystem::path& dest) {
+  const Result<std::string> git_bin = resolve_executable("git");
+  if (git_bin.is_err())
+    return std::move(git_bin).error();
 
-  if (request.token != nullptr &&
-      !token_allowed_for_url(request.url, request.token_host)) {
-    return Error("gitclone: refusing to attach a token to a url whose host "
-                 "is not exactly " +
-                 std::string(request.token_host));
-  }
-
-  std::error_code ec;
-  if (std::filesystem::exists(request.dest_dir, ec)) {
-    std::filesystem::directory_iterator it(request.dest_dir, ec);
-    if (!ec && it != std::filesystem::directory_iterator()) {
-      return Error("gitclone: destination exists and is not empty: " +
-                   request.dest_dir.string());
-    }
-    Result<void> removed = ensure_dir(request.dest_dir.parent_path());
-    if (removed.is_err()) return removed;
-  } else {
-    Result<void> made = ensure_dir(request.dest_dir.parent_path());
-    if (made.is_err()) return std::move(made).error();
-  }
-
-  Askpass askpass;
-  if (request.token != nullptr) {
-    Result<std::filesystem::path> dir = make_askpass(*request.token);
-    if (dir.is_err()) return std::move(dir).error();
-    askpass.dir = std::move(dir).value();
-  }
-
-  const std::filesystem::path dest = request.dest_dir;
-  Result<void> init = run_git({"init", "--quiet", dest.string()}, request,
-                              askpass.dir);
-  if (init.is_err()) return init;
-  Result<void> remote =
-      run_git({"-C", dest.string(), "remote", "add", "origin", request.url},
-              request, askpass.dir);
-  if (remote.is_err()) return remote;
-  Result<void> fetch = run_git({"-C", dest.string(), "fetch", "--depth", "1",
-                                "--quiet", "origin", request.commit},
-                               request, askpass.dir);
-  if (fetch.is_err()) return fetch;
-  Result<void> checkout =
-      run_git({"-C", dest.string(), "-c", "advice.detachedHead=false",
-               "checkout", "--quiet", "--detach", "FETCH_HEAD"},
-              request, askpass.dir);
-  if (checkout.is_err()) return checkout;
-
-  Result<std::string> git_bin = resolve_executable("git");
-  if (git_bin.is_err()) return std::move(git_bin).error();
   RunLimits limits;
   limits.timeout = request.timeout;
   limits.cancel = request.cancel;
-  Result<RunOutput> head =
+  const Result<RunOutput> head =
       run({git_bin.value(), "-C", dest.string(), "rev-parse", "HEAD"}, limits);
-  if (head.is_err()) return std::move(head).error();
-  std::string got = head.value().out;
-  while (!got.empty() && (got.back() == '\n' || got.back() == ' ')) {
-    got.pop_back();
-  }
+  if (head.is_err())
+    return std::move(head).error();
+
+  const std::string got(trim(head.value().out));
   if (got != request.commit) {
     return Error("gitclone: HEAD is " + got + " but " + request.commit +
                  " was requested; refusing a moved branch");
@@ -164,20 +142,234 @@ Result<void> clone_pinned(const CloneRequest& request) {
   return {};
 }
 
-Result<void> clone_pinned_github(
-    const std::string& owner_repo, const std::string& commit,
-    const std::filesystem::path& dest_dir, const std::string* token,
-    const std::chrono::milliseconds timeout, std::atomic<bool>* cancel) {
-  Result<void> repo_ok = validate_owner_repo(owner_repo);
-  if (repo_ok.is_err()) return std::move(repo_ok).error();
+Result<void> check_dest_is_free(const std::filesystem::path& dest) {
+  std::error_code ec;
+  if (!std::filesystem::exists(dest, ec))
+    return ensure_dir(dest.parent_path());
+  std::filesystem::directory_iterator it(dest, ec);
+  if (!ec && it != std::filesystem::directory_iterator()) {
+    return Error("gitclone: destination exists and is not empty: " +
+                 dest.string());
+  }
+  return ensure_dir(dest.parent_path());
+}
+
+// Holds the askpass directory for as long as the clone runs. An empty
+// source means "no token": run_git then leaves GIT_ASKPASS unset, so git can
+// only reach a credential helper the user already has.
+class TokenSource {
+ public:
+  [[nodiscard]] static Result<TokenSource> for_token(const std::string* token);
+  [[nodiscard]] const std::filesystem::path& dir() const;
+
+ private:
+  explicit TokenSource(Askpass askpass) : askpass_(std::move(askpass)) {}
+  explicit TokenSource() = default;
+
+  std::optional<Askpass> askpass_;
+};
+
+Result<TokenSource> TokenSource::for_token(const std::string* token) {
+  if (token == nullptr)
+    return TokenSource();
+  Result<Askpass> made = Askpass::create(*token);
+  if (made.is_err())
+    return std::move(made).error();
+  return TokenSource(std::move(made).value());
+}
+
+const std::filesystem::path& TokenSource::dir() const {
+  static const std::filesystem::path kNoDir;
+  return askpass_.has_value() ? askpass_->dir() : kNoDir;
+}
+
+bool ref_is_option_shaped(const std::string_view ref) {
+  return !ref.empty() && ref != "HEAD" &&
+         (ref.front() == '-' || ref.find("..") != std::string_view::npos);
+}
+
+struct RefCandidates {
+  std::string head;
+  std::string named;
+  std::string peeled;
+};
+
+RefCandidates scan_ls_remote(const std::string& out, const std::string& ref) {
+  RefCandidates found;
+  for (const std::string& raw : split(out, "\n")) {
+    const std::size_t tab = raw.find('\t');
+    if (tab == std::string::npos)
+      continue;
+    const std::string sha = raw.substr(0, tab);
+    const std::string name = raw.substr(tab + 1);
+    if (name == "HEAD") {
+      found.head = sha;
+    } else if (name == "refs/" + ref || name == "refs/heads/" + ref ||
+               name == "refs/tags/" + ref) {
+      found.named = sha;
+    } else if (name == "refs/tags/" + ref + "^{}") {
+      found.peeled = sha;
+    }
+  }
+  return found;
+}
+
+// An annotated tag lists twice and the peeled "ref^{}" line is the real
+// commit, so it wins. HEAD is a fallback ONLY when nothing explicit was
+// asked: resolving a NAMED ref to whatever HEAD points at would deploy a
+// moved branch (§6.6).
+std::string choose_ref_sha(const RefCandidates& found, const std::string& ref) {
+  if (!found.peeled.empty())
+    return found.peeled;
+  if (!found.named.empty())
+    return found.named;
+  if (ref.empty() || ref == "HEAD")
+    return found.head;
+  return {};
+}
+
+}  // namespace
+
+bool token_allowed_for_url(const std::string& url,
+                           const std::string_view host) {
+  const Result<HttpUrl> parsed = parse_http_url(url);
+  if (parsed.is_err())
+    return false;
+  const HttpUrl& target = parsed.value();
+  if (target.scheme != "https")
+    return false;
+  return target.host == host;
+}
+
+Result<void> clone_pinned(const CloneRequest& request) {
+  const Result<void> sha_ok = validate_commit_sha(request.commit);
+  if (sha_ok.is_err())
+    return std::move(sha_ok).error();
+  if (request.url.empty())
+    return Error("gitclone: empty url");
+
+  if (request.token != nullptr &&
+      !token_allowed_for_url(request.url, request.token_host)) {
+    return Error(
+        "gitclone: refusing to attach a token to a url whose host "
+        "is not exactly " +
+        std::string(request.token_host));
+  }
+
+  const Result<void> dest_free = check_dest_is_free(request.dest_dir);
+  if (dest_free.is_err())
+    return dest_free;
+
+  const Result<TokenSource> token = TokenSource::for_token(request.token);
+  if (token.is_err())
+    return std::move(token).error();
+
+  const Result<void> fetched =
+      fetch_pinned_commit(request, request.dest_dir, token.value().dir());
+  if (fetched.is_err())
+    return fetched;
+  return verify_head_is(request, request.dest_dir);
+}
+
+Result<void> clone_pinned_github(const std::string& owner_repo,
+                                 const std::string& commit,
+                                 const std::filesystem::path& dest_dir,
+                                 const std::string* token,
+                                 const std::chrono::milliseconds timeout,
+                                 std::atomic<bool>* cancel) {
+  const Result<void> repo_ok = validate_owner_repo(owner_repo);
+  if (repo_ok.is_err())
+    return std::move(repo_ok).error();
+
   CloneRequest request;
-  request.url = "https://" + std::string(kTokenHost) + "/" + owner_repo + ".git";
+  request.url =
+      "https://" + std::string(kTokenHost) + "/" + owner_repo + ".git";
   request.commit = commit;
   request.dest_dir = dest_dir;
   request.token = token;
   request.timeout = timeout;
   request.cancel = cancel;
   return clone_pinned(request);
+}
+
+Result<std::string> github_owner_repo_from_url(const std::string& url) {
+  const Result<HttpUrl> parsed = parse_http_url(url);
+  if (parsed.is_err()) {
+    return Error("gitclone: not a valid url: '" + url +
+                 "': " + parsed.error().ctx());
+  }
+  // §6.1 front door: https and host EXACTLY github.com. "github.com.evil.io"
+  // and "evil.io/github.com" are refused here, before anything is spawned.
+  if (parsed.value().scheme != "https" || parsed.value().host != kTokenHost) {
+    return Error("gitclone: only https://" + std::string(kTokenHost) +
+                 " is accepted: '" + url + "'");
+  }
+  std::string path = parsed.value().path_query;
+  while (!path.empty() && path.front() == '/') path.erase(path.begin());
+  if (path.size() > 4 && path.substr(path.size() - 4) == ".git") {
+    path.erase(path.size() - 4);
+  }
+  const Result<void> repo = validate_owner_repo(path);
+  if (repo.is_err()) {
+    return Error("gitclone: url path is not owner/repo: '" + path +
+                 "': " + repo.error().ctx());
+  }
+  return path;
+}
+
+Result<std::string> resolve_ref_sha(const std::string& url,
+                                    const std::string& ref,
+                                    const std::chrono::milliseconds timeout,
+                                    std::atomic<bool>* cancel) {
+  if (url.empty())
+    return Error("gitclone: resolve_ref_sha: empty url");
+  // The ref goes into argv, so anything option-shaped or whitespace-bearing
+  // is refused rather than escaped.
+  if (ref.find_first_of(" \t\n\r") != std::string::npos) {
+    return Error("gitclone: ref contains whitespace: '" + ref + "'");
+  }
+  if (ref_is_option_shaped(ref)) {
+    return Error("gitclone: ref looks like an option or a range: '" + ref +
+                 "'");
+  }
+
+  const Result<std::string> binary = resolve_executable("git");
+  if (binary.is_err())
+    return std::move(binary).error();
+
+  RunLimits limits;
+  limits.timeout = timeout;
+  limits.cancel = cancel;
+  const std::vector<std::string> env = {
+      "GIT_TERMINAL_PROMPT=0",
+      "GIT_CONFIG_NOSYSTEM=1",
+  };
+  limits.extra_env = &env;
+
+  // The FULL ref list is requested (no ref pattern): `ls-remote <url> v1`
+  // pattern-matches by suffix and silently hides the peeled "refs/tags/v1^{}"
+  // line — the one commit an annotated tag must resolve to.
+  const Result<RunOutput> out =
+      run({std::move(binary).value(), "ls-remote", url}, limits);
+  if (out.is_err())
+    return std::move(out).error();
+  if (out.value().exit_code != 0) {
+    return Error("gitclone: ls-remote " + url + " " + ref +
+                 " failed with exit " + std::to_string(out.value().exit_code) +
+                 ": " + out.value().err);
+  }
+
+  const std::string chosen =
+      choose_ref_sha(scan_ls_remote(out.value().out, ref), ref);
+  if (chosen.empty()) {
+    return Error("gitclone: ls-remote found no ref '" + ref + "' in " + url);
+  }
+  const Result<void> sha_ok = validate_commit_sha(chosen);
+  if (sha_ok.is_err()) {
+    return Error("gitclone: ls-remote produced a non-SHA for '" + ref +
+                 "' in " + url + ": " + chosen);
+  }
+  return chosen;
 }
 
 }  // namespace berth

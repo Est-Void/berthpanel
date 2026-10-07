@@ -3,6 +3,7 @@
 #include <chrono>
 #include <string>
 
+#include "../util/strutil.h"
 #include "../util/subprocess.h"
 #include "../util/which.h"
 
@@ -16,22 +17,13 @@ std::string first_version_line(const std::string& text) {
   std::size_t start = 0;
   while (start < text.size()) {
     const std::size_t eol = text.find('\n', start);
-    const std::string line =
-        text.substr(start, eol == std::string::npos ? std::string::npos
-                                                   : eol - start);
-    const bool has_digit =
-        line.find_first_of("0123456789") != std::string::npos;
-    if (has_digit) {
-      std::string trimmed = line;
-      while (!trimmed.empty() && (trimmed.front() == ' ' || trimmed.front() == '\t')) {
-        trimmed.erase(trimmed.begin());
-      }
-      while (!trimmed.empty() && (trimmed.back() == ' ' || trimmed.back() == '\r')) {
-        trimmed.pop_back();
-      }
-      return trimmed;
+    const std::string line = text.substr(
+        start, eol == std::string::npos ? std::string::npos : eol - start);
+    if (line.find_first_of("0123456789") != std::string::npos) {
+      return std::string(trim(line));
     }
-    if (eol == std::string::npos) break;
+    if (eol == std::string::npos)
+      break;
     start = eol + 1;
   }
   return {};
@@ -55,8 +47,7 @@ Result<std::vector<ToolStatus>> check_tools(
       RunLimits limits;
       limits.timeout = kVersionTimeout;
       limits.cancel = cancel;
-      const Result<RunOutput> version =
-          run({status.path, "--version"}, limits);
+      const Result<RunOutput> version = run({status.path, "--version"}, limits);
       if (version.is_ok() && version.value().exit_code == 0) {
         status.version =
             first_version_line(version.value().out + version.value().err);

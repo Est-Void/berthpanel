@@ -7,8 +7,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include <cerrno>
 #include <algorithm>
+#include <cerrno>
 
 #include "../util/errno.h"
 
@@ -25,7 +25,8 @@ Result<std::uint16_t> pick_free_port(const std::vector<std::uint16_t>& avoid) {
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     addr.sin_port = 0;  // kernel-assigned
-    if (::bind(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) != 0) {
+    if (::bind(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) !=
+        0) {
       const std::string why = errno_text(errno);
       ::close(fd);
       return Error("pick_free_port: bind 127.0.0.1:0: " + why);
@@ -42,10 +43,12 @@ Result<std::uint16_t> pick_free_port(const std::vector<std::uint16_t>& avoid) {
 
     // Privileged ports can never serve a user unit; avoid-listed ports
     // would collide with an already-registered service.
-    if (port < 1024) continue;
+    if (port < 1024)
+      continue;
     const bool taken =
         std::find(avoid.begin(), avoid.end(), port) != avoid.end();
-    if (taken) continue;
+    if (taken)
+      continue;
     return port;
   }
   return Error("pick_free_port: no free port after " +

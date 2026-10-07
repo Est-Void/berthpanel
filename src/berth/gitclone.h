@@ -42,4 +42,22 @@ struct CloneRequest {
     const std::filesystem::path& dest_dir, const std::string* token,
     std::chrono::milliseconds timeout, std::atomic<bool>* cancel);
 
+// `git ls-remote <url> <ref>` → the full 40-hex SHA of that ref. Annotated
+// tags are peeled (^{} wins). No token is attached: the draft flow is for
+// public repos, a private one fails loudly with git's own error. ref of
+// "HEAD" (or empty) resolves the remote default branch.
+// The primitive accepts any URL so tests can use file://; the
+// github.com-only POLICY for user-facing paths lives at the front door
+// (github_owner_repo_from_url, dev.md §6.1, stage 4.23).
+[[nodiscard]] Result<std::string> resolve_ref_sha(
+    const std::string& url, const std::string& ref,
+    std::chrono::milliseconds timeout, std::atomic<bool>* cancel);
+
+// Parses a github repo URL into validated "owner/repo". THE front-door
+// policy for BYO egress (§6.1, stage 4.23): only scheme https and host
+// exactly github.com pass — exact match, never substring. Everything else
+// is refused before any byte leaves the machine.
+[[nodiscard]] Result<std::string> github_owner_repo_from_url(
+    const std::string& url);
+
 }  // namespace berth

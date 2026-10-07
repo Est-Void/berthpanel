@@ -2,15 +2,15 @@
 // the symlink: a link out of the tree must lose the LINK, never send the
 // traversal through it into something we must not touch.
 
-#include "berth/fs.h"
+#include "util/fs.h"
 
 #include <filesystem>
 #include <fstream>
 #include <string>
 
-#include "atomic.h"
 #include "runner.h"
 #include "test_env.h"
+#include "util/fs.h"
 
 using berth::remove_tree;
 

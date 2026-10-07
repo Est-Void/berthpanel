@@ -27,7 +27,8 @@ class Sha256 {
   Sha256& operator=(Sha256&&) = delete;
 
   void update(std::string_view data) {
-    if (data.empty()) return;
+    if (data.empty())
+      return;
     sha256_update(&ctx_, reinterpret_cast<const BYTE*>(data.data()),
                   data.size());
   }

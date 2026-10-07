@@ -21,8 +21,8 @@
 #include <utility>
 #include <vector>
 
-#include "../paths.h"
-#include "../state.h"
+#include "../core/paths.h"
+#include "../core/state.h"
 #include "../util/result.h"
 #include "journal.h"
 #include "recipes.h"
@@ -64,7 +64,7 @@ class DeployOps {
   virtual Result<void> await_running(const std::string& service_name,
                                      std::atomic<bool>* cancel) = 0;
   virtual Result<void> register_service(const ServiceRecord& record,
-                                       const Paths& paths) = 0;
+                                        const Paths& paths) = 0;
   // Stops one unit by stem (WITHOUT .service) on behalf of reconciliation.
   // Ok(false) = the unit was not running. This is the only systemd-side
   // hook reconciliation gets — deploy.cpp stays testable without systemd.
@@ -90,7 +90,7 @@ class RealDeployOps final : public DeployOps {
   Result<void> await_running(const std::string& service_name,
                              std::atomic<bool>* cancel) override;
   Result<void> register_service(const ServiceRecord& record,
-                               const Paths& paths) override;
+                                const Paths& paths) override;
   Result<bool> stop_unit(const std::string& unit_stem,
                          std::atomic<bool>* cancel) override;
 };
@@ -144,5 +144,9 @@ struct ReconcileReport {
 // error — the timer runs periodically), then sweeps.
 [[nodiscard]] Result<ReconcileReport> reconcile_interrupted(
     const Paths& paths, DeployOps& ops, std::atomic<bool>* cancel);
+
+// Human-readable sweep report for the CLI (and later the TUI).
+[[nodiscard]] std::string render_reconcile_report(
+    const ReconcileReport& report);
 
 }  // namespace berth

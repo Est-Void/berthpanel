@@ -15,7 +15,8 @@ namespace berth {
   return std::string(strerror_r(e, buf, sizeof(buf)));
 #else
   const char* msg = "unknown error";
-  if (strerror_r(e, buf, sizeof(buf)) == 0) msg = buf;
+  if (strerror_r(e, buf, sizeof(buf)) == 0)
+    msg = buf;
   return std::string(msg);
 #endif
 }

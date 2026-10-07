@@ -2,9 +2,10 @@
 
 #include <string>
 
-#include "atomic.h"
+#include "core/atomic.h"
 #include "runner.h"
 #include "test_env.h"
+#include "util/fs.h"
 #include "util/sha256.h"
 
 using berth::install_pinned_tool;

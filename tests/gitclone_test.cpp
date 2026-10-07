@@ -3,9 +3,10 @@
 #include <string>
 #include <vector>
 
-#include "atomic.h"
+#include "core/atomic.h"
 #include "runner.h"
 #include "test_env.h"
+#include "util/fs.h"
 #include "util/subprocess.h"
 #include "util/which.h"
 
@@ -130,4 +131,77 @@ TEST(gitclone_refuses_branch_instead_of_sha) {
   });
   CHECK(cloned.is_err());
   CHECK(cloned.error().ctx().find("40-char") != std::string::npos);
+}
+
+TEST(resolve_ref_sha_resolves_head_branch_and_peels_tags) {
+  const TempDir tmp;
+  const auto source = tmp.path() / "source";
+  const berth::Result<std::string> made = make_local_repo(source);
+  CHECK(made.is_ok());
+  const std::string head_sha = made.value();
+  CHECK(
+      git({"-C", source.string(), "tag", "-a", "v1", "-m", "release"}).is_ok());
+  const std::string tag_sha = trimmed(
+      git({"-C", source.string(), "rev-list", "-n", "1", "v1^{}"}).value());
+  CHECK(tag_sha == head_sha);
+
+  const std::string url = "file://" + source.string();
+  const auto short_timeout = std::chrono::milliseconds(60000);
+
+  CHECK(berth::resolve_ref_sha(url, "HEAD", short_timeout, nullptr).value() ==
+        head_sha);
+  CHECK(berth::resolve_ref_sha(url, "", short_timeout, nullptr).value() ==
+        head_sha);
+  CHECK(berth::resolve_ref_sha(url, "main", short_timeout, nullptr).value() ==
+        head_sha);
+  // An annotated tag resolves to the peeled commit, not the tag object.
+  CHECK(berth::resolve_ref_sha(url, "v1", short_timeout, nullptr).value() ==
+        tag_sha);
+
+  // A named ref never falls back to HEAD: that would deploy a moved branch.
+  CHECK(berth::resolve_ref_sha(url, "no-such-ref", short_timeout, nullptr)
+            .is_err());
+  // Option-shaped and whitespace-bearing refs are refused, never escaped.
+  CHECK(
+      berth::resolve_ref_sha(url, "--upload-pack=evil", short_timeout, nullptr)
+          .is_err());
+  CHECK(berth::resolve_ref_sha(url, "main HEAD", short_timeout, nullptr)
+            .is_err());
+  CHECK(berth::resolve_ref_sha(url, "a..b", short_timeout, nullptr).is_err());
+}
+
+TEST(github_owner_repo_from_url_accepts_only_https_github_com) {
+  CHECK(berth::github_owner_repo_from_url("https://github.com/usmarc/go-memos")
+            .value() == "usmarc/go-memos");
+  CHECK(
+      berth::github_owner_repo_from_url("https://github.com/o/r.git").value() ==
+      "o/r");
+  CHECK(berth::github_owner_repo_from_url("https://github.com/o/r/tree/main")
+            .is_err());
+
+  // §6.1 front door: exact host match, https only.
+  CHECK(berth::github_owner_repo_from_url("https://github.com.evil.io/o/r")
+            .is_err());
+  CHECK(berth::github_owner_repo_from_url("https://evil.io/o/r?x=github.com")
+            .is_err());
+  CHECK(berth::github_owner_repo_from_url("http://github.com/o/r").is_err());
+  CHECK(berth::github_owner_repo_from_url("file:///tmp/repo").is_err());
+  CHECK(berth::github_owner_repo_from_url("ssh://git@github.com/o/r").is_err());
+}
+
+TEST(clone_pinned_github_validates_before_any_network_call) {
+  const TempDir tmp;
+  const auto dest = tmp.path() / "work";
+
+  CHECK(berth::clone_pinned_github("not-a-repo", std::string(40, 'a'), dest,
+                                   nullptr, std::chrono::milliseconds(1000),
+                                   nullptr)
+            .is_err());
+  CHECK(berth::clone_pinned_github("o/r", "main", dest, nullptr,
+                                   std::chrono::milliseconds(1000), nullptr)
+            .is_err());
+  CHECK(berth::clone_pinned_github("o/r", std::string(40, 'A'), dest, nullptr,
+                                   std::chrono::milliseconds(1000), nullptr)
+            .is_err());
+  CHECK(!std::filesystem::exists(dest));
 }

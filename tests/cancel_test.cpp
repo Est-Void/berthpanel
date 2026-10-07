@@ -17,8 +17,9 @@
 #include <mutex>
 #include <string>
 
+#include "core/names.h"
+#include "core/state.h"
 #include "runner.h"
-#include "state.h"
 #include "test_env.h"
 #include "util/env.h"
 
@@ -37,7 +38,7 @@ class FakeSystemctl {
                          const std::string& initial,
                          const std::string& stop_writes,
                          const std::string& kill_writes)
-        : state_(dir / "state"), log_(dir / "log") {
+      : state_(dir / "state"), log_(dir / "log") {
     write(state_, initial);
     const std::filesystem::path bin = dir / "bin";
     std::filesystem::create_directories(bin);
@@ -79,7 +80,8 @@ class FakeSystemctl {
   }
 
  private:
-  static void write(const std::filesystem::path& path, const std::string& body) {
+  static void write(const std::filesystem::path& path,
+                    const std::string& body) {
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     out << body;
   }

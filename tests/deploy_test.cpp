@@ -4,13 +4,15 @@
 #include <string>
 #include <vector>
 
-#include "atomic.h"
 #include "berth/journal.h"
 #include "berth/lock.h"
 #include "berth/recipes.h"
+#include "core/atomic.h"
+#include "core/names.h"
+#include "core/state.h"
 #include "runner.h"
-#include "state.h"
 #include "test_env.h"
+#include "util/fs.h"
 
 using berth::DeployOps;
 using berth::DeployOptions;
@@ -308,8 +310,7 @@ berth::JournalEntry stale_entry(const berth::Paths& p,
 TEST(deploy_sweeps_stale_journal_entries_before_starting) {
   const TempDir tmp;
   const berth::Paths p = test_paths(tmp.path());
-  CHECK(berth::journal_upsert(
-            p, stale_entry(p, "berthpanel-old", "building"))
+  CHECK(berth::journal_upsert(p, stale_entry(p, "berthpanel-old", "building"))
             .is_ok());
   // Leftovers from the interrupted deploy: work dir and a written unit.
   CHECK(berth::ensure_dir(p.services_dir / "berthpanel-old").is_ok());
@@ -345,8 +346,7 @@ TEST(deploy_sweeps_stale_journal_entries_before_starting) {
 TEST(deploy_refuses_to_start_when_its_own_stale_entry_cannot_be_cleaned) {
   const TempDir tmp;
   const berth::Paths p = test_paths(tmp.path());
-  CHECK(berth::journal_upsert(
-            p, stale_entry(p, "berthpanel-memos", "building"))
+  CHECK(berth::journal_upsert(p, stale_entry(p, "berthpanel-memos", "building"))
             .is_ok());
 
   FakeOps ops;
@@ -368,8 +368,7 @@ TEST(deploy_refuses_to_start_when_its_own_stale_entry_cannot_be_cleaned) {
 TEST(deploy_continues_when_another_service_cannot_be_cleaned) {
   const TempDir tmp;
   const berth::Paths p = test_paths(tmp.path());
-  CHECK(berth::journal_upsert(
-            p, stale_entry(p, "berthpanel-other", "cloning"))
+  CHECK(berth::journal_upsert(p, stale_entry(p, "berthpanel-other", "cloning"))
             .is_ok());
 
   FakeOps ops;
@@ -404,8 +403,7 @@ TEST(reconcile_interrupted_with_an_empty_journal_is_a_noop) {
 TEST(reconcile_interrupted_reports_a_busy_lock_and_touches_nothing) {
   const TempDir tmp;
   const berth::Paths p = test_paths(tmp.path());
-  CHECK(berth::journal_upsert(
-            p, stale_entry(p, "berthpanel-memos", "building"))
+  CHECK(berth::journal_upsert(p, stale_entry(p, "berthpanel-memos", "building"))
             .is_ok());
   const auto held = berth::DeployLock::acquire(p);
   CHECK(held.is_ok());
@@ -422,14 +420,14 @@ TEST(reconcile_interrupted_reports_a_busy_lock_and_touches_nothing) {
 TEST(reconcile_interrupted_sweeps_when_the_lock_is_free) {
   const TempDir tmp;
   const berth::Paths p = test_paths(tmp.path());
-  CHECK(berth::journal_upsert(
-            p, stale_entry(p, "berthpanel-memos", "registering"))
+  CHECK(berth::journal_upsert(p,
+                              stale_entry(p, "berthpanel-memos", "registering"))
             .is_ok());
   CHECK(berth::ensure_dir(p.services_dir / "berthpanel-memos").is_ok());
   CHECK(berth::ensure_dir(p.units_dir).is_ok());
-  CHECK(berth::atomic_write(p.units_dir / "berthpanel-memos.service",
-                            "[Unit]\n")
-            .is_ok());
+  CHECK(
+      berth::atomic_write(p.units_dir / "berthpanel-memos.service", "[Unit]\n")
+          .is_ok());
 
   FakeOps ops;
   const auto report = berth::reconcile_interrupted(p, ops, nullptr);

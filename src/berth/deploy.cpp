@@ -1,19 +1,21 @@
 #include "deploy.h"
 
-#include <ctime>
 #include <cerrno>
+#include <ctime>
 #include <string>
 #include <system_error>
 #include <utility>
 #include <vector>
 
-#include "../atomic.h"
-#include "../deploylog.h"
+#include "../core/deploylog.h"
+#include "../core/names.h"
+#include "../core/netlog.h"
+#include "../util/fs.h"
+#include "../util/sleep.h"
 #include "../util/subprocess.h"
 #include "../util/which.h"
 #include "cancel.h"
 #include "catalog.h"
-#include "fs.h"
 #include "gitclone.h"
 #include "journal.h"
 #include "lock.h"
@@ -24,6 +26,7 @@
 #include "secrets.h"
 #include "toolbox.h"
 #include "units.h"
+#include "util/fs.h"
 
 namespace berth {
 
@@ -44,13 +47,13 @@ RecipeLike recipe_view(const Recipe& recipe) {
   return view;
 }
 
-Result<std::vector<std::string>> start_argv(const Recipe& recipe,
-                                            const std::filesystem::path& work_dir,
-                                            const std::uint16_t port,
-                                            std::string& binary) {
+Result<std::vector<std::string>> start_argv(
+    const Recipe& recipe, const std::filesystem::path& work_dir,
+    const std::uint16_t port, std::string& binary) {
   const Result<std::vector<std::string>> tokens =
       split_command_template(recipe.start_cmd);
-  if (tokens.is_err()) return std::move(tokens).error();
+  if (tokens.is_err())
+    return std::move(tokens).error();
   binary = (work_dir / recipe.binary_name).string();
   std::vector<std::pair<std::string, std::string>> values;
   values.emplace_back("bin", binary);
@@ -61,7 +64,8 @@ Result<std::vector<std::string>> start_argv(const Recipe& recipe,
   for (const std::string& token : tokens.value()) {
     const Result<std::string> substituted =
         substitute_placeholders(token, values);
-    if (substituted.is_err()) return std::move(substituted).error();
+    if (substituted.is_err())
+      return std::move(substituted).error();
     resolved.push_back(std::move(substituted).value());
   }
   binary = resolved.front();
@@ -76,20 +80,34 @@ Result<void> RealDeployOps::fetch_source(const Recipe& recipe,
                                          const Paths& paths,
                                          const DeployOptions& options) {
   Result<void> dir = ensure_dir(work_dir);
-  if (dir.is_err()) return std::move(dir).error();
+  if (dir.is_err())
+    return std::move(dir).error();
   if (recipe.prebuilt.has_value()) {
-    const PinnedTool tool{
-        .name = recipe.service_name,
-        .url = recipe.prebuilt->url,
-        .sha256 = recipe.prebuilt->sha256,
-        .inner_path = recipe.prebuilt->member,
-        .install_dir = work_dir,
-        .executable = true};
+    const PinnedTool tool{.name = recipe.service_name,
+                          .url = recipe.prebuilt->url,
+                          .sha256 = recipe.prebuilt->sha256,
+                          .inner_path = recipe.prebuilt->member,
+                          .install_dir = work_dir,
+                          .executable = true};
     const Result<std::filesystem::path> installed =
         install_pinned_tool(tool, paths, options.cancel);
-    if (installed.is_err()) return std::move(installed).error();
+    if (installed.is_err())
+      return std::move(installed).error();
     return {};
   }
+  // §6.1: a git clone is an outbound request to github.com that does not
+  // run through httpclient, so the attempt is logged here — BEFORE it
+  // runs, so the line exists even if the process dies mid-clone.
+  const std::string note = "clone " + recipe.owner_repo() + "@" + recipe.commit;
+  const Result<void> logged =
+      netlog_append(paths, NetlogEntry{.host = kTokenHost,
+                                       .ip = "",
+                                       .port = 443,
+                                       .purpose = "git-fetch",
+                                       .note = note,
+                                       .allowed = true});
+  if (logged.is_err())
+    return logged.error();
   return clone_pinned_github(recipe.owner_repo(), recipe.commit, work_dir,
                              options.token, std::chrono::milliseconds(600000),
                              options.cancel);
@@ -98,9 +116,11 @@ Result<void> RealDeployOps::fetch_source(const Recipe& recipe,
 Result<void> RealDeployOps::prefetch(const Recipe& recipe, const Paths& paths,
                                      const DeployOptions& options) {
   static_cast<void>(paths);
-  if (recipe.prefetch_steps.empty()) return {};
+  if (recipe.prefetch_steps.empty())
+    return {};
   Result<std::size_t> ran = run_prefetch(recipe.prefetch_steps, options.cancel);
-  if (ran.is_err()) return std::move(ran).error();
+  if (ran.is_err())
+    return std::move(ran).error();
   return {};
 }
 
@@ -110,7 +130,8 @@ Result<void> RealDeployOps::build(const Recipe& recipe,
                                   const DeployOptions& options) {
   static_cast<void>(paths);
   Result<std::string> build_stem = build_unit_name(recipe.service_name);
-  if (build_stem.is_err()) return std::move(build_stem).error();
+  if (build_stem.is_err())
+    return std::move(build_stem).error();
   for (const std::vector<std::string>& step : recipe.build_steps) {
     std::vector<std::string> argv;
     std::vector<std::pair<std::string, std::string>> values;
@@ -121,23 +142,24 @@ Result<void> RealDeployOps::build(const Recipe& recipe,
     for (const std::string& element : step) {
       const Result<std::string> substituted =
           substitute_placeholders(element, values);
-      if (substituted.is_err()) return std::move(substituted).error();
+      if (substituted.is_err())
+        return std::move(substituted).error();
       argv.push_back(std::move(substituted).value());
     }
-    const SandboxSpec spec{
-        .argv = argv,
-        .working_dir = work_dir,
-        .env_extra = {},
-        .unit_name = build_stem.value(),
-        .memory_max_mb = 2048,
-        .tasks_max = 512,
-        .timeout = std::chrono::milliseconds(1800000),
-        .cancel = options.cancel};
+    const SandboxSpec spec{.argv = argv,
+                           .working_dir = work_dir,
+                           .env_extra = {},
+                           .unit_name = build_stem.value(),
+                           .memory_max_mb = 2048,
+                           .tasks_max = 512,
+                           .timeout = std::chrono::milliseconds(1800000),
+                           .cancel = options.cancel};
     const Result<int> exit_code = run_in_sandbox(spec);
-    if (exit_code.is_err()) return std::move(exit_code).error();
+    if (exit_code.is_err())
+      return std::move(exit_code).error();
     if (exit_code.value() != 0) {
-      return Error("deploy: build step '" + argv.front() + "' failed with exit " +
-                   std::to_string(exit_code.value()));
+      return Error("deploy: build step '" + argv.front() +
+                   "' failed with exit " + std::to_string(exit_code.value()));
     }
   }
   return {};
@@ -149,7 +171,8 @@ Result<std::filesystem::path> RealDeployOps::write_unit_file(
   std::string binary;
   const Result<std::vector<std::string>> args =
       start_argv(recipe, work_dir, port, binary);
-  if (args.is_err()) return std::move(args).error();
+  if (args.is_err())
+    return std::move(args).error();
 
   UnitSpec spec;
   spec.service_name = recipe.service_name;
@@ -164,7 +187,8 @@ Result<std::filesystem::path> RealDeployOps::write_unit_file(
   if (!std::filesystem::exists(spec.secrets_file)) {
     Result<std::filesystem::path> written =
         write_secrets(paths, recipe.service_name, {});
-    if (written.is_err()) return std::move(written).error();
+    if (written.is_err())
+      return std::move(written).error();
   }
   return write_unit(paths, spec);
 }
@@ -175,9 +199,10 @@ Result<void> RealDeployOps::start_service(const std::string& service_name) {
 
 Result<void> RealDeployOps::await_running(const std::string& service_name,
                                           std::atomic<bool>* cancel) {
-  Result<std::string> active =
-      wait_for_active_unit(service_name, std::chrono::milliseconds(8000), cancel);
-  if (active.is_err()) return std::move(active).error();
+  Result<std::string> active = wait_for_active_unit(
+      service_name, std::chrono::milliseconds(8000), cancel);
+  if (active.is_err())
+    return std::move(active).error();
   return {};
 }
 
@@ -188,7 +213,8 @@ Result<std::string> wait_for_active_unit(const std::string& service_name,
     return Error("deploy: invalid service name: '" + service_name + "'");
   }
   Result<std::string> binary = resolve_executable("systemctl");
-  if (binary.is_err()) return std::move(binary).error();
+  if (binary.is_err())
+    return std::move(binary).error();
   const auto deadline = std::chrono::steady_clock::now() + budget;
   std::string last = "no answer";
   while (std::chrono::steady_clock::now() < deadline) {
@@ -202,22 +228,20 @@ Result<std::string> wait_for_active_unit(const std::string& service_name,
             limits);
     if (out.is_ok()) {
       std::string state = out.value().out;
-      while (!state.empty() &&
-             (state.back() == '\n' || state.back() == ' ')) {
+      while (!state.empty() && (state.back() == '\n' || state.back() == ' ')) {
         state.pop_back();
       }
-      if (state == "active") return state;
+      if (state == "active")
+        return state;
       last = state.empty() ? "unknown" : state;
     } else {
       last = out.error().ctx();
     }
-    timespec ts{0, 250 * 1000 * 1000};
-    while (::nanosleep(&ts, &ts) != 0 && errno == EINTR) {
-    }
+    interruptible_sleep(std::chrono::milliseconds(250));
   }
-  return Error("deploy: " + service_name +
-               " did not reach 'active' within " + std::to_string(budget.count()) +
-               "ms (last state: " + last + ")");
+  return Error("deploy: " + service_name + " did not reach 'active' within " +
+               std::to_string(budget.count()) + "ms (last state: " + last +
+               ")");
 }
 
 Result<void> RealDeployOps::register_service(const ServiceRecord& record,
@@ -358,9 +382,8 @@ Result<ReconcileReport> sweep_interrupted_entries(
       fail(cleared.error().ctx());
       continue;
     }
-    report.swept.push_back(
-        ReconcileReport::Swept{.service_name = entry.service_name,
-                               .stage = entry.stage});
+    report.swept.push_back(ReconcileReport::Swept{
+        .service_name = entry.service_name, .stage = entry.stage});
     log_sweep(paths, "cleanup reconciled " + entry.service_name +
                          " (interrupted at '" + entry.stage + "')");
   }
@@ -371,9 +394,11 @@ Result<ReconcileReport> reconcile_interrupted(const Paths& paths,
                                               DeployOps& ops,
                                               std::atomic<bool>* cancel) {
   Result<std::vector<JournalEntry>> entries = journal_load(paths);
-  if (entries.is_err()) return std::move(entries).error();
+  if (entries.is_err())
+    return std::move(entries).error();
   ReconcileReport report;
-  if (entries.value().empty()) return report;
+  if (entries.value().empty())
+    return report;
 
   // The lock decides liveness, not timestamps (§6.7): a sweep must never
   // race a live deploy, and taking the lock is what makes "entry present"
@@ -389,29 +414,52 @@ Result<ReconcileReport> reconcile_interrupted(const Paths& paths,
   return sweep_interrupted_entries(paths, ops, entries.value(), cancel);
 }
 
+std::string render_reconcile_report(const ReconcileReport& report) {
+  std::string out;
+  if (report.lock_busy) {
+    out += "a deploy is running right now; nothing was swept\n";
+    return out;
+  }
+  if (report.swept.empty() && report.failed.empty()) {
+    out += "nothing to clean up\n";
+    return out;
+  }
+  for (const ReconcileReport::Swept& swept : report.swept) {
+    out += "reconciled " + swept.service_name + " (interrupted at '" +
+           swept.stage + "')\n";
+  }
+  for (const std::pair<std::string, std::string>& failure : report.failed) {
+    out += "FAILED " + failure.first + ": " + failure.second + "\n";
+  }
+  return out;
+}
+
 Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
-                                 const std::uint16_t forced_port, DeployOps& ops,
-                                 const DeployOptions& options) {
+                                 const std::uint16_t forced_port,
+                                 DeployOps& ops, const DeployOptions& options) {
   const Result<void> analysed = validate_recipe(recipe);
-  if (analysed.is_err()) return std::move(analysed).error();
+  if (analysed.is_err())
+    return std::move(analysed).error();
 
   Result<DeployLock> lock = DeployLock::acquire(paths);
-  if (lock.is_err()) return std::move(lock).error();
+  if (lock.is_err())
+    return std::move(lock).error();
 
   // Reconciliation (§6.7): we hold the exclusive lock, so any journal
   // entry still present belongs to an interrupted deploy. Sweep it before
   // any new work — a deploy never proceeds on top of interrupted state,
   // and a rerun after "unit live but not registered" starts clean.
   Result<std::vector<JournalEntry>> stale = journal_load(paths);
-  if (stale.is_err()) return std::move(stale).error();
+  if (stale.is_err())
+    return std::move(stale).error();
   Result<ReconcileReport> swept =
       sweep_interrupted_entries(paths, ops, stale.value(), options.cancel);
-  if (swept.is_err()) return std::move(swept).error();
+  if (swept.is_err())
+    return std::move(swept).error();
   for (const std::pair<std::string, std::string>& failure :
        swept.value().failed) {
-    static_cast<void>(deploylog_append(paths, "cleanup failed for " +
-                                                  failure.first + ": " +
-                                                  failure.second));
+    static_cast<void>(deploylog_append(
+        paths, "cleanup failed for " + failure.first + ": " + failure.second));
     if (failure.first == recipe.service_name) {
       return Error("deploy: interrupted deploy for " + failure.first +
                    " could not be cleaned up, refusing to build on top of "
@@ -427,10 +475,12 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
 
   Result<std::vector<ToolStatus>> tools =
       check_tools(recipe.tools, options.cancel);
-  if (tools.is_err()) return std::move(tools).error();
+  if (tools.is_err())
+    return std::move(tools).error();
   const Result<PreflightReport> preflight =
       preflight_recipe(recipe_view(recipe), tools.value());
-  if (preflight.is_err()) return std::move(preflight).error();
+  if (preflight.is_err())
+    return std::move(preflight).error();
   if (!preflight.value().ready()) {
     return Error("deploy: preflight blocked this recipe:\n" +
                  render_preflight(preflight.value()));
@@ -441,13 +491,16 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
     port = forced_port;
   } else if (port == 0) {
     Result<std::vector<ServiceRecord>> registered = registry_list(paths);
-    if (registered.is_err()) return std::move(registered).error();
+    if (registered.is_err())
+      return std::move(registered).error();
     std::vector<std::uint16_t> taken;
     for (const ServiceRecord& record : registered.value()) {
-      if (record.port != 0) taken.push_back(record.port);
+      if (record.port != 0)
+        taken.push_back(record.port);
     }
     Result<std::uint16_t> picked = pick_free_port(taken);
-    if (picked.is_err()) return std::move(picked).error();
+    if (picked.is_err())
+      return std::move(picked).error();
     port = picked.value();
   }
 
@@ -495,9 +548,9 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
   }
   Result<void> started = ops.start_service(recipe.service_name);
   if (started.is_err()) {
-    return Error("deploy: unit start failed: " +
-                 std::move(started).error().ctx() +
-                 " (journal entry kept for cleanup)");
+    return Error(
+        "deploy: unit start failed: " + std::move(started).error().ctx() +
+        " (journal entry kept for cleanup)");
   }
   // `systemctl enable --now` returns 0 even for a unit that dies a moment
   // later, so success is only claimed once the unit is actually up (§11:
@@ -522,7 +575,8 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
                  " — the unit is live but NOT registered; rerun the deploy");
   }
   Result<void> cleared = journal_remove(paths, recipe.service_name);
-  if (cleared.is_err()) return std::move(cleared).error();
+  if (cleared.is_err())
+    return std::move(cleared).error();
   log("done " + recipe.service_name + " port " + std::to_string(port));
 
   DeployOutcome outcome;

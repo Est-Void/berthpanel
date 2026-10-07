@@ -28,7 +28,9 @@ class Error {
 
   // Adds an outer context layer. Call at each boundary that adds
   // information; see with_context().
-  void add_context(std::string context) { layers_.push_back(std::move(context)); }
+  void add_context(std::string context) {
+    layers_.push_back(std::move(context));
+  }
 
   // Full chain, outermost context first, root cause last:
   // "registering service: reading state.json: enoent".
@@ -59,7 +61,7 @@ class [[nodiscard]] Result {
   [[nodiscard]] bool is_ok() const { return data_.index() == 0; }
   [[nodiscard]] bool is_err() const { return !is_ok(); }
 
-  [[nodiscard]] const T& value() const & {
+  [[nodiscard]] const T& value() const& {
     check_ok();
     return std::get<0>(data_);
   }
@@ -69,7 +71,7 @@ class [[nodiscard]] Result {
     return std::get<0>(std::move(data_));
   }
 
-  [[nodiscard]] const Error& error() const & {
+  [[nodiscard]] const Error& error() const& {
     check_err();
     return std::get<1>(data_);
   }
@@ -110,7 +112,7 @@ class [[nodiscard]] Result<void> {
   [[nodiscard]] bool is_ok() const { return data_.index() == 0; }
   [[nodiscard]] bool is_err() const { return !is_ok(); }
 
-  [[nodiscard]] const Error& error() const & {
+  [[nodiscard]] const Error& error() const& {
     check_err();
     return std::get<1>(data_);
   }
@@ -141,13 +143,15 @@ class [[nodiscard]] Result<void> {
 
 template <typename T>
 [[nodiscard]] Result<T> with_context(Result<T> r, std::string context) {
-  if (r.is_err()) std::move(r).error().add_context(std::move(context));
+  if (r.is_err())
+    std::move(r).error().add_context(std::move(context));
   return r;
 }
 
 [[nodiscard]] inline Result<void> with_context(Result<void> r,
                                                std::string context) {
-  if (r.is_err()) std::move(r).error().add_context(std::move(context));
+  if (r.is_err())
+    std::move(r).error().add_context(std::move(context));
   return r;
 }
 

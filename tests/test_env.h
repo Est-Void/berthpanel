@@ -20,7 +20,8 @@
 class ScopedEnv {
  public:
   explicit ScopedEnv(const char* name) : name_(name) {
-    if (const char* old = ::getenv(name); old != nullptr) old_ = old;
+    if (const char* old = ::getenv(name); old != nullptr)
+      old_ = old;
   }
   ScopedEnv(const ScopedEnv&) = delete;
   ScopedEnv& operator=(const ScopedEnv&) = delete;
@@ -38,7 +39,8 @@ class ScopedEnv {
 
  private:
   void restore() {
-    if (!touched_) return;
+    if (!touched_)
+      return;
     if (old_.has_value()) {
       ::setenv(name_, old_->c_str(), 1);
     } else {

@@ -12,14 +12,14 @@
 #include <string>
 #include <vector>
 
-#include "../paths.h"
+#include "../core/paths.h"
 #include "../util/result.h"
 
 namespace berth {
 
 enum class ToolArchive {
-  kRaw,     // the body IS the file
-  kTarGz,   // a .tar.gz; `inner_path` is the member to extract
+  kRaw,    // the body IS the file
+  kTarGz,  // a .tar.gz; `inner_path` is the member to extract
 };
 
 struct PinnedTool {

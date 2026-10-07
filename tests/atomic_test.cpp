@@ -2,7 +2,8 @@
 // umask, atomic overwrite with no temp leftovers, temp-name collision
 // handling (skip, never reuse; exhaustion is loud), backup_unique naming.
 
-#include "atomic.h"
+#include "core/atomic.h"
+#include "util/fs.h"
 
 #include <sys/stat.h>
 #include <unistd.h>

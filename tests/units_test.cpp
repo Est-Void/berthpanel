@@ -8,10 +8,11 @@
 #include <string>
 #include <vector>
 
-#include "atomic.h"
+#include "core/names.h"
+#include "core/state.h"
 #include "runner.h"
-#include "state.h"
 #include "test_env.h"
+#include "util/fs.h"
 
 using berth::quote_exec_word;
 using berth::quote_unit_value;
@@ -202,4 +203,32 @@ TEST(units_write_unit_is_atomic_and_0644) {
     ++files;
   }
   CHECK(files == 1);
+}
+
+TEST(units_cleanup_units_render_and_write) {
+  // A $HOME with a space stays ONE ExecStart word (§11).
+  const auto rendered =
+      berth::render_cleanup_units("/home/user name/bin/berthpanel");
+  CHECK(rendered.is_ok());
+  CHECK(rendered.value().service.find("ExecStart=") != std::string::npos);
+  CHECK(rendered.value().service.find("__cleanup") != std::string::npos);
+  CHECK(rendered.value().service.find("\"/home/user name/bin/berthpanel\"") !=
+        std::string::npos);
+  CHECK(rendered.value().timer.find("OnCalendar=daily") != std::string::npos);
+  CHECK(rendered.value().timer.find("Persistent=true") != std::string::npos);
+  CHECK(rendered.value().timer.find("WantedBy=timers.target") !=
+        std::string::npos);
+
+  CHECK(berth::render_cleanup_units("relative/bin/berthpanel").is_err());
+
+  const TempDir tmp;
+  berth::Paths paths;
+  paths.units_dir = tmp.path() / "config" / "systemd" / "user";
+  const auto written =
+      berth::write_cleanup_units(paths, "/usr/local/bin/berthpanel");
+  CHECK(written.is_ok());
+  CHECK(written.value() == paths.units_dir / "berthpanel-cleanup.timer");
+  CHECK(
+      std::filesystem::exists(paths.units_dir / "berthpanel-cleanup.service"));
+  CHECK(std::filesystem::exists(paths.units_dir / "berthpanel-cleanup.timer"));
 }

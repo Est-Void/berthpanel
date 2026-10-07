@@ -11,8 +11,8 @@
 
 #include <string>
 
+#include "core/trust_store.h"
 #include "runner.h"
-#include "trust_store.h"
 
 TEST(mbedtls_trust_store_parses_into_x509) {
   mbedtls_x509_crt cas;

@@ -3,14 +3,14 @@
 // SAME commit, with a public justification in the commit message. If you
 // touched the table, this test failing is the procedure working.
 
-#include "netlog.h"
+#include "core/netlog.h"
 
 #include <algorithm>
 #include <filesystem>
 
-#include "atomic.h"
 #include "runner.h"
 #include "test_env.h"
+#include "util/fs.h"
 
 using berth::EndpointClass;
 using berth::RequestKind;

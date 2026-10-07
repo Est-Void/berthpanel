@@ -27,6 +27,7 @@ struct ToolStatus {
 // The catalog's declared tool set (stage 4.15 consumes this).
 [[nodiscard]] std::vector<std::string> catalog_tools();
 
-[[nodiscard]] std::string render_tool_report(const std::vector<ToolStatus>& tools);
+[[nodiscard]] std::string render_tool_report(
+    const std::vector<ToolStatus>& tools);
 
 }  // namespace berth

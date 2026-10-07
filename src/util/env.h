@@ -24,7 +24,8 @@ inline std::mutex& env_test_lock() {
 // codebase goes through here.
 [[nodiscard]] inline std::optional<std::string> env_nonempty(const char* name) {
   const char* v = ::getenv(name);
-  if (v == nullptr || v[0] == '\0') return std::nullopt;
+  if (v == nullptr || v[0] == '\0')
+    return std::nullopt;
   return std::string(v);
 }
 

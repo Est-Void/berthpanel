@@ -1,11 +1,13 @@
-// Tests for rawfetch.h (stage 3.7): the pure path rules, the minimal tar
-// reader, and the trees API parser. Archives are assembled in-test, byte
-// by byte, so every rejection case is exact. No network here.
+// Tests for net/tar.h (the minimal read-only tar reader and the archive
+// path rules) and net/github_api.h (the trees API parser). Archives are
+// assembled in-test, byte by byte, so every rejection case is exact.
+// No network here.
 //
 // The load-bearing theme: an unsafe entry must FAIL the extraction
 // loudly — never be skipped, never be partially accepted (§11).
 
-#include "berth/rawfetch.h"
+#include "berth/net/github_api.h"
+#include "berth/net/tar.h"
 
 #include <cstdint>
 #include <cstring>
@@ -13,9 +15,9 @@
 #include <string>
 #include <vector>
 
-#include "atomic.h"
 #include "runner.h"
 #include "test_env.h"
+#include "util/fs.h"
 
 using berth::archive_path_safe;
 using berth::link_target_escapes;

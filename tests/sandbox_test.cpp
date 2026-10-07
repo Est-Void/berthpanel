@@ -3,7 +3,7 @@
 #include <mutex>
 #include <string>
 
-#include "flags.h"
+#include "core/flags.h"
 #include "runner.h"
 #include "test_env.h"
 

@@ -15,8 +15,8 @@
 #include <string_view>
 #include <vector>
 
-#include "../util/result.h"
 #include <nlohmann/json.hpp>
+#include "../util/result.h"
 
 namespace berth {
 
@@ -52,7 +52,8 @@ struct Recipe {
   std::vector<ContentPin> plugins;
   std::optional<PrebuiltBinary> prebuilt;
   std::string binary_name;  // file the build produces inside the work dir
-  std::string start_cmd;  // placeholders {bin} {venv} {python} {project} {port} {self}
+  std::string
+      start_cmd;  // placeholders {bin} {venv} {python} {project} {port} {self}
   std::string health_path = "/";
   std::uint16_t port = 0;  // 0 = pick a free one at deploy time
   std::vector<std::string> tools;

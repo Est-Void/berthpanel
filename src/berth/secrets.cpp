@@ -5,24 +5,18 @@
 #include <algorithm>
 #include <string>
 
-#include "../atomic.h"
-#include "../state.h"
+#include "../core/atomic.h"
+#include "../core/names.h"
+#include "../util/ascii.h"
+#include "../util/fs.h"
 
 namespace berth {
 
 namespace {
 
 [[nodiscard]] bool valid_key(const std::string& key) {
-  if (key.empty()) return false;
-  const char first = key.front();
-  if (!((first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z') ||
-        first == '_')) {
-    return false;
-  }
-  return std::all_of(key.begin() + 1, key.end(), [](const char c) {
-    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-           (c >= '0' && c <= '9') || c == '_';
-  });
+  return !key.empty() && is_env_key_first(key.front()) &&
+         all_chars(std::string_view(key).substr(1), is_env_key_char);
 }
 
 // Values are always quoted: an unquoted value would stop at the first
@@ -30,8 +24,9 @@ namespace {
 [[nodiscard]] Result<std::string> quote_env_value(const std::string& value) {
   for (const char c : value) {
     if (c == '\n' || c == '\r' || c == '\0') {
-      return Error("secrets: value contains a newline or NUL, which an "
-                   "EnvironmentFile cannot represent");
+      return Error(
+          "secrets: value contains a newline or NUL, which an "
+          "EnvironmentFile cannot represent");
     }
   }
   std::string out = "\"";
@@ -62,7 +57,8 @@ Result<std::string> render_environment_file(
       }
     }
     Result<std::string> quoted = quote_env_value(value);
-    if (quoted.is_err()) return std::move(quoted).error();
+    if (quoted.is_err())
+      return std::move(quoted).error();
     out += key;
     out += "=";
     out += std::move(quoted).value();
@@ -78,13 +74,16 @@ Result<std::filesystem::path> write_secrets(
     return Error("secrets: invalid service name: '" + service_name + "'");
   }
   Result<std::string> text = render_environment_file(entries);
-  if (text.is_err()) return std::move(text).error();
+  if (text.is_err())
+    return std::move(text).error();
   Result<void> dir = ensure_dir(paths.secrets_dir);
-  if (dir.is_err()) return std::move(dir).error();
+  if (dir.is_err())
+    return std::move(dir).error();
   const std::filesystem::path target =
       paths.secrets_dir / (service_name + ".env");
   Result<void> written = atomic_write(target, text.value(), kPermPrivate);
-  if (written.is_err()) return std::move(written).error();
+  if (written.is_err())
+    return std::move(written).error();
   return target;
 }
 

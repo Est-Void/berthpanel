@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "../paths.h"
+#include "../core/paths.h"
 #include "../util/fd.h"
 #include "../util/result.h"
 

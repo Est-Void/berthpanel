@@ -1,7 +1,7 @@
 // Offline tests for egress.h (stage 3.6): the report renderer. The probe
 // itself is the manual demo (`__egress-probe`, live network, §9).
 
-#include "berth/egress.h"
+#include "berth/net/egress.h"
 
 #include <string>
 

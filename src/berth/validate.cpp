@@ -2,9 +2,13 @@
 
 #include "validate.h"
 
-#include <regex>
+#include "../util/ascii.h"
+
+#include <algorithm>
 #include <mutex>
+#include <regex>
 #include <string>
+#include <utility>
 
 namespace berth {
 
@@ -61,7 +65,8 @@ std::vector<std::string> scan_line(const std::string_view line) {
     if (std::regex_search(line.begin(), line.end(), regex)) {
       const bool already =
           std::find(matched.begin(), matched.end(), name) != matched.end();
-      if (!already) matched.push_back(name);
+      if (!already)
+        matched.push_back(name);
     }
   }
   return matched;
@@ -83,7 +88,8 @@ std::vector<std::string> matched_dangerous_patterns(
         matched.push_back(name);
       }
     }
-    if (!joined.empty()) joined += ' ';
+    if (!joined.empty())
+      joined += ' ';
     joined += arg;
   }
   for (const std::string& name : scan_line(joined)) {
@@ -94,7 +100,8 @@ std::vector<std::string> matched_dangerous_patterns(
   return matched;
 }
 
-std::vector<std::string> matched_dangerous_patterns(const std::string_view line) {
+std::vector<std::string> matched_dangerous_patterns(
+    const std::string_view line) {
   (void)compiled_denylist();
   return scan_line(line);
 }
@@ -111,14 +118,9 @@ Result<void> validate_owner_repo(const std::string_view owner_repo) {
     return Error("validate: owner/repo expected, got '" +
                  std::string(owner_repo) + "'");
   }
-  for (const char c : owner_repo) {
-    const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                    (c >= '0' && c <= '9') || c == '-' || c == '.' ||
-                    c == '_' || c == '/';
-    if (!ok) {
-      return Error("validate: bad character in '" + std::string(owner_repo) +
-                   "'");
-    }
+  if (!all_chars(owner_repo, is_repo_char)) {
+    return Error("validate: bad character in '" + std::string(owner_repo) +
+                 "'");
   }
   return {};
 }
@@ -128,12 +130,9 @@ Result<void> validate_commit_sha(const std::string_view sha) {
     return Error("validate: commit must be a full 40-char SHA, got '" +
                  std::string(sha) + "'");
   }
-  for (const char c : sha) {
-    const bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
-    if (!hex) {
-      return Error("validate: commit must be lowercase hex, got '" +
-                   std::string(sha) + "'");
-    }
+  if (!all_chars(sha, is_lower_hex)) {
+    return Error("validate: commit must be lowercase hex, got '" +
+                 std::string(sha) + "'");
   }
   return {};
 }

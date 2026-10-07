@@ -2,14 +2,16 @@
 
 #include <string>
 
-#include "../atomic.h"
-#include "fs.h"
+#include "../core/atomic.h"
+#include "../util/fs.h"
 #include "../util/gzip.h"
 #include "../util/sha256.h"
 #include "../util/strutil.h"
-#include "httpclient.h"
-#include "netlog.h"
-#include "rawfetch.h"
+#include "core/netlog.h"
+#include "net/fetch.h"
+#include "net/github_api.h"
+#include "net/tar.h"
+#include "util/fs.h"
 
 namespace berth {
 
@@ -19,16 +21,18 @@ constexpr std::size_t toolbox_max_tool_bytes = 512ull * 1024 * 1024;
 
 Result<std::string> sha256_of_file(const std::filesystem::path& path) {
   Result<std::string> bytes = read_file(path);
-  if (bytes.is_err()) return std::move(bytes).error();
+  if (bytes.is_err())
+    return std::move(bytes).error();
   return sha256_hex(bytes.value());
 }
 
 }  // namespace
 
 Result<void> verify_sha256_file(const std::filesystem::path& path,
-                               const std::string& expected_sha256) {
+                                const std::string& expected_sha256) {
   Result<std::string> actual = sha256_of_file(path);
-  if (actual.is_err()) return std::move(actual).error();
+  if (actual.is_err())
+    return std::move(actual).error();
   std::string want = expected_sha256;
   want = trim(want);
   for (char& c : want) {
@@ -49,7 +53,8 @@ Result<std::filesystem::path> download_verified(
     const std::filesystem::path& staging_dir, const Paths& paths,
     std::atomic<bool>* cancel) {
   Result<void> dir = ensure_dir(staging_dir);
-  if (dir.is_err()) return std::move(dir).error();
+  if (dir.is_err())
+    return std::move(dir).error();
   const std::filesystem::path staged = staging_dir / "download.tmp";
 
   HttpGetOptions options;
@@ -58,15 +63,16 @@ Result<std::filesystem::path> download_verified(
   options.follow_allowlisted_redirects = true;
   options.cancel = cancel;
   Result<HttpReply> reply = http_get(url, options, paths);
-  if (reply.is_err()) return std::move(reply).error();
+  if (reply.is_err())
+    return std::move(reply).error();
   if (reply.value().status != 200) {
     return Error("toolbox: download answered status " +
                  std::to_string(reply.value().status) + " for " + url);
   }
 
-  Result<void> written =
-      atomic_write(staged, reply.value().body, kPermPrivate);
-  if (written.is_err()) return std::move(written).error();
+  Result<void> written = atomic_write(staged, reply.value().body, kPermPrivate);
+  if (written.is_err())
+    return std::move(written).error();
 
   const Result<void> verified = verify_sha256_file(staged, expected_sha256);
   if (verified.is_err()) {
@@ -77,8 +83,9 @@ Result<std::filesystem::path> download_verified(
   return staged;
 }
 
-Result<std::filesystem::path> install_pinned_tool(
-    const PinnedTool& tool, const Paths& paths, std::atomic<bool>* cancel) {
+Result<std::filesystem::path> install_pinned_tool(const PinnedTool& tool,
+                                                  const Paths& paths,
+                                                  std::atomic<bool>* cancel) {
   if (tool.sha256.empty()) {
     return Error("toolbox: " + tool.name + " has no sha256 pin");
   }
@@ -86,22 +93,27 @@ Result<std::filesystem::path> install_pinned_tool(
       paths.state_dir / "toolbox" / (tool.name + ".staging");
   const Result<std::filesystem::path> downloaded =
       download_verified(tool.url, tool.sha256, staging, paths, cancel);
-  if (downloaded.is_err()) return std::move(downloaded).error();
+  if (downloaded.is_err())
+    return std::move(downloaded).error();
 
   const Result<void> install_dir = ensure_dir(tool.install_dir);
-  if (install_dir.is_err()) return std::move(install_dir).error();
+  if (install_dir.is_err())
+    return std::move(install_dir).error();
   const std::filesystem::path target = tool.install_dir / tool.inner_path;
 
   std::string payload;
   if (tool.archive == ToolArchive::kTarGz) {
     Result<std::string> compressed = read_file(downloaded.value());
-    if (compressed.is_err()) return std::move(compressed).error();
+    if (compressed.is_err())
+      return std::move(compressed).error();
     Result<std::string> plain =
         gunzip(compressed.value(), toolbox_max_tool_bytes);
-    if (plain.is_err()) return std::move(plain).error();
+    if (plain.is_err())
+      return std::move(plain).error();
     std::string archive_bytes = std::move(plain).value();
     Result<std::vector<TarEntry>> entries = tar_list(archive_bytes);
-    if (entries.is_err()) return std::move(entries).error();
+    if (entries.is_err())
+      return std::move(entries).error();
     std::string_view want = tool.inner_path;
     const auto found = std::find_if(
         entries.value().begin(), entries.value().end(),
@@ -115,28 +127,32 @@ Result<std::filesystem::path> install_pinned_tool(
     if (found->size > toolbox_max_tool_bytes) {
       return Error("toolbox: " + tool.name + " member exceeds the size cap");
     }
-    payload = std::string_view(archive_bytes).substr(
-        found->data_offset, static_cast<std::size_t>(found->size));
+    payload =
+        std::string_view(archive_bytes)
+            .substr(found->data_offset, static_cast<std::size_t>(found->size));
   } else {
     Result<std::string> raw = read_file(downloaded.value());
-    if (raw.is_err()) return std::move(raw).error();
+    if (raw.is_err())
+      return std::move(raw).error();
     payload = std::move(raw).value();
   }
 
-  std::filesystem::perms perms = std::filesystem::perms::owner_read |
-                                 std::filesystem::perms::owner_write;
+  std::filesystem::perms perms =
+      std::filesystem::perms::owner_read | std::filesystem::perms::owner_write;
   if (tool.executable) {
     perms = perms | std::filesystem::perms::owner_exec |
-           std::filesystem::perms::group_read |
-           std::filesystem::perms::group_exec |
-           std::filesystem::perms::others_read |
-           std::filesystem::perms::others_exec;
+            std::filesystem::perms::group_read |
+            std::filesystem::perms::group_exec |
+            std::filesystem::perms::others_read |
+            std::filesystem::perms::others_exec;
   }
 
   Result<void> parent_dir = ensure_dir(target.parent_path());
-  if (parent_dir.is_err()) return std::move(parent_dir).error();
+  if (parent_dir.is_err())
+    return std::move(parent_dir).error();
   Result<void> placed = atomic_write(target, payload, perms);
-  if (placed.is_err()) return std::move(placed).error();
+  if (placed.is_err())
+    return std::move(placed).error();
 
   Result<std::size_t> cleaned = remove_tree(staging);
   static_cast<void>(cleaned);

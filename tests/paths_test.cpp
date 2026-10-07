@@ -2,7 +2,7 @@
 // each runs under the global env_test_lock (dev.md §9) and restores what
 // it touched via ScopedEnv.
 
-#include "paths.h"
+#include "core/paths.h"
 
 #include <mutex>
 
@@ -37,6 +37,7 @@ TEST(paths_defaults_from_home) {
   CHECK(r.value().data_dir == "/home/u/.local/share/berthpanel");
   CHECK(r.value().services_dir == "/home/u/.local/share/berthpanel/services");
   CHECK(r.value().config_dir == "/home/u/.config/berthpanel");
+  CHECK(r.value().recipes_dir == "/home/u/.config/berthpanel/recipes");
   CHECK(r.value().secrets_dir == "/home/u/.local/state/berthpanel/secrets");
   CHECK(r.value().state_json == "/home/u/.local/state/berthpanel/state.json");
   CHECK(r.value().deploy_journal ==

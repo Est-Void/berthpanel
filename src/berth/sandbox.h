@@ -40,7 +40,8 @@ struct SandboxSpec {
 // Everything after the binary path, deterministic and pure. One argv
 // element per directive and per value: a working directory with a space
 // stays one element (dev.md §11).
-[[nodiscard]] std::vector<std::string> sandbox_argv_body(const SandboxSpec& spec);
+[[nodiscard]] std::vector<std::string> sandbox_argv_body(
+    const SandboxSpec& spec);
 
 // Runs the command through systemd-run --user and returns the child's exit
 // code. Transport failures are Err; the build's own non-zero exit is a

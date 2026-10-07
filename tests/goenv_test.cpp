@@ -4,9 +4,9 @@
 #include <string>
 #include <vector>
 
-#include "atomic.h"
 #include "runner.h"
 #include "test_env.h"
+#include "util/fs.h"
 #include "util/sha256.h"
 
 using berth::append_segment;

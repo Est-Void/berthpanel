@@ -13,18 +13,19 @@
 #include <filesystem>
 #include <string>
 
-#include "../paths.h"
+#include "../core/paths.h"
 #include "../util/result.h"
 #include "toolbox.h"
 
 namespace berth {
 
 // Go's module-path escaping: an uppercase letter is stored as '!' plus its
-// lowercase form (github.com/Masterminds/semver -> github.com/!masterminds/...).
+// lowercase form (github.com/Masterminds/semver ->
+// github.com/!masterminds/...).
 [[nodiscard]] Result<std::string> escape_module_path(std::string_view module);
 
 [[nodiscard]] Result<std::string> range_header_value(std::size_t have,
-                                                      std::size_t total);
+                                                     std::size_t total);
 
 [[nodiscard]] Result<std::size_t> current_segment_size(
     const std::filesystem::path& partial);
