@@ -24,6 +24,7 @@
 #include "berth/gitclone.h"
 #include "berth/lock.h"
 #include "berth/net/egress.h"
+#include "berth/net/github_api.h"
 #include "berth/recipes.h"
 #include "berth/sandbox.h"
 #include "berth/toolcheck.h"
@@ -384,9 +385,8 @@ int recipe_draft_command(const std::string_view url_arg,
   if (tools.is_err())
     return fail(tools.error().ctx());
 
-  std::cout << "draft " << draft.service_name << " (" << draft.language
-            << ", " << draft.res.memory_max << "/" << draft.res.tasks_max
-            << ")\n"
+  std::cout << "draft " << draft.service_name << " (" << draft.language << ", "
+            << draft.res.memory_max << "/" << draft.res.tasks_max << ")\n"
             << "  saved: " << stored.value().string() << "\n"
             << "  start: " << draft.start_cmd << "\n"
             << "  tools:\n"
