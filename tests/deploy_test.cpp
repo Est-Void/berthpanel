@@ -458,7 +458,7 @@ TEST(sweep_refuses_a_work_dir_outside_the_services_layout) {
   CHECK(report.value().skipped_outside.front() == "berthpanel-memos");
   CHECK(ops.calls.empty());  // nothing was stopped, nothing was deleted
   CHECK(berth::journal_load(p).value().size() == 1);  // entry kept, loud
-  CHECK(std::filesystem::exists("/etc"));  // untouched, obviously
+  CHECK(std::filesystem::exists("/etc"));             // untouched, obviously
 }
 
 TEST(sweep_refuses_a_work_dir_equal_to_the_services_dir) {

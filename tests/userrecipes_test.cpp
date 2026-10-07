@@ -144,8 +144,8 @@ TEST(user_recipe_store_refuses_a_builtin_collision_without_force) {
   CHECK(!std::filesystem::exists(p.recipes_dir / "berthpanel-memos.json"));
 
   // With --force it becomes an explicit user override of the curated entry.
-  CHECK(berth::user_recipe_store(p, go_recipe("berthpanel-memos"), true)
-            .is_ok());
+  CHECK(
+      berth::user_recipe_store(p, go_recipe("berthpanel-memos"), true).is_ok());
   const auto resolved = berth::resolve_recipe(p, "berthpanel-memos");
   CHECK(resolved.is_ok());
   CHECK(resolved.value().owner == "someone");  // the user recipe, not builtin

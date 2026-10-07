@@ -83,8 +83,8 @@ Result<std::filesystem::path> user_recipe_store(const Paths& paths,
     return std::move(dir).error();
   const std::filesystem::path target = recipe_file(paths, name.value());
   // 0644: recipes carry env KEYS, never values (secrets.cpp holds those).
-  Result<void> written = atomic_write(target, recipe_to_json(stored).dump(2) + "\n",
-                                      kPermShared);
+  Result<void> written =
+      atomic_write(target, recipe_to_json(stored).dump(2) + "\n", kPermShared);
   if (written.is_err())
     return std::move(written).error();
   return target;
