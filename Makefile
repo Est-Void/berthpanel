@@ -25,8 +25,13 @@ VERSION_H := $(BUILD)/generated/version.h
 # be able to reorder objects; this list is the order). LIB_SRC is linked
 # into the main binary AND the test binary; SRC stays the CLI shell
 # (layering: berth never links tui).
+# SRC is the shell that links the binary only. app.cpp lives here and not in
+# LIB_SRC because it is the one module that includes FTXUI: the test binary
+# must stay buildable without the vendored TUI library (dev.md §9).
 SRC := \
-	src/main.cpp
+	src/main.cpp \
+	src/tui/panel.cpp \
+	src/tui/app.cpp
 
 LIB_SRC := \
 	src/core/paths.cpp \
@@ -74,7 +79,8 @@ LIB_SRC := \
 	src/util/tmpdir.cpp \
 	src/util/which.cpp \
 	src/util/gzip.cpp \
-	src/util/subprocess.cpp
+	src/util/subprocess.cpp \
+	src/tui/chrome.cpp
 
 # Vendored C sources, compiled per mode (relaxed warnings on purpose; see
 # the vendor rule below). Manifests with pins live next to each source.
@@ -136,7 +142,8 @@ TEST_SRC := \
  	tests/detect_test.cpp \
  	tests/deploy_test.cpp \
  	tests/cancel_test.cpp \
- 	tests/gzip_test.cpp
+ 	tests/gzip_test.cpp \
+	tests/ring_test.cpp
 
 INCLUDES := -Iinclude -Isrc -I$(BUILD)/generated -isystem third_party -isystem third_party/mbedtls/include -isystem third_party/ftxui/include -isystem third_party/ftxui/src
 LDLIBS   := -lz -pthread

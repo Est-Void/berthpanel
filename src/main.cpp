@@ -1,8 +1,7 @@
-// CLI entry point: dispatches flags and one-shot subcommands
-// (--version, --show-endpoints, __egress-probe now; __deploy / __cleanup /
-// __serve-static land in later stages). Owns nothing beyond dispatch:
-// real work lives in modules. Layering: berth is linked but tui/ does
-// not exist yet, and when it does, this file stays the only bridge.
+// CLI entry point: dispatches flags, one-shot subcommands, and — with no
+// arguments on a terminal — the interactive panel. Owns nothing beyond
+// dispatch: real work lives in modules. This file stays the ONLY bridge
+// between the two worlds (dev.md §5: berth must not depend on tui).
 
 #include <atomic>
 #include <csignal>
@@ -36,6 +35,7 @@
 #include "core/netlog.h"
 #include "core/paths.h"
 #include "core/state.h"
+#include "tui/app.h"
 #include "util/argv.h"
 #include "util/fs.h"
 #include "util/result.h"
@@ -85,6 +85,21 @@ int egress_probe() {
       return 1;
   }
   return 0;
+}
+
+void print_usage() {
+  std::cerr << "usage: berthpanel                       # the panel (needs a "
+               "terminal)\n"
+               "       berthpanel [--version] [--show-endpoints] "
+               "[--verify-sandbox]\n"
+               "       berthpanel __egress-probe | __catalog | __services\n"
+               "       berthpanel __recipe-list | __recipe-add <file.json> "
+               "[--force] | "
+               "__recipe-remove <service>\n"
+               "       berthpanel __recipe-draft <github_url> [ref] [--apply] "
+               "[--force]\n"
+               "       berthpanel __deploy <service_name> [port] [--upgrade]\n"
+               "       berthpanel __cleanup [--install] [--quiet]\n";
 }
 
 int deploy_command(const std::string_view service,
@@ -409,7 +424,20 @@ int recipe_draft_command(const std::string_view url_arg,
 }
 
 int run(const std::span<const char* const> args) {
-  if (!args.empty()) {
+  if (args.empty()) {
+    // No arguments on a terminal means the panel; a pipe or a file means the
+    // usage text, because rendering a full-screen UI into a pipe is never
+    // what the caller wanted.
+    if (!::isatty(STDOUT_FILENO)) {
+      print_usage();
+      return 2;
+    }
+    const berth::Result<berth::Paths> paths = berth::paths_from_env();
+    if (paths.is_err())
+      return fail(paths.error().ctx());
+    return tui::run_tui(paths.value());
+  }
+  {
     // One-shot subcommands must be the first argument.
     const std::string_view first(args[0]);
     if (first == "__egress-probe")
@@ -479,16 +507,7 @@ int run(const std::span<const char* const> args) {
     if (a == "--verify-sandbox")
       return verify_sandbox_command();
   }
-  std::cerr << "usage: berthpanel [--version] [--show-endpoints] "
-               "[--verify-sandbox]\n"
-               "       berthpanel __egress-probe | __catalog | __services\n"
-               "       berthpanel __recipe-list | __recipe-add <file.json> "
-               "[--force] | "
-               "__recipe-remove <service>\n"
-               "       berthpanel __recipe-draft <github_url> [ref] [--apply] "
-               "[--force]\n"
-               "       berthpanel __deploy <service_name> [port] [--upgrade]\n"
-               "       berthpanel __cleanup [--install] [--quiet]\n";
+  print_usage();
   return 2;
 }
 
