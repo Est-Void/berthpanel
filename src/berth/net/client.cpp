@@ -2,11 +2,18 @@
 
 #include "client.h"
 
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include <algorithm>
+#include <cerrno>
+#include <optional>
 #include <string>
 #include <utility>
 
 #include "../../core/netlog.h"
+#include "../../util/errno.h"
 #include "../../util/fd.h"
 #include "../../util/sleep.h"
 #include "refusal.h"
@@ -121,17 +128,46 @@ Result<std::string> build_request(const HttpUrl& target,
   req += "User-Agent: berthpanel/" BERTH_VERSION "\r\n";
   req += "Accept: */*\r\n";
   req += "Connection: close\r\n";
-  if (options.bearer_token == nullptr)
-    return req;
-
-  // §6.3: exact host match, never substring. A token bound for any other
-  // host is a caller bug and is refused loudly.
-  if (target.host != kApiHost) {
-    return refusal("bearer token is only permitted for api.github.com");
+  if (options.bearer_token != nullptr) {
+    // §6.3: exact host match, never substring. A token bound for any other
+    // host is a caller bug and is refused loudly.
+    if (target.host != kApiHost) {
+      return refusal("bearer token is only permitted for api.github.com");
+    }
+    req += "Authorization: Bearer " + *options.bearer_token + "\r\n";
   }
-  req += "Authorization: Bearer " + *options.bearer_token + "\r\n";
+  // The blank line that terminates the head. It is required whether or not
+  // a token was added: without it the peer waits for headers that never
+  // come, and the request hangs until the deadline.
   req += "\r\n";
   return req;
+}
+
+enum class Framed {
+  kIncomplete,
+  kComplete,
+  kUnusableContentLength,
+};
+
+// What the bytes accumulated so far say about framing. A head that does not
+// parse yet is simply incomplete — more bytes may finish it.
+Result<Framed> framing_of(const std::string& wire) {
+  const Result<std::pair<HttpReply, std::size_t>> head = parse_http_head(wire);
+  if (head.is_err()) return Framed::kIncomplete;
+
+  const BodyMode mode = body_mode_of(head.value().first);
+  const std::optional<std::size_t> length = content_length_of(head.value().first);
+  if (mode == BodyMode::kContentLength && !length.has_value()) {
+    return Framed::kUnusableContentLength;
+  }
+  return response_is_complete(wire, head.value().second, mode, length.value_or(0))
+             ? Framed::kComplete
+             : Framed::kIncomplete;
+}
+
+bool plain_response_is_complete(const std::string& wire) {
+  const Result<Framed> state = framing_of(wire);
+  return state.is_err() ? false : state.value() == Framed::kComplete;
 }
 
 // Reads until the response is complete under its own framing, or until the
@@ -155,20 +191,12 @@ Result<void> read_response(TlsSession& session, const HttpUrl& target,
       return {};
     wire->append(reinterpret_cast<const char*>(buf), chunk.value());
 
-    const Result<std::pair<HttpReply, std::size_t>> head =
-        parse_http_head(*wire);
-    if (head.is_err())
-      continue;  // head not complete yet
-    const BodyMode mode = body_mode_of(head.value().first);
-    const std::optional<std::size_t> length =
-        content_length_of(head.value().first);
-    if (mode == BodyMode::kContentLength && !length.has_value()) {
+    const Result<Framed> state = framing_of(*wire);
+    if (state.is_err()) return std::move(state).error();
+    if (state.value() == Framed::kUnusableContentLength) {
       return Error("http_get: unusable content-length from " + target.host);
     }
-    if (response_is_complete(*wire, head.value().second, mode,
-                             length.value_or(0))) {
-      return {};
-    }
+    if (state.value() == Framed::kComplete) return {};
   }
 }
 
@@ -224,35 +252,86 @@ Result<HttpReply> parse_complete(const std::string& wire,
 }
 
 // One attempt against one address: connect, TLS, send, read, parse.
+// Plaintext bytes on the loopback health-check path. Separate from the TLS
+// path on purpose: mbedTLS on a context that never completed a handshake
+// fails with BAD_INPUT_PARAMETERS, so a single "session" abstraction over
+// both would be a lie.
+Result<void> read_plain_response(const int fd, const HttpUrl& target,
+                                  const HttpGetOptions& options,
+                                  const Deadline deadline, std::string* wire) {
+  while (true) {
+    if (wire->size() > options.max_body_bytes + kMaxHeadBytes) {
+      return Error("http_get: response exceeds cap from " + target.host);
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      return Error("http_get: timed out reading response from " + target.host);
+    }
+    const Result<void> readable = wait_socket(fd, POLLIN, deadline,
+                                             options.cancel, "plain read");
+    if (readable.is_err()) return readable;
+
+    unsigned char buf[kReadChunkBytes];
+    const ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+    if (n < 0) {
+      if (errno == EINTR || errno == EAGAIN) continue;
+      return Error("plain read " + target.host + ": " + errno_text(errno));
+    }
+    if (n == 0) return {};  // peer closed
+    wire->append(reinterpret_cast<const char*>(buf),
+                 static_cast<std::size_t>(n));
+    if (plain_response_is_complete(*wire)) return {};
+  }
+}
+
+Result<HttpReply> exchange_tls(const std::string& ip, const Attempt& attempt,
+                               const std::string& request,
+                               const HttpGetOptions& options,
+                               const Deadline deadline) {
+  const HttpUrl& target = attempt.target;
+  Result<int> connected =
+      tcp_connect(ip, target.port, deadline, options.cancel);
+  if (connected.is_err()) return std::move(connected).error();
+  const FdGuard fd(connected.value());
+
+  TlsSession session(fd.get());
+  const Result<void> hs = session.handshake(target.host, deadline, options.cancel);
+  if (hs.is_err()) return std::move(hs).error();
+  const Result<void> sent = session.write_all(request, deadline, options.cancel);
+  if (sent.is_err()) return std::move(sent).error();
+
+  std::string wire;
+  const Result<void> read = read_response(session, target, options, deadline, &wire);
+  if (read.is_err()) return std::move(read).error();
+  return parse_complete(wire, options, target.host);
+}
+
+Result<HttpReply> exchange_plain(const std::string& ip, const Attempt& attempt,
+                                 const std::string& request,
+                                 const HttpGetOptions& options,
+                                 const Deadline deadline) {
+  const HttpUrl& target = attempt.target;
+  Result<int> connected =
+      tcp_connect(ip, target.port, deadline, options.cancel);
+  if (connected.is_err()) return std::move(connected).error();
+  const FdGuard fd(connected.value());
+
+  const Result<void> sent = write_all(fd.get(), request);
+  if (sent.is_err()) return std::move(sent).error();
+
+  std::string wire;
+  const Result<void> read =
+      read_plain_response(fd.get(), target, options, deadline, &wire);
+  if (read.is_err()) return std::move(read).error();
+  return parse_complete(wire, options, target.host);
+}
+
 Result<HttpReply> exchange_once(const std::string& ip, const Attempt& attempt,
                                 const std::string& request,
                                 const HttpGetOptions& options,
                                 const Deadline deadline) {
-  const HttpUrl& target = attempt.target;
-  Result<int> connected =
-      tcp_connect(ip, target.port, deadline, options.cancel);
-  if (connected.is_err())
-    return std::move(connected).error();
-  const FdGuard fd(connected.value());
-
-  TlsSession session(fd.get());
-  if (target.scheme == "https") {
-    const Result<void> hs =
-        session.handshake(target.host, deadline, options.cancel);
-    if (hs.is_err())
-      return std::move(hs).error();
-  }
-  const Result<void> sent =
-      session.write_all(request, deadline, options.cancel);
-  if (sent.is_err())
-    return std::move(sent).error();
-
-  std::string wire;
-  const Result<void> read =
-      read_response(session, target, options, deadline, &wire);
-  if (read.is_err())
-    return std::move(read).error();
-  return parse_complete(wire, options, target.host);
+  return attempt.target.scheme == "https"
+             ? exchange_tls(ip, attempt, request, options, deadline)
+             : exchange_plain(ip, attempt, request, options, deadline);
 }
 
 Result<HttpReply> get_once(const std::string& url,
