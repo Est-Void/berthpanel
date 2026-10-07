@@ -22,6 +22,7 @@
 
 #include <array>
 #include <atomic>
+#include <span>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -36,7 +37,7 @@ namespace berth {
 
 // The hardening set, as data, so the unit file and the build sandbox cannot
 // drift apart.
-[[nodiscard]] const std::array<std::string_view, 18>& hardening_directives();
+[[nodiscard]] std::span<const std::string_view> hardening_directives();
 
 struct UnitLimits {
   std::string memory_max;       // e.g. "384M"

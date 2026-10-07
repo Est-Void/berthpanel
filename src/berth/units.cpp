@@ -27,7 +27,10 @@ namespace {
 // runs the process either way (dev.md §6, "blast-radius reducer").
 // sandbox.cpp renders the SAME set as `systemd-run --property=`; a
 // hardening change must land in both, which is why they live in one array.
-constexpr std::array<std::string_view, 18> kHardening = {
+// CTAD: the count follows the initializers, so a dropped entry can
+// never leave an empty slot behind (the 18/17 drift made the sandbox
+// build pass an empty --property= and systemd-run refused it).
+constexpr auto kHardening = std::to_array<std::string_view>({
     "NoNewPrivileges=yes",
     "PrivateTmp=yes",
     "PrivateDevices=yes",
@@ -45,7 +48,7 @@ constexpr std::array<std::string_view, 18> kHardening = {
     "SystemCallArchitectures=native",
     "SystemCallFilter=@system-service",
     "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
-};
+});
 
 constexpr std::filesystem::perms kUnitPerms =
     std::filesystem::perms::owner_read | std::filesystem::perms::owner_write |
@@ -69,7 +72,7 @@ constexpr std::string_view kUnitComment =
 
 }  // namespace
 
-const std::array<std::string_view, 18>& hardening_directives() {
+std::span<const std::string_view> hardening_directives() {
   return kHardening;
 }
 

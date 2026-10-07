@@ -104,6 +104,19 @@ Result<int> run_in_sandbox(const SandboxSpec& spec) {
   Result<RunOutput> out = run(argv, limits);
   if (out.is_err())
     return std::move(out).error();
+  // --pipe routes the unit's streams back to us: a failed step must carry
+  // its own stderr, or a build failure is an exit code with no why (§11).
+  if (out.value().exit_code != 0) {
+    std::string detail(trim(out.value().err));
+    if (detail.empty())
+      detail = trim(out.value().out);
+    if (!detail.empty()) {
+      return Error("sandbox: unit " +
+                   (spec.unit_name.empty() ? "(anonymous)" : spec.unit_name) +
+                   " failed with exit " +
+                   std::to_string(out.value().exit_code) + ": " + detail);
+    }
+  }
   return out.value().exit_code;
 }
 
