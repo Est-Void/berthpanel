@@ -69,6 +69,7 @@ LIB_SRC := \
  	src/berth/detect.cpp \
  	src/berth/catalog.cpp \
 	src/berth/deploy.cpp \
+	src/berth/service_ops.cpp \
 	src/util/fs.cpp \
 	src/util/tmpdir.cpp \
 	src/util/which.cpp \
@@ -119,6 +120,7 @@ TEST_SRC := \
 	tests/fs_test.cpp \
 	tests/recipe_draft_test.cpp \
 	tests/units_test.cpp \
+	tests/service_ops_test.cpp \
 	tests/secrets_test.cpp \
 	tests/which_test.cpp \
 	tests/gitclone_test.cpp \
