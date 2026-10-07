@@ -264,6 +264,34 @@ bool work_dir_matches_layout(const Paths& paths, const JournalEntry& entry) {
   return std::filesystem::path(entry.work_dir).lexically_normal() == expected;
 }
 
+// True unless entry.work_dir, canonically resolved, lands STRICTLY inside
+// paths.services_dir. Compared component by component — never as a string
+// prefix, or "/srv/x" would count as inside "/srv/xy". weakly_canonical
+// resolves the existing path, so a symlinked component cannot fake
+// containment. A filesystem error counts as outside: the sweep then
+// refuses to act on the entry instead of guessing.
+bool work_dir_outside_services(const Paths& paths, const JournalEntry& entry) {
+  std::error_code ec;
+  const std::filesystem::path dir =
+      std::filesystem::weakly_canonical(paths.services_dir, ec);
+  if (ec)
+    return true;
+  const std::filesystem::path work =
+      std::filesystem::weakly_canonical(entry.work_dir, ec);
+  if (ec)
+    return true;
+
+  auto dir_it = dir.begin();
+  const auto dir_end = dir.end();
+  auto work_it = work.begin();
+  const auto work_end = work.end();
+  for (; dir_it != dir_end; ++dir_it, ++work_it) {
+    if (work_it == work_end || *work_it != *dir_it)
+      return true;
+  }
+  return work_it == work_end;  // equal ⇒ not strictly inside
+}
+
 void log_sweep(const Paths& paths, const std::string& line) {
   const Result<void> logged = deploylog_append(paths, line);
   static_cast<void>(logged);
@@ -304,6 +332,19 @@ Result<ReconcileReport> sweep_interrupted_entries(
       fail("invalid service name in journal");
       continue;
     }
+
+    // Path guard, before anything is stopped or removed: a work_dir that
+    // does not resolve strictly inside THIS services_dir is never swept —
+    // it may belong to a completely different install (swapped XDG env,
+    // hand-edited journal, symlink escape). Loud and permanent.
+    if (work_dir_outside_services(paths, entry)) {
+      log_sweep(paths, "cleanup: " + entry.service_name + " work_dir '" +
+                           entry.work_dir + "' is outside " +
+                           paths.services_dir.string() + " — nothing deleted");
+      report.skipped_outside.push_back(entry.service_name);
+      continue;
+    }
+
     if (!work_dir_matches_layout(paths, entry)) {
       // §11: validate every value that reaches a path. A hand-edited
       // journal entry never steers a delete outside the services layout.
@@ -451,7 +492,7 @@ std::string render_reconcile_report(const ReconcileReport& report) {
     return out;
   }
   if (report.swept.empty() && report.failed.empty() &&
-      report.skipped_registry.empty()) {
+      report.skipped_registry.empty() && report.skipped_outside.empty()) {
     out += "nothing to clean up\n";
     return out;
   }
@@ -462,6 +503,11 @@ std::string render_reconcile_report(const ReconcileReport& report) {
   for (const std::string& skipped : report.skipped_registry) {
     out += "SKIPPED " + skipped +
            ": in the registry — stale journal entry dropped, nothing deleted\n";
+  }
+  for (const std::string& skipped : report.skipped_outside) {
+    out += "SKIPPED " + skipped +
+           ": journal work_dir is outside the services layout — entry kept, "
+           "nothing deleted\n";
   }
   for (const std::pair<std::string, std::string>& failure : report.failed) {
     out += "FAILED " + failure.first + ": " + failure.second + "\n";

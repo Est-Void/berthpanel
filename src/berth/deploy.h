@@ -128,6 +128,11 @@ struct ReconcileReport {
   // dropped loudly; the deployed service is NOT touched — cleanup works
   // on the journal alone and the registry owns that service now.
   std::vector<std::string> skipped_registry;
+  // Work dirs that resolve OUTSIDE paths.services_dir (symlinks count):
+  // the entry is never swept, not even retried into damage. Independent
+  // of the registry guard — this one holds even when the registry was
+  // swapped by a hostile or mistaken environment.
+  std::vector<std::string> skipped_outside;
   // A live deploy owns the journal (we could not take the lock); nothing
   // was read as interrupted and nothing was touched.
   bool lock_busy = false;

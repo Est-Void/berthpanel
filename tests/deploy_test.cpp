@@ -442,7 +442,7 @@ TEST(reconcile_interrupted_sweeps_when_the_lock_is_free) {
   CHECK(berth::journal_load(p).value().empty());
 }
 
-TEST(sweep_keeps_an_entry_whose_work_dir_leaves_the_services_layout) {
+TEST(sweep_refuses_a_work_dir_outside_the_services_layout) {
   const TempDir tmp;
   const berth::Paths p = test_paths(tmp.path());
   berth::JournalEntry hostile = stale_entry(p, "berthpanel-memos", "cloning");
@@ -453,11 +453,77 @@ TEST(sweep_keeps_an_entry_whose_work_dir_leaves_the_services_layout) {
   const auto report = berth::reconcile_interrupted(p, ops, nullptr);
   CHECK(report.is_ok());
   CHECK(report.value().swept.empty());
-  CHECK(report.value().failed.size() == 1);
-  CHECK(report.value().failed.front().first == "berthpanel-memos");
+  CHECK(report.value().failed.empty());
+  CHECK(report.value().skipped_outside.size() == 1);
+  CHECK(report.value().skipped_outside.front() == "berthpanel-memos");
   CHECK(ops.calls.empty());  // nothing was stopped, nothing was deleted
-  CHECK(berth::journal_load(p).value().size() == 1);
+  CHECK(berth::journal_load(p).value().size() == 1);  // entry kept, loud
   CHECK(std::filesystem::exists("/etc"));  // untouched, obviously
+}
+
+TEST(sweep_refuses_a_work_dir_equal_to_the_services_dir) {
+  const TempDir tmp;
+  const berth::Paths p = test_paths(tmp.path());
+  CHECK(berth::ensure_dir(p.services_dir).is_ok());
+  berth::JournalEntry greedy = stale_entry(p, "berthpanel-memos", "cloning");
+  greedy.work_dir = p.services_dir.string();  // containment must be strict
+  CHECK(berth::journal_upsert(p, greedy).is_ok());
+
+  FakeOps ops;
+  const auto report = berth::reconcile_interrupted(p, ops, nullptr);
+  CHECK(report.is_ok());
+  CHECK(report.value().swept.empty());
+  CHECK(report.value().skipped_outside.size() == 1);
+  CHECK(ops.calls.empty());
+  CHECK(std::filesystem::exists(p.services_dir));
+}
+
+TEST(sweep_refuses_a_work_dir_that_symlinks_out_of_the_layout) {
+  const TempDir tmp;
+  const berth::Paths p = test_paths(tmp.path());
+  // Lexically this work_dir looks perfect; the symlink is the attack.
+  const std::filesystem::path escape = tmp.path() / "elsewhere";
+  CHECK(berth::ensure_dir(escape).is_ok());
+  CHECK(berth::atomic_write(escape / "data", "keep me").is_ok());
+  CHECK(berth::ensure_dir(p.services_dir).is_ok());
+  std::error_code ec;
+  std::filesystem::create_symlink(escape, p.services_dir / "berthpanel-memos",
+                                  ec);
+  CHECK(!ec);
+  CHECK(berth::journal_upsert(p, stale_entry(p, "berthpanel-memos", "cloning"))
+            .is_ok());
+
+  FakeOps ops;
+  const auto report = berth::reconcile_interrupted(p, ops, nullptr);
+  CHECK(report.is_ok());
+  CHECK(report.value().swept.empty());
+  CHECK(report.value().skipped_outside.size() == 1);
+  CHECK(ops.calls.empty());
+  // Neither the symlink nor its target was touched.
+  CHECK(std::filesystem::is_symlink(p.services_dir / "berthpanel-memos"));
+  CHECK(std::filesystem::exists(escape / "data"));
+}
+
+TEST(sweep_fails_an_entry_whose_work_dir_is_inside_but_mismatched) {
+  const TempDir tmp;
+  const berth::Paths p = test_paths(tmp.path());
+  CHECK(berth::ensure_dir(p.services_dir).is_ok());
+  berth::JournalEntry shifted = stale_entry(p, "berthpanel-memos", "cloning");
+  // Inside the layout, but not THIS service's directory.
+  shifted.work_dir = (p.services_dir / "berthpanel-other").string();
+  CHECK(berth::journal_upsert(p, shifted).is_ok());
+  CHECK(berth::ensure_dir(p.services_dir / "berthpanel-other").is_ok());
+
+  FakeOps ops;
+  const auto report = berth::reconcile_interrupted(p, ops, nullptr);
+  CHECK(report.is_ok());
+  CHECK(report.value().swept.empty());
+  CHECK(report.value().skipped_outside.empty());
+  CHECK(report.value().failed.size() == 1);
+  CHECK(report.value().failed.front().second.find("is not") !=
+        std::string::npos);
+  CHECK(ops.calls.empty());
+  CHECK(std::filesystem::exists(p.services_dir / "berthpanel-other"));
 }
 
 TEST(sweep_drops_a_stale_entry_when_the_service_is_in_the_registry) {
