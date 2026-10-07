@@ -75,6 +75,12 @@ struct Recipe {
 [[nodiscard]] bool tool_covers_step(const Recipe& recipe,
                                     const std::vector<std::string>& step);
 
+// The tool names a step requires from `tools` (the venv interpreter IS
+// python3; a sh wrapper IS sh). Exposed so detect can heal its own drafts
+// instead of ever handing out an invalid one (stage 4.20).
+[[nodiscard]] std::vector<std::string> tools_required_by(
+    const std::vector<std::string>& step);
+
 [[nodiscard]] Result<Recipe> recipe_from_json(const nlohmann::json& doc);
 [[nodiscard]] nlohmann::json recipe_to_json(const Recipe& recipe);
 

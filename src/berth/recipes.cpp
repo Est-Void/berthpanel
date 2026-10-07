@@ -105,23 +105,27 @@ Result<std::vector<std::string>> split_command_template(
   return tokens;
 }
 
+std::vector<std::string> tools_required_by(const std::vector<std::string>& step) {
+  if (step.empty())
+    return {};
+  const std::string program = program_name(step);
+  if (program == "sh" || program == "bash") {
+    return {"sh"};
+  }
+  if (program == "python") {
+    // A venv interpreter (…/venv/bin/python) IS python3: without this
+    // alias, every venv-based python recipe fails validation while its
+    // toolcheck-declared tool is exactly python3.
+    return {"python3"};
+  }
+  return {program};
+}
+
 bool tool_covers_step(const Recipe& recipe,
                       const std::vector<std::string>& step) {
   if (step.empty())
     return false;
-  const std::string program = program_name(step);
-  // Interpreting a script needs the interpreter named in tools, and every
-  // build step's own program does too (§8 audit lesson).
-  std::vector<std::string> required = {program};
-  if (program == "sh" || program == "bash") {
-    required = {"sh"};
-  } else if (program == "python") {
-    // A venv interpreter (…/venv/bin/python) IS python3: without this
-    // alias, every venv-based python recipe fails validation while its
-    // toolcheck-declared tool is exactly python3.
-    required = {"python3"};
-  }
-  for (const std::string& needed : required) {
+  for (const std::string& needed : tools_required_by(step)) {
     if (std::find(recipe.tools.begin(), recipe.tools.end(), needed) ==
         recipe.tools.end()) {
       return false;
