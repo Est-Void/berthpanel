@@ -177,10 +177,10 @@ Result<std::string> resolve_head_sha(const Paths& paths,
     return std::move(branch).error();
 
   const std::string target = ref.empty() ? branch.value() : ref;
-  Result<HttpReply> head = get_ok(
-      repo_url + "/commits/" + target,
-      github_options("github-commits", nullptr, cancel), paths, "commits api",
-      owner_repo, "ref " + target);
+  Result<HttpReply> head =
+      get_ok(repo_url + "/commits/" + target,
+             github_options("github-commits", nullptr, cancel), paths,
+             "commits api", owner_repo, "ref " + target);
   if (head.is_err())
     return std::move(head).error();
   return parse_commit_sha(head.value().body);

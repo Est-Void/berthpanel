@@ -65,8 +65,8 @@ TEST(resolve_head_sha_resolves_the_pinned_head_opt_in) {
   berth::Paths paths;
   paths.net_log = tmp.path() / "net.log";
 
-  const auto sha = berth::resolve_head_sha(paths, "hashicorp/http-echo", "",
-                                           nullptr);
+  const auto sha =
+      berth::resolve_head_sha(paths, "hashicorp/http-echo", "", nullptr);
   CHECK(sha.is_ok());
   CHECK(sha.value().size() == 40);
 

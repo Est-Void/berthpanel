@@ -70,8 +70,10 @@ TEST(detect_bun_lockfile_picks_bun) {
   CHECK(draft.is_ok());
   CHECK(draft.value().recipe.language == "node");
   CHECK(draft.value().recipe.tools == std::vector<std::string>{"bun"});
-  CHECK(draft.value().recipe.build_steps.size() == 1);    // install only, no script
-  CHECK(draft.value().recipe.binary_name == "index.js");  // package.json default
+  CHECK(draft.value().recipe.build_steps.size() ==
+        1);  // install only, no script
+  CHECK(draft.value().recipe.binary_name ==
+        "index.js");  // package.json default
   CHECK(draft.value().recipe.start_cmd.find("{project}/index.js") !=
         std::string::npos);
   CHECK(berth::validate_recipe(draft.value().recipe).is_ok());
@@ -193,10 +195,9 @@ TEST(detect_prefetch_steps_download_without_executing) {
 TEST(detect_cmd_exec_form_hints_loopback_flags) {
   const TempDir tmp;
   CHECK(berth::atomic_write(tmp.path() / "go.mod", kGoMod).is_ok());
-  CHECK(berth::atomic_write(
-            tmp.path() / "Dockerfile",
-            "FROM scratch\nCMD [\"/myapp\", \"-text\", \"hi\", "
-            "\"-addr\", \"127.0.0.1\"]\n")
+  CHECK(berth::atomic_write(tmp.path() / "Dockerfile",
+                            "FROM scratch\nCMD [\"/myapp\", \"-text\", \"hi\", "
+                            "\"-addr\", \"127.0.0.1\"]\n")
             .is_ok());
   const auto draft = berth::detect_recipe(request_for(tmp.path()));
   CHECK(draft.is_ok());
@@ -216,14 +217,14 @@ TEST(detect_cmd_exec_form_hints_loopback_flags) {
 TEST(detect_cmd_without_a_loopback_bind_falls_back_to_the_template) {
   const TempDir tmp;
   CHECK(berth::atomic_write(tmp.path() / "go.mod", kGoMod).is_ok());
-  CHECK(berth::atomic_write(tmp.path() / "Dockerfile",
-                            "FROM scratch\nCMD [\"/myapp\", \"-text\", \"hi\"]\n")
-            .is_ok());
+  CHECK(
+      berth::atomic_write(tmp.path() / "Dockerfile",
+                          "FROM scratch\nCMD [\"/myapp\", \"-text\", \"hi\"]\n")
+          .is_ok());
   const auto draft = berth::detect_recipe(request_for(tmp.path()));
   CHECK(draft.is_ok());
   CHECK(draft.value().recipe.start_cmd.find("{port}") != std::string::npos);
-  CHECK(draft.value().recipe.start_cmd.find("127.0.0.1") !=
-        std::string::npos);
+  CHECK(draft.value().recipe.start_cmd.find("127.0.0.1") != std::string::npos);
 }
 
 TEST(detect_cmd_shell_syntax_is_a_warning_not_a_draft) {

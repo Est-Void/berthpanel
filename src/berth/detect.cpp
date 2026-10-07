@@ -187,10 +187,9 @@ Result<std::vector<std::string>> dockerfile_cmd_hint(
         return Error("detect: Dockerfile CMD is a malformed JSON array");
       }
       if (!doc.is_array() || doc.empty() ||
-          !std::all_of(doc.begin(), doc.end(),
-                       [](const nlohmann::json& item) {
-                         return item.is_string();
-                       })) {
+          !std::all_of(doc.begin(), doc.end(), [](const nlohmann::json& item) {
+            return item.is_string();
+          })) {
         return Error(
             "detect: Dockerfile CMD exec form must be a non-empty array of "
             "strings");
@@ -203,8 +202,9 @@ Result<std::vector<std::string>> dockerfile_cmd_hint(
     }
     // Shell form: only accept plain whitespace-separated words.
     if (rest.find_first_of(";|&><$`\"'\\") != std::string::npos) {
-      return Error("detect: Dockerfile CMD uses shell syntax; write the "
-                   "start command into the recipe by hand");
+      return Error(
+          "detect: Dockerfile CMD uses shell syntax; write the "
+          "start command into the recipe by hand");
     }
     std::vector<std::string> argv;
     for (const std::string& token : split(rest, " ")) {
@@ -264,8 +264,8 @@ Result<RecipeDraft> detect_recipe(const DetectRequest& request) {
   const bool node_stack = present(dir / "package.json");
   const bool python_stack =
       present(dir / "pyproject.toml") || present(dir / "requirements.txt");
-  int families = (go_stack ? 1 : 0) + (node_stack ? 1 : 0) +
-                 (python_stack ? 1 : 0);
+  int families =
+      (go_stack ? 1 : 0) + (node_stack ? 1 : 0) + (python_stack ? 1 : 0);
   if (families > 1) {
     std::vector<std::string> markers;
     if (go_stack)
@@ -274,8 +274,8 @@ Result<RecipeDraft> detect_recipe(const DetectRequest& request) {
       markers.push_back("package.json");
     if (python_stack)
       markers.push_back("pyproject.toml/requirements.txt");
-    return Error("detect: ambiguous stack: " + join(markers, " + ") +
-                 " in " + dir.string() +
+    return Error("detect: ambiguous stack: " + join(markers, " + ") + " in " +
+                 dir.string() +
                  "; remove or rename the marker you do not mean");
   }
 
@@ -338,14 +338,14 @@ Result<RecipeDraft> detect_recipe(const DetectRequest& request) {
     r.start_cmd = start;
     r.description =
         "Detected Go app from " + request.owner + "/" + request.name;
-  } else if (node_stack) {    Result<NodeTool> tool = node_tool_of(dir);
+  } else if (node_stack) {
+    Result<NodeTool> tool = node_tool_of(dir);
     if (tool.is_err())
       return std::move(tool).error();
     Result<PackageJson> pkg = read_package_json(dir);
     if (pkg.is_err())
       return std::move(pkg).error();
-    const std::string runner =
-        tool.value() == NodeTool::kPnpm ? "pnpm" : "bun";
+    const std::string runner = tool.value() == NodeTool::kPnpm ? "pnpm" : "bun";
     r.language = "node";
     r.tools = {runner};
     std::vector<std::vector<std::string>> build = {{runner, "install"}};

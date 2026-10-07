@@ -105,7 +105,8 @@ Result<std::vector<std::string>> split_command_template(
   return tokens;
 }
 
-std::vector<std::string> tools_required_by(const std::vector<std::string>& step) {
+std::vector<std::string> tools_required_by(
+    const std::vector<std::string>& step) {
   if (step.empty())
     return {};
   const std::string program = program_name(step);
