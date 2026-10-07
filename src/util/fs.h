@@ -15,6 +15,11 @@ constexpr std::filesystem::perms kPermPrivate =
     std::filesystem::perms::owner_write;  // 0600
 constexpr std::filesystem::perms kPermPrivateDir =
     std::filesystem::perms::owner_all;  // 0700
+// World-readable but not writable: for files that carry no secrets.
+constexpr std::filesystem::perms kPermShared =
+    std::filesystem::perms::owner_read | std::filesystem::perms::owner_write |
+    std::filesystem::perms::group_read |
+    std::filesystem::perms::others_read;  // 0644
 
 // mkdir -p, then chmod to the exact mode (create_directories leaves umask
 // bits behind, which for a private dir would be a real leak).

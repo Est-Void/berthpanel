@@ -203,7 +203,7 @@ int recipe_list_command() {
   return 0;
 }
 
-int recipe_add_command(const std::string_view file_arg) {
+int recipe_add_command(const std::string_view file_arg, const bool force) {
   const berth::Result<berth::Paths> paths = berth::paths_from_env();
   if (paths.is_err())
     return fail(paths.error().ctx());
@@ -223,7 +223,7 @@ int recipe_add_command(const std::string_view file_arg) {
     return fail("recipe-add: " + file.string() + ": " + parsed.error().ctx());
 
   const berth::Result<std::filesystem::path> stored =
-      berth::user_recipe_store(paths.value(), parsed.value());
+      berth::user_recipe_store(paths.value(), parsed.value(), force);
   if (stored.is_err())
     return fail(stored.error().ctx());
   std::cout << "stored " << parsed.value().service_name << " -> "
@@ -365,9 +365,10 @@ int recipe_draft_command(const std::string_view url_arg,
     return fail(draft.error().ctx());
 
   // The draft is ALWAYS saved, untouched or not: what can be deployed is
-  // what is on disk (reproducibility, plan 4.21).
+  // what is on disk (reproducibility, plan 4.21). Re-saving a draft is an
+  // explicit act, so it overwrites its own earlier version.
   const berth::Result<std::filesystem::path> stored =
-      berth::user_recipe_store(paths.value(), draft.value());
+      berth::user_recipe_store(paths.value(), draft.value(), true);
   if (stored.is_err())
     return fail(stored.error().ctx());
 
@@ -406,7 +407,10 @@ int run(const std::span<const char* const> args) {
     if (first == "__recipe-list")
       return recipe_list_command();
     if (first == "__recipe-add" && args.size() == 2)
-      return recipe_add_command(args[1]);
+      return recipe_add_command(args[1], false);
+    if (first == "__recipe-add" && args.size() == 3 &&
+        std::string_view(args[2]) == "--force")
+      return recipe_add_command(args[1], true);
     if (first == "__recipe-remove" && args.size() == 2)
       return recipe_remove_command(args[1]);
     if (first == "__recipe-draft" && args.size() >= 2)
@@ -449,7 +453,8 @@ int run(const std::span<const char* const> args) {
   std::cerr << "usage: berthpanel [--version] [--show-endpoints] "
                "[--verify-sandbox]\n"
                "       berthpanel __egress-probe | __catalog | __services\n"
-               "       berthpanel __recipe-list | __recipe-add <file.json> | "
+               "       berthpanel __recipe-list | __recipe-add <file.json> "
+               "[--force] | "
                "__recipe-remove <service>\n"
                "       berthpanel __recipe-draft <github_url> [ref]\n"
                "       berthpanel __deploy <service_name> [port] [--upgrade]\n"

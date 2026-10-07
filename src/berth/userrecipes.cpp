@@ -12,6 +12,7 @@
 #include "../core/json.h"
 #include "../core/names.h"
 #include "../util/fs.h"
+#include "catalog.h"
 
 namespace berth {
 
@@ -40,7 +41,8 @@ std::filesystem::path recipe_file(const Paths& paths,
 }  // namespace
 
 Result<std::filesystem::path> user_recipe_store(const Paths& paths,
-                                                const Recipe& recipe) {
+                                                const Recipe& recipe,
+                                                const bool force) {
   Result<std::string> name = normalize_service_name(recipe.service_name);
   if (name.is_err())
     return std::move(name).error();
@@ -55,12 +57,34 @@ Result<std::filesystem::path> user_recipe_store(const Paths& paths,
                  "' rejected: " + valid.error().ctx());
   }
 
+  // Duplicate policy: silently replacing a stored recipe (or shadowing a
+  // curated one) hides whose definition actually deploys. Both need the
+  // explicit `force`.
+  if (!force) {
+    const Result<std::optional<Recipe>> existing =
+        user_recipe_get(paths, name.value());
+    if (existing.is_err())
+      return std::move(existing).error();
+    if (existing.value().has_value()) {
+      return Error("userrecipes: '" + name.value() +
+                   "' is already stored as a user recipe; pass --force to "
+                   "overwrite it");
+    }
+    const Result<Recipe> builtin = builtin_recipe(name.value());
+    if (builtin.is_ok()) {
+      return Error("userrecipes: '" + name.value() +
+                   "' collides with the builtin catalog; pass --force to "
+                   "store an override");
+    }
+  }
+
   Result<void> dir = ensure_dir(paths.recipes_dir);
   if (dir.is_err())
     return std::move(dir).error();
   const std::filesystem::path target = recipe_file(paths, name.value());
-  Result<void> written =
-      atomic_write(target, recipe_to_json(stored).dump(2) + "\n");
+  // 0644: recipes carry env KEYS, never values (secrets.cpp holds those).
+  Result<void> written = atomic_write(target, recipe_to_json(stored).dump(2) + "\n",
+                                      kPermShared);
   if (written.is_err())
     return std::move(written).error();
   return target;
@@ -111,6 +135,14 @@ Result<std::vector<Recipe>> user_recipes_load(const Paths& paths) {
     if (valid.is_err()) {
       return Error("userrecipes: " + file.string() +
                    " failed validation: " + valid.error().ctx());
+    }
+    // The file name IS the service name (§11: every value reaching a path
+    // is validated). A renamed hand-edit must not store a recipe under a
+    // name its file cannot be removed or found by again.
+    if (file.filename().replace_extension() != parsed.value().service_name) {
+      return Error("userrecipes: " + file.string() + ": service_name '" +
+                   parsed.value().service_name +
+                   "' does not match the file name");
     }
     recipes.push_back(std::move(parsed).value());
   }

@@ -8,10 +8,11 @@
 // the builtin catalog passes at load (§11: two validators that disagree).
 // A file that fails to parse or to validate is a LOUD error naming the
 // file and the violated rule; it is never skipped and never read as
-// absent. service_name gets the `berthpanel-` prefix added on store when
-// missing, then the shared validate_unit_name enforces it like everywhere
-// else. Recipes hold env KEYS, never values — secrets live in the
-// 0600 secrets file at deploy time (secrets.cpp).
+// absent. service_name gets the `berthpanel-` prefix added on store, then
+// the shared validate_unit_name enforces it like everywhere else; on load
+// a name that fails is an Err, never a silent rename. Recipes hold env
+// KEYS, never values — secrets live in the 0600 secrets file at deploy
+// time (secrets.cpp).
 
 #include <optional>
 #include <string>
@@ -24,14 +25,19 @@
 
 namespace berth {
 
-// Upsert: an existing recipe with the same service_name is replaced.
-// The service name is normalized with the mandatory prefix before
-// validation and before the file name is derived from it.
+// Stores the recipe as <recipes_dir>/<service_name>.json (0644: a recipe
+// holds env KEYS, never values). Without `force`, a service_name that
+// already exists as a user recipe OR in the builtin catalog is an Err —
+// overwriting either is an explicit act. The service name is normalized
+// with the mandatory prefix before validation and before the file name is
+// derived from it.
 [[nodiscard]] Result<std::filesystem::path> user_recipe_store(
-    const Paths& paths, const Recipe& recipe);
+    const Paths& paths, const Recipe& recipe, bool force);
 
 // Loads EVERY recipe file. One bad file fails the whole load — a corrupt
-// recipe must not silently disappear from listings (§11).
+// recipe must not silently disappear from listings (§11). A file whose
+// service_name does not match its own name is refused the same way: the
+// file name IS the service name.
 [[nodiscard]] Result<std::vector<Recipe>> user_recipes_load(const Paths& paths);
 
 // Ok(nullopt) when no recipe with this name is stored.
