@@ -125,6 +125,7 @@ TEST_SRC := \
 	tests/atomic_test.cpp \
 	tests/json_test.cpp \
 	tests/state_test.cpp \
+	tests/jsonout_test.cpp \
 	tests/flags_test.cpp \
 	tests/netlog_test.cpp \
 	tests/netstatus_test.cpp \

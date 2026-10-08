@@ -51,4 +51,9 @@ namespace berth {
 [[nodiscard]] std::string render_user_recipes_list(
     const std::vector<Recipe>& recipes);
 
+// The `--json` document for the stored user recipes (plan 5.3): versioned
+// envelope plus a `recipes` array sorted by service_name.
+[[nodiscard]] nlohmann::json user_recipes_json(
+    const std::vector<Recipe>& recipes);
+
 }  // namespace berth

@@ -28,4 +28,8 @@ namespace berth {
 
 [[nodiscard]] std::string render_catalog_list();
 
+// The `--json` document for the builtin catalog (plan 5.3): versioned
+// envelope plus a `recipes` array sorted by service_name.
+[[nodiscard]] nlohmann::json catalog_json();
+
 }  // namespace berth

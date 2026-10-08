@@ -12,6 +12,8 @@
 #include <string_view>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "core/paths.h"
 #include "util/result.h"
 
@@ -45,5 +47,10 @@ struct Registry {
 
 [[nodiscard]] Result<void> registry_unregister(const Paths& paths,
                                                std::string_view service_name);
+
+// The `--json` document for the registry (plan 5.3): the versioned envelope
+// plus a `services` array sorted by service_name, so the bytes are stable.
+[[nodiscard]] nlohmann::json services_json(
+    const std::vector<ServiceRecord>& services);
 
 }  // namespace berth

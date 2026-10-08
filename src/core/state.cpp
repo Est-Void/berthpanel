@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/docstore.h"
+#include "core/jsonout.h"
 #include "core/names.h"
 #include "core/paths.h"
 
@@ -152,6 +153,20 @@ Result<void> registry_unregister(const Paths& paths,
                  std::string(service_name));
   }
   return registry_store(paths, Registry{.services = std::move(services)});
+}
+
+nlohmann::json services_json(const std::vector<ServiceRecord>& services) {
+  std::vector<ServiceRecord> sorted = services;
+  std::sort(sorted.begin(), sorted.end(),
+            [](const ServiceRecord& a, const ServiceRecord& b) {
+              return a.service_name < b.service_name;
+            });
+  nlohmann::json array = nlohmann::json::array();
+  for (const ServiceRecord& record : sorted)
+    array.push_back(record_to_json(record));
+  nlohmann::json doc = json_document("services");
+  doc["services"] = std::move(array);
+  return doc;
 }
 
 }  // namespace berth

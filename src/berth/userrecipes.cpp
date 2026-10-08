@@ -10,6 +10,7 @@
 
 #include "../core/atomic.h"
 #include "../core/json.h"
+#include "../core/jsonout.h"
 #include "../core/names.h"
 #include "../util/fs.h"
 #include "catalog.h"
@@ -200,6 +201,18 @@ std::string render_user_recipes_list(const std::vector<Recipe>& recipes) {
     out += "\n";
   }
   return out;
+}
+
+nlohmann::json user_recipes_json(const std::vector<Recipe>& recipes) {
+  std::vector<Recipe> sorted = recipes;
+  std::sort(sorted.begin(), sorted.end(), [](const Recipe& a, const Recipe& b) {
+    return a.service_name < b.service_name;
+  });
+  nlohmann::json array = nlohmann::json::array();
+  for (const Recipe& recipe : sorted) array.push_back(recipe_to_json(recipe));
+  nlohmann::json doc = json_document("recipe-list");
+  doc["recipes"] = std::move(array);
+  return doc;
 }
 
 }  // namespace berth

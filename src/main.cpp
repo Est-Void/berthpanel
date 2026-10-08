@@ -33,6 +33,7 @@
 #include "berth/validate.h"
 #include "berth/wizard.h"
 #include "core/json.h"
+#include "core/jsonout.h"
 #include "core/names.h"
 #include "core/netlog.h"
 #include "core/paths.h"
@@ -95,13 +96,16 @@ void print_usage() {
                "terminal)\n"
                "       berthpanel [--version] [--show-endpoints] "
                "[--verify-sandbox]\n"
-               "       berthpanel __egress-probe | __catalog | __services\n"
-               "       berthpanel __recipe-list | __recipe-add <file.json> "
+               "       berthpanel __egress-probe | __catalog [--json] | "
+               "__services [--json]\n"
+               "       berthpanel __recipe-list [--json] | "
+               "__recipe-add <file.json> "
                "[--force] | "
                "__recipe-remove <service>\n"
                "       berthpanel __recipe-draft <github_url> [ref] [--apply] "
                "[--force]\n"
-               "       berthpanel __deploy <service_name> [port] [--upgrade]\n"
+               "       berthpanel __deploy <service_name> [port] [--upgrade] "
+               "[--json]\n"
                "       berthpanel __cleanup [--install] [--quiet]\n"
                "       berthpanel __serve-static <root> [--listen "
                "127.0.0.1:<port>]\n";
@@ -109,7 +113,7 @@ void print_usage() {
 
 int deploy_command(const std::string_view service,
                    const std::string_view port_arg,
-                   const bool upgrade_confirmed) {
+                   const bool upgrade_confirmed, const bool json) {
   const berth::Result<berth::Paths> paths = berth::paths_from_env();
   if (paths.is_err())
     return fail(paths.error().ctx());
@@ -173,6 +177,20 @@ int deploy_command(const std::string_view service,
     std::cerr << "deploy failed:\n" << outcome.error().ctx() << "\n";
     return 1;
   }
+  if (json) {
+    nlohmann::json doc = berth::json_document("deploy");
+    doc["service_name"] = outcome.value().service_name;
+    doc["action"] =
+        is_upgrade ? "upgraded"
+                   : (existing.value().has_value() ? "repair" : "deployed");
+    doc["repo"] = recipe.value().owner_repo();
+    doc["commit"] = recipe.value().commit;
+    doc["port"] = outcome.value().port;
+    doc["unit"] = outcome.value().unit_path.string();
+    doc["work_dir"] = outcome.value().work_dir.string();
+    std::cout << berth::json_text(doc);
+    return 0;
+  }
   if (is_upgrade) {
     std::cout << "upgraded " << outcome.value().service_name << ": "
               << existing.value()->commit.substr(0, 7) << " -> "
@@ -189,7 +207,7 @@ int deploy_command(const std::string_view service,
   return 0;
 }
 
-int services_command() {
+int services_command(const bool json) {
   const berth::Result<berth::Paths> paths = berth::paths_from_env();
   if (paths.is_err())
     return fail(paths.error().ctx());
@@ -197,6 +215,10 @@ int services_command() {
       berth::registry_list(paths.value());
   if (listed.is_err())
     return fail(listed.error().ctx());
+  if (json) {
+    std::cout << berth::json_text(berth::services_json(listed.value()));
+    return 0;
+  }
   if (listed.value().empty()) {
     std::cout << "no services registered\n";
     return 0;
@@ -217,7 +239,7 @@ int verify_sandbox_command() {
   return audit.value().full_grade() ? 0 : 1;
 }
 
-int recipe_list_command() {
+int recipe_list_command(const bool json) {
   const berth::Result<berth::Paths> paths = berth::paths_from_env();
   if (paths.is_err())
     return fail(paths.error().ctx());
@@ -225,6 +247,10 @@ int recipe_list_command() {
       berth::user_recipes_load(paths.value());
   if (recipes.is_err())
     return fail(recipes.error().ctx());
+  if (json) {
+    std::cout << berth::json_text(berth::user_recipes_json(recipes.value()));
+    return 0;
+  }
   std::cout << berth::render_user_recipes_list(recipes.value());
   return 0;
 }
@@ -442,13 +468,16 @@ int run(const std::span<const char* const> args) {
     if (first == "__egress-probe")
       return egress_probe();
     if (first == "__catalog") {
-      std::cout << berth::render_catalog_list();
+      if (contains_flag(args, "--json"))
+        std::cout << berth::json_text(berth::catalog_json());
+      else
+        std::cout << berth::render_catalog_list();
       return 0;
     }
     if (first == "__services")
-      return services_command();
+      return services_command(contains_flag(args, "--json"));
     if (first == "__recipe-list")
-      return recipe_list_command();
+      return recipe_list_command(contains_flag(args, "--json"));
     if (first == "__recipe-add" && args.size() == 2)
       return recipe_add_command(args[1], false);
     if (first == "__recipe-add" && args.size() == 3 &&
@@ -475,14 +504,18 @@ int run(const std::span<const char* const> args) {
       const std::string_view service = args[1];
       std::string_view port_arg;
       bool upgrade = false;
+      bool json = false;
       for (std::size_t i = 2; i < args.size(); ++i) {
-        if (std::string_view(args[i]) == "--upgrade") {
+        const std::string_view arg(args[i]);
+        if (arg == "--upgrade") {
           upgrade = true;
+        } else if (arg == "--json") {
+          json = true;
         } else if (port_arg.empty()) {
           port_arg = args[i];
         }
       }
-      return deploy_command(service, port_arg, upgrade);
+      return deploy_command(service, port_arg, upgrade, json);
     }
     if (first == "__cleanup") {
       return cleanup_command(contains_flag(args, "--install"),

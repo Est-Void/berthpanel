@@ -1,7 +1,9 @@
 #include "catalog.h"
 
+#include <algorithm>
 #include <string>
 
+#include "../core/jsonout.h"
 #include "../core/names.h"
 #include "userrecipes.h"
 #include "validate.h"
@@ -93,6 +95,23 @@ std::string render_catalog_list() {
            std::to_string(recipe.res.tasks_max) + ")\n";
   }
   return out;
+}
+
+nlohmann::json catalog_json() {
+  Result<std::vector<Recipe>> catalog = builtin_catalog();
+  nlohmann::json doc = json_document("catalog");
+  if (catalog.is_err()) {
+    doc["error"] = catalog.error().ctx();
+    return doc;
+  }
+  std::vector<Recipe> sorted = std::move(catalog).value();
+  std::sort(sorted.begin(), sorted.end(), [](const Recipe& a, const Recipe& b) {
+    return a.service_name < b.service_name;
+  });
+  nlohmann::json array = nlohmann::json::array();
+  for (const Recipe& recipe : sorted) array.push_back(recipe_to_json(recipe));
+  doc["recipes"] = std::move(array);
+  return doc;
 }
 
 }  // namespace berth
