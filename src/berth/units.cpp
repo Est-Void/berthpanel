@@ -220,11 +220,20 @@ Result<void> check_unit_spec(const UnitSpec& spec) {
   return {};
 }
 
-void append_unit_section(std::string* out, const UnitSpec& spec) {
+Result<void> append_unit_section(std::string* out, const UnitSpec& spec) {
+  // display_name is free text (user recipes carry it) and reaches the unit
+  // file: a newline would inject arbitrary directives. Reject it loudly rather
+  // than write a unit whose behavior nobody chose (§11).
+  Result<std::string> description =
+      no_control_chars(spec.description, "description");
+  if (description.is_err())
+    return std::move(description).error();
   *out += "[Unit]\n";
-  *out += "Description=" + spec.description + " (" + spec.service_name + ")\n";
+  *out += "Description=" + description.value() + " (" + spec.service_name +
+          ")\n";
   *out += "After=network-online.target\n";
   *out += "Wants=network-online.target\n\n";
+  return {};
 }
 
 void append_policy_section(std::string* out, const UnitSpec& spec) {
@@ -296,7 +305,9 @@ Result<std::string> render_unit(const UnitSpec& spec) {
     return std::move(checked).error();
 
   std::string out = std::string(kUnitComment);
-  append_unit_section(&out, spec);
+  const Result<void> unit_section = append_unit_section(&out, spec);
+  if (unit_section.is_err())
+    return std::move(unit_section).error();
 
   out += "[Service]\n";
   out += "Type=simple\n";

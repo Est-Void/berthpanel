@@ -121,6 +121,16 @@ TEST(units_refuses_invalid_service_name) {
   CHECK(render_unit(bad).is_err());
 }
 
+TEST(units_refuses_a_description_that_could_inject_directives) {
+  // display_name is free text from a user recipe and lands in the unit file
+  // verbatim; a newline would add directives nobody chose (§11).
+  UnitSpec spec = base_spec();
+  spec.description = "Memos\nExecStart=/bin/sh -c evil";
+  CHECK(render_unit(spec).is_err());
+  spec.description = "Memos\rX";
+  CHECK(render_unit(spec).is_err());
+}
+
 TEST(units_read_write_paths_are_one_directive_each) {
   UnitSpec spec = base_spec();
   spec.read_write_paths = {"/home/u/My Apps/data", "/home/u/state"};
