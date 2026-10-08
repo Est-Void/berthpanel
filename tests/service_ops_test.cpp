@@ -67,6 +67,11 @@ TEST(proc_stat_state_reads_the_state_after_the_last_paren) {
   CHECK(proc_stat_state("no parens here S 1") == '\0');
   CHECK(proc_stat_state("1234 (truncated") == '\0');
   CHECK(proc_stat_state("1234 (memos) ? 1 2") == '\0');
+  // A line that ends exactly at the space after ')' has no state character;
+  // indexing close+2 there is one past the end (the old '>' guard let it
+  // through).
+  CHECK(proc_stat_state("7 (a) ") == '\0');
+  CHECK(proc_stat_state("7 (a)") == '\0');
 }
 
 }  // namespace

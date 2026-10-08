@@ -190,7 +190,10 @@ char proc_stat_state(const std::string_view stat_line) {
   // "1234 (some (weird) name) T 1234 ..." — the comm field is in parentheses
   // and may contain both, so the LAST ')' is the only reliable separator.
   const std::size_t close = stat_line.rfind(')');
-  if (close == std::string_view::npos || close + 2 > stat_line.size()) {
+  // `close + 2` is the index of the state character; it must be strictly
+  // inside the view. `>` let a line that ends exactly at the separating space
+  // (e.g. "1 (x) ") index one past the end — an OOB read on hostile input.
+  if (close == std::string_view::npos || close + 2 >= stat_line.size()) {
     return '\0';
   }
   const char state = stat_line[close + 2];
