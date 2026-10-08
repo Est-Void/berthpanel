@@ -81,3 +81,14 @@ TEST(denylist_does_not_trip_on_substrings) {
   CHECK(matched_dangerous_patterns(std::string_view("resumes")).empty());
   CHECK(matched_dangerous_patterns(std::string_view("mkfsx")).empty());
 }
+
+TEST(owner_repo_rejects_traversal_components) {
+  // "." and ".." pass is_repo_char (which allows '.'), but they are path
+  // components: "../foo" would walk up a directory in the API/URL path.
+  CHECK(berth::validate_owner_repo("owner/repo").is_ok());
+  CHECK(berth::validate_owner_repo("use-memos/memos").is_ok());
+  CHECK(berth::validate_owner_repo("../foo").is_err());
+  CHECK(berth::validate_owner_repo("owner/..").is_err());
+  CHECK(berth::validate_owner_repo("./repo").is_err());
+  CHECK(berth::validate_owner_repo("owner/.").is_err());
+}

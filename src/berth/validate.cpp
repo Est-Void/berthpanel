@@ -122,6 +122,15 @@ Result<void> validate_owner_repo(const std::string_view owner_repo) {
     return Error("validate: bad character in '" + std::string(owner_repo) +
                  "'");
   }
+  // "." and ".." pass is_repo_char (which allows '.'), but they are path
+  // components, not names: "../foo" would build a URL path that walks up a
+  // directory on the API host. Reject them here, at the one validator.
+  const std::string_view owner = owner_repo.substr(0, slash);
+  const std::string_view repo = owner_repo.substr(slash + 1);
+  if (owner == "." || owner == ".." || repo == "." || repo == "..") {
+    return Error("validate: '.' and '..' are not valid owner/repo components: '" +
+                 std::string(owner_repo) + "'");
+  }
   return {};
 }
 
