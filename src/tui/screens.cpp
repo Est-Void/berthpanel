@@ -139,7 +139,7 @@ void follow_deploy_log(const std::shared_ptr<Panel>& panel,
 
 void start_deploy(const std::shared_ptr<Panel>& panel,
                   const berth::Paths& paths, const berth::Recipe& recipe,
-                  const std::uint16_t forced_port) {
+                  const std::uint16_t forced_port, DeployPreStore pre_store) {
   {
     std::lock_guard lock(panel->mutex);
     // One deploy at a time, in the UI. The engine's deploy.lock is the second
@@ -168,7 +168,8 @@ void start_deploy(const std::shared_ptr<Panel>& panel,
 
   run_on_worker<berth::DeployOutcome>(
       panel, "deploy " + recipe.service_name,
-      [paths, recipe, forced_port, gate, panel](const std::shared_ptr<Op>& op) {
+      [paths, recipe, forced_port, gate, panel,
+       pre_store](const std::shared_ptr<Op>& op) {
         {
           // Publish the op BEFORE the tail-ready wait. `c` reaches the engine
           // only through panel->deploy_op; assigning it after a wait of up to
@@ -178,6 +179,18 @@ void start_deploy(const std::shared_ptr<Panel>& panel,
           panel->deploy_op = op;
         }
         static_cast<void>(wait_for_flag(gate->ready, kTailReadyBudget));
+        if (pre_store) {
+          // The store runs here, on the deploy's own worker, so it is FINISHED
+          // before the first byte of the deploy. It used to run on its own
+          // worker while start_deploy was called synchronously right after, so
+          // a failed store still deployed the draft.
+          const berth::Result<void> stored = pre_store();
+          if (stored.is_err()) {
+            return berth::Result<berth::DeployOutcome>(
+                berth::Error("deploy: storing the recipe first failed: " +
+                             stored.error().ctx()));
+          }
+        }
         berth::RealDeployOps ops;
         berth::DeployOptions options;
         options.cancel = &op->cancel;
@@ -666,13 +679,29 @@ void accept_draft(const std::shared_ptr<Panel>& panel,
     return;
   }
 
+  if (deploy_after) {
+    // Store and deploy are ONE worker: start_deploy's worker runs pre_store to
+    // completion before run_deploy, so a refused store aborts the deploy.
+    // Starting the store on its own worker and calling start_deploy right after
+    // raced the two and deployed a draft that was never written (wizard.h).
+    refresh_catalog(panel, paths);
+    start_deploy(panel, paths, recipe, port,
+                 [paths, recipe, force]() -> berth::Result<void> {
+                   const berth::Result<std::filesystem::path> stored =
+                       berth::store_draft(paths, recipe, force);
+                   if (stored.is_err())
+                     return std::move(stored).error();
+                   return {};
+                 });
+    return;
+  }
+
   run_on_worker<std::filesystem::path>(
       panel, "store draft",
       [paths, recipe, force](const std::shared_ptr<Op>& /*op*/) {
         return berth::store_draft(paths, recipe, force);
       },
-      [deploy_after, recipe, port](
-          Panel& state, berth::Result<std::filesystem::path>&& stored) {
+      [](Panel& state, berth::Result<std::filesystem::path>&& stored) {
         state.draft_clash_confirming = false;
         if (stored.is_err()) {
           state.draft_error = stored.error().ctx();
@@ -682,15 +711,8 @@ void accept_draft(const std::shared_ptr<Panel>& panel,
         state.draft_stored = true;
         state.draft_stored_path = stored.value();
         state.draft_error.clear();
-        state.draft_status = deploy_after ? "stored, deploying" : "stored";
+        state.draft_status = "stored";
       });
-  if (deploy_after) {
-    // The catalog is what the recipe list is drawn from, so a freshly stored
-    // draft shows up only after it is re-read — and the deploy starts from the
-    // draft itself, never from the list, so the two do not race.
-    refresh_catalog(panel, paths);
-    start_deploy(panel, paths, recipe, port);
-  }
 }
 
 void discard_draft(const std::shared_ptr<Panel>& panel) {

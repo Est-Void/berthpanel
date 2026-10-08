@@ -34,9 +34,15 @@ void refresh_catalog(const std::shared_ptr<Panel>& panel,
 // free port" — the port field's empty case. Refuses to start while another
 // deploy is in flight; the engine's own deploy lock is the second line of
 // defence against a CLI deploy, not a replacement for this guard.
+//
+// `pre_store`, when set, runs on the SAME worker immediately before the deploy
+// and aborts it on failure. That is what makes "d = store and deploy" honest:
+// the store is not a separate async step whose result can arrive after the
+// deploy already started, so a draft that was not written is never deployed.
+using DeployPreStore = std::function<berth::Result<void>()>;
 void start_deploy(const std::shared_ptr<Panel>& panel,
                   const berth::Paths& paths, const berth::Recipe& recipe,
-                  std::uint16_t forced_port);
+                  std::uint16_t forced_port, DeployPreStore pre_store = {});
 
 // Flips the cancel flag of the deploy in flight. The engine kills its
 // subprocesses and returns; the journal entry stays for __cleanup (§6.7).
