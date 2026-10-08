@@ -123,15 +123,30 @@ class AppComponent final : public ftxui::ComponentBase {
       return true;
     }
 
+    // The modals below read and mutate Panel fields that a worker's apply
+    // callback can also touch (draft_clash_confirming, confirming_kill,
+    // confirming_uninstall): the read-and-decide is done under the panel lock.
+    // The ACTION is taken with the lock released, because the action functions
+    // take it themselves.
+
     // The overwrite question is modal, and it is FIRST: a dialog that answers
     // "store this over an existing recipe" must not be reachable while another
     // dialog is open.
-    if (panel_->draft_clash_confirming) {
-      const DraftKey decision = handle_draft_clash_key(*panel_, key);
-      if (decision == DraftKey::kConfirmed) {
-        const bool deploy_after = panel_->draft_pending_deploy;
-        accept_draft(panel_, panel_->paths, deploy_after, /*force=*/true);
+    bool draft_confirming = false;
+    bool draft_confirmed = false;
+    bool deploy_after = false;
+    {
+      std::lock_guard lock(panel_->mutex);
+      if (panel_->draft_clash_confirming) {
+        draft_confirming = true;
+        draft_confirmed =
+            handle_draft_clash_key(*panel_, key) == DraftKey::kConfirmed;
+        deploy_after = panel_->draft_pending_deploy;
       }
+    }
+    if (draft_confirming) {
+      if (draft_confirmed)
+        accept_draft(panel_, panel_->paths, deploy_after, /*force=*/true);
       return true;
     }
 
@@ -140,22 +155,43 @@ class AppComponent final : public ftxui::ComponentBase {
     // "eaten" without an uninstall behind it is a dialog that lies (§11).
     // SIGKILL is the most destructive thing here, so its question is asked
     // before anything else can consume the key.
-    if (panel_->confirming_kill) {
-      const UninstallKey decision = handle_kill_key(*panel_, key);
-      if (decision == UninstallKey::kConfirmed) {
-        service_action_kill(panel_, panel_->kill_target.service_name,
-                            /*confirmed=*/true);
+    bool kill_confirming = false;
+    UninstallKey kill_decision = UninstallKey::kEaten;
+    std::string kill_target;
+    {
+      std::lock_guard lock(panel_->mutex);
+      if (panel_->confirming_kill) {
+        kill_confirming = true;
+        kill_decision = handle_kill_key(*panel_, key);
+        kill_target = panel_->kill_target.service_name;
+      }
+    }
+    if (kill_confirming) {
+      if (kill_decision == UninstallKey::kConfirmed) {
+        service_action_kill(panel_, kill_target, /*confirmed=*/true);
+      } else if (kill_decision == UninstallKey::kQuit) {
+        // The kill dialog owns "q" the same way the uninstall dialog does.
+        quit(panel_->ops.cancel_all());
       }
       return true;
     }
 
-    if (panel_->confirming_uninstall) {
-      const UninstallKey decision = handle_uninstall_key(*panel_, key);
-      if (decision == UninstallKey::kQuit) {
+    bool uninstall_confirming = false;
+    UninstallKey uninstall_decision = UninstallKey::kEaten;
+    std::string uninstall_target;
+    {
+      std::lock_guard lock(panel_->mutex);
+      if (panel_->confirming_uninstall) {
+        uninstall_confirming = true;
+        uninstall_decision = handle_uninstall_key(*panel_, key);
+        uninstall_target = panel_->uninstall_target.service_name;
+      }
+    }
+    if (uninstall_confirming) {
+      if (uninstall_decision == UninstallKey::kQuit) {
         quit(panel_->ops.cancel_all());
-      } else if (decision == UninstallKey::kConfirmed) {
-        service_action_uninstall(panel_, panel_->paths,
-                                 panel_->uninstall_target.service_name);
+      } else if (uninstall_decision == UninstallKey::kConfirmed) {
+        service_action_uninstall(panel_, panel_->paths, uninstall_target);
       }
       return true;
     }
