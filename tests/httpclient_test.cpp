@@ -75,6 +75,20 @@ TEST(url_parse_normalizes_and_rejects) {
   CHECK(parse_http_url("https://ho st/").is_err());
 }
 
+TEST(url_parse_query_or_fragment_without_a_path) {
+  // "https://host?q" used to fold "?q" into the HOST, so the exact-match
+  // allowlist refused a perfectly valid URL.
+  const auto q = parse_http_url("https://api.github.com?per_page=1");
+  CHECK(q.is_ok());
+  CHECK(q.value().host == "api.github.com");
+  CHECK(q.value().path_query == "/?per_page=1");
+
+  const auto frag = parse_http_url("https://github.com#top");
+  CHECK(frag.is_ok());
+  CHECK(frag.value().host == "github.com");
+  CHECK(frag.value().path_query == "/#top");
+}
+
 TEST(join_redirect_forms) {
   const std::string current = "https://github.com/a/b/releases/tag/v1";
   CHECK(join_redirect(current, "https://example.com/x") ==
@@ -87,6 +101,15 @@ TEST(join_redirect_forms) {
         "https://github.com/a/b/releases/tag/v2");
   CHECK(join_redirect(current, "").empty());
   CHECK(join_redirect("garbage", "/x").empty());
+
+  // Query-only: keep the base PATH, replace its query (RFC 3986 §5.3). The
+  // old code resolved against the directory and dropped the last segment.
+  CHECK(join_redirect("https://github.com/a/b?x=1", "?y=2") ==
+        "https://github.com/a/b?y=2");
+  // A base with no path resolves relative refs against its root, not the "//"
+  // of the scheme.
+  CHECK(join_redirect("https://github.com", "v2") ==
+        "https://github.com/v2");
 }
 
 TEST(redirect_loop_exercises_cap_boundary_for_real) {

@@ -116,7 +116,7 @@ Result<HttpUrl> parse_http_url(const std::string_view url) {
   const std::string scheme = split.value().first;
   const std::string_view rest = split.value().second;
 
-  const std::size_t path_start = rest.find('/');
+  const std::size_t path_start = rest.find_first_of("/?#");
   const std::string_view authority =
       path_start == std::string_view::npos ? rest : rest.substr(0, path_start);
   if (authority.empty())
@@ -139,9 +139,16 @@ Result<HttpUrl> parse_http_url(const std::string_view url) {
   if (port.is_err())
     return std::move(port).error();
 
-  std::string path = path_start == std::string_view::npos
-                         ? "/"
-                         : std::string(rest.substr(path_start));
+  std::string path;
+  if (path_start == std::string_view::npos) {
+    path = "/";
+  } else {
+    path = std::string(rest.substr(path_start));
+    // The path can start at '?' or '#' (a query with no explicit path); the
+    // request target must be origin-form, so it needs a leading '/'.
+    if (path.front() != '/')
+      path.insert(path.begin(), '/');
+  }
   if (path.empty())
     path = "/";
 
@@ -174,10 +181,28 @@ std::string join_redirect(const std::string_view current_url,
            std::string(location);
   }
 
-  // Relative to the current document's directory.
+  // Query- or fragment-only reference: the base PATH is kept, but the base's
+  // own query/fragment is replaced (RFC 3986 §5.3). Blindly appending to the
+  // directory after the last '/' dropped the last path segment.
+  if (location.front() == '?' || location.front() == '#') {
+    const std::size_t authority_start = scheme_end + 3;
+    const std::size_t cut = current_url.find_first_of("?#", authority_start);
+    const std::size_t keep =
+        cut == std::string_view::npos ? current_url.size() : cut;
+    return std::string(current_url.substr(0, keep)) + std::string(location);
+  }
+
+  // Relative to the current document's directory. A base with no path at all
+  // (https://host) resolves against its root, not against the "//" of the
+  // scheme — the old rfind('/') produced "https://v2" for "v2".
+  const std::size_t path_start = current_url.find('/', scheme_end + 3);
+  if (path_start == std::string_view::npos) {
+    return std::string(current_url) + "/" + std::string(location);
+  }
   const std::size_t last_slash = current_url.rfind('/');
-  if (last_slash == std::string_view::npos)
+  if (last_slash == std::string_view::npos) {
     return "";
+  }
   return std::string(current_url.substr(0, last_slash + 1)) +
          std::string(location);
 }
