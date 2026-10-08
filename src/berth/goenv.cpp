@@ -21,6 +21,13 @@ namespace berth {
 Result<std::string> escape_module_path(const std::string_view module) {
   if (module.empty())
     return Error("goenv: empty module path");
+  // The escaped module becomes a path component under the module cache, so a
+  // '..' component or a leading '/' would escape it. The Go proxy path never
+  // needs either.
+  if (module.front() == '/' || module.find("..") != std::string_view::npos) {
+    return Error("goenv: module path may not be absolute or contain '..': " +
+                 std::string(module));
+  }
   std::string out;
   out.reserve(module.size() + 8);
   for (const char c : module) {
@@ -68,7 +75,13 @@ Result<std::size_t> append_segment(const std::filesystem::path& partial,
   if (fd < 0) {
     return Error("goenv: open " + partial.string() + ": " + errno_text(errno));
   }
-  const std::size_t before = static_cast<std::size_t>(::lseek(fd, 0, SEEK_END));
+  const off_t end = ::lseek(fd, 0, SEEK_END);
+  if (end < 0) {
+    const std::string why = errno_text(errno);
+    ::close(fd);
+    return Error("goenv: seek " + partial.string() + ": " + why);
+  }
+  const std::size_t before = static_cast<std::size_t>(end);
   const Result<void> written = write_all(fd, chunk);
   ::close(fd);
   if (written.is_err()) {
@@ -135,9 +148,20 @@ Result<std::filesystem::path> write_module_cache_entry(
 Result<std::filesystem::path> install_go_toolchain(
     const PinnedTool& archive, const std::filesystem::path& tools_dir,
     const Paths& paths, std::atomic<bool>* cancel) {
+  const std::filesystem::path staging =
+      paths.state_dir / "toolbox" / (archive.name + ".staging");
+  // Removes the staging dir on every early return, not only on success: a
+  // failed extraction used to leave up to a gigabyte behind.
+  struct StagingGuard {
+    std::filesystem::path dir;
+    ~StagingGuard() {
+      Result<std::size_t> removed = remove_tree(dir);
+      static_cast<void>(removed);
+    }
+  } guard{staging};
+
   Result<std::filesystem::path> verified = download_verified(
-      archive.url, archive.sha256,
-      paths.state_dir / "toolbox" / (archive.name + ".staging"), paths, cancel);
+      archive.url, archive.sha256, staging, paths, cancel);
   if (verified.is_err())
     return std::move(verified).error();
   Result<std::string> compressed = read_file(verified.value());
@@ -153,9 +177,6 @@ Result<std::filesystem::path> install_go_toolchain(
   if (!std::filesystem::exists(go_root / "bin" / "go")) {
     return Error("goenv: toolchain archive has no go/bin/go");
   }
-  Result<std::size_t> cleaned =
-      remove_tree(paths.state_dir / "toolbox" / (archive.name + ".staging"));
-  static_cast<void>(cleaned);
   return go_root;
 }
 
@@ -165,8 +186,11 @@ Result<void> seed_module(
     const std::vector<std::pair<std::string, std::string>>& url_to_sha,
     const Paths& paths, std::atomic<bool>* cancel) {
   ModuleFiles files;
+  const Result<std::string> escaped = escape_module_path(module);
+  if (escaped.is_err())
+    return std::move(escaped).error();
   const std::string base =
-      "https://proxy.golang.org/" + escape_module_path(module).value() + "/@v/";
+      "https://proxy.golang.org/" + escaped.value() + "/@v/";
   struct Want {
     const char* suffix;
     std::string* body;
@@ -199,7 +223,8 @@ Result<void> seed_module(
                    std::to_string(reply.value().status));
     }
     const std::filesystem::path staging =
-        paths.state_dir / "goenv" / (module + "@" + version + want.suffix);
+        paths.state_dir / "goenv" /
+        (escaped.value() + "@" + version + want.suffix);
     Result<void> dir = ensure_dir(staging.parent_path());
     if (dir.is_err())
       return std::move(dir).error();
@@ -210,6 +235,9 @@ Result<void> seed_module(
     Result<void> ok = verify_sha256_file(staging, expected);
     if (ok.is_err())
       return std::move(ok).error();
+    // The verified bytes are already in `reply`; the staging copy has no
+    // further use and must not accumulate (one per module per deploy).
+    static_cast<void>(remove_tree(staging));
     *want.body = std::move(reply.value().body);
   }
   Result<std::filesystem::path> dir =

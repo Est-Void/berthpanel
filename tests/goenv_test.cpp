@@ -26,6 +26,11 @@ TEST(goenv_module_path_escaping) {
   CHECK(escape_module_path("").is_err());
   CHECK(escape_module_path("bad path/x").is_err());
   CHECK(escape_module_path("has:colon/x").is_err());
+  // The escaped module is a path component under the module cache, so an
+  // absolute path or a '..' component would escape it.
+  CHECK(escape_module_path("../evil").is_err());
+  CHECK(escape_module_path("github.com/..").is_err());
+  CHECK(escape_module_path("/abs/path").is_err());
 }
 
 TEST(goenv_range_header_and_segments) {
