@@ -42,6 +42,7 @@ LIB_SRC := \
 	src/core/flags.cpp \
 	src/core/deploylog.cpp \
 	src/core/netlog.cpp \
+	src/core/netstatus.cpp \
 	src/core/names.cpp \
 	src/core/applog.cpp \
 	src/core/allowlist.cpp \
@@ -117,6 +118,7 @@ TEST_SRC := \
 	tests/state_test.cpp \
 	tests/flags_test.cpp \
 	tests/netlog_test.cpp \
+	tests/netstatus_test.cpp \
 	tests/mbedtls_smoke.cpp \
 	tests/httpclient_test.cpp \
 	tests/resolver_test.cpp \

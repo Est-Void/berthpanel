@@ -3,7 +3,8 @@
 // src/core/netlog.h — the net.log WRITER (dev.md §6.1). The allowlist policy
 // it enforces lives in allowlist.h, which this header re-exports so callers
 // need one include. Every attempt — allowed, refused, failed — lands here,
-// before and after the request. Owns no sockets.
+// before and after the request, and is counted in netstatus.h for the panel's
+// NET banner. Owns no sockets.
 
 #include <cstdint>
 #include <string_view>
