@@ -21,7 +21,13 @@ constexpr std::string_view kDohHost = "cloudflare-dns.com";
 constexpr std::string_view kDohBootstrapIps[] = {"1.1.1.1", "1.0.0.1"};
 
 bool record_is_address(const nlohmann::json& item, ResolvedIp* out) {
-  if (!item.is_object() || !item.contains("type") || !item.contains("data") ||
+  // The type check is `is_number_integer()` and not just `contains()`: a
+  // record with "type":"A" (or null, or an array) makes get<int>() throw a
+  // nlohmann type_error that only the parse_error handler above catches —
+  // so a malformed-but-valid-JSON answer would abort the process instead of
+  // failing as a Result (§6.10: no crash on malformed input).
+  if (!item.is_object() || !item.contains("type") ||
+      !item["type"].is_number_integer() || !item.contains("data") ||
       !item["data"].is_string()) {
     return false;
   }

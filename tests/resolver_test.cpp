@@ -48,6 +48,25 @@ TEST(doh_parse_rejects_loudly) {
             .is_err());
 }
 
+TEST(doh_parse_rejects_a_non_integer_type_without_throwing) {
+  // "type" used to be read with get<int>() after only a contains() check, so a
+  // valid-JSON answer with a string/null type threw nlohmann::type_error out
+  // of the parser (only parse_error is caught) and aborted the process.
+  CHECK(parse_doh_answers(
+            R"({"Status": 0, "Answer": [{"type": "A", "data": "1.1.1.1"}]})")
+            .is_err());
+  CHECK(parse_doh_answers(
+            R"({"Status": 0, "Answer": [{"type": null, "data": "1.1.1.1"}]})")
+            .is_err());
+  // A malformed record is skipped; the valid one beside it still resolves.
+  const auto mixed = parse_doh_answers(
+      R"({"Status": 0, "Answer": [{"type": "A", "data": "9.9.9.9"},
+                                  {"type": 1, "data": "1.1.1.1"}]})");
+  CHECK(mixed.is_ok());
+  CHECK(mixed.value().size() == 1);
+  CHECK(mixed.value()[0].ip == "1.1.1.1");
+}
+
 // ---------------------------------------------------------------------------
 // Live network — opt-in only, never in CI (dev.md §9).
 // ---------------------------------------------------------------------------
