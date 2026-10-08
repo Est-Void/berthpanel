@@ -718,7 +718,7 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
 
   const std::filesystem::path work_dir =
       paths.services_dir / recipe.service_name;
-  const auto stage = [&](const char* name) {
+  const auto stage = [&](const char* name) -> Result<void> {
     JournalEntry entry;
     entry.service_name = recipe.service_name;
     entry.work_dir = work_dir.string();
@@ -726,11 +726,19 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
     entry.commit = recipe.commit;
     entry.stage = name;
     entry.started_at_unix = static_cast<std::int64_t>(::time(nullptr));
-    const Result<void> written = journal_upsert(paths, entry);
-    static_cast<void>(written);
+    // NOT discarded: the journal entry is the record §6.7 cleanup finds an
+    // interrupted deploy by. A deploy that cannot write it must stop here, not
+    // run on and die leaving an untracked work dir behind (§11: a failed write
+    // is not a successful deploy).
+    return journal_upsert(paths, entry);
   };
 
-  stage("cloning");
+  {
+    const Result<void> staged = stage("cloning");
+    if (staged.is_err())
+      return with_context(std::move(staged).error(),
+                          "deploy: recording the 'cloning' journal stage");
+  }
   log("fetch " + recipe.service_name + "@" + recipe.commit + " port " +
       std::to_string(port));
   Result<void> fetched = ops.fetch_source(recipe, work_dir, paths, options);
@@ -739,7 +747,12 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
                  " (journal entry kept for cleanup)");
   }
 
-  stage("building");
+  {
+    const Result<void> staged = stage("building");
+    if (staged.is_err())
+      return with_context(std::move(staged).error(),
+                          "deploy: recording the 'building' journal stage");
+  }
   // Stage lines are what the TUI's tail reads to show progress (the log is the
   // engine's, never a second sink the panel owns), so they are written here
   // rather than synthesized from the return value.
@@ -755,7 +768,12 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
                  " (journal entry kept for cleanup)");
   }
 
-  stage("registering");
+  {
+    const Result<void> staged = stage("registering");
+    if (staged.is_err())
+      return with_context(std::move(staged).error(),
+                          "deploy: recording the 'registering' journal stage");
+  }
   log("start " + recipe.service_name);
   Result<std::filesystem::path> unit =
       ops.write_unit_file(recipe, work_dir, port, paths);
