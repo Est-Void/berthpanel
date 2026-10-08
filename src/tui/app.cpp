@@ -229,7 +229,12 @@ class AppComponent final : public ftxui::ComponentBase {
         if (enter_goes_to_field(event)) {
           // Enter acts on the field that has focus, not on a global rule.
           if (current_draft_field() == DraftField::kPort) {
-            start_selected_deploy();
+            // A deploy that actually started releases insert mode: the focus
+            // marker must not linger over a locked field and then silently
+            // start capturing keys again once the deploy finishes.
+            if (start_selected_deploy()) {
+              set_draft_field(DraftField::kNone);
+            }
           } else {
             submit_draft();
           }
@@ -284,6 +289,21 @@ class AppComponent final : public ftxui::ComponentBase {
         handle_services_key(key);
         return true;
       case Tab::kDeploy:
+        // Enter with NO field focused launches the selected recipe. This is the
+        // key the screen advertises; without it the only way to deploy was to
+        // press i, Tab, Tab into the port field and press Enter there. A draft
+        // that is waiting owns Enter through its own d/s keys instead.
+        if (event == Event::Return) {
+          bool draft_up = false;
+          {
+            std::lock_guard lock(panel_->mutex);
+            draft_up = panel_->draft_ready || panel_->draft_running;
+          }
+          if (!draft_up) {
+            start_selected_deploy();
+          }
+          return true;
+        }
         handle_deploy_key(key);
         return true;
       case Tab::kLogs:
@@ -366,8 +386,10 @@ class AppComponent final : public ftxui::ComponentBase {
   void submit_draft();
 
   // The recipe under the cursor plus the port the user typed, validated. Both
-  // reads happen under the lock and nothing is spawned from inside it.
-  void start_selected_deploy();
+  // reads happen under the lock and nothing is spawned from inside it. Returns
+  // whether a deploy actually started (false when the port was refused or the
+  // catalog is empty), so the caller knows whether to drop insert mode.
+  bool start_selected_deploy();
 
   Element render_content();
 
@@ -413,15 +435,20 @@ void AppComponent::move_cursor(const int delta) {
 
 void AppComponent::handle_deploy_key(const std::string& key) {
   if (key == "c") {
-    // Whatever is in flight: the deploy's own flag or the draft's. One key for
-    // both, because the screen can only be doing one thing at a time.
-    bool draft_busy = false;
+    // Whatever is in flight: the deploy's own flag or the draft's. ONE key for
+    // both, but only THAT operation's flag — cancelling the draft must not kill
+    // a log tail or a service refresh that happens to be running (6.7: one flag
+    // per operation, never a panel-wide cancel).
+    std::shared_ptr<Op> draft;
     {
       std::lock_guard lock(panel_->mutex);
-      draft_busy = panel_->draft_running;
+      if (panel_->draft_running) {
+        draft = panel_->draft_op;
+      }
     }
-    if (draft_busy) {
-      static_cast<void>(panel_->ops.cancel_all());
+    if (draft != nullptr) {
+      draft->cancel.store(true, std::memory_order_relaxed);
+      request_render(*panel_);
       return;
     }
     cancel_deploy(panel_);
@@ -539,14 +566,14 @@ void AppComponent::handle_logs_key(const std::string& key,
   }
 }
 
-void AppComponent::start_selected_deploy() {
+bool AppComponent::start_selected_deploy() {
   berth::Recipe recipe;
   berth::Paths paths;
   std::uint16_t port = 0;
   {
     std::lock_guard lock(panel_->mutex);
     if (panel_->catalog_cursor >= panel_->catalog.recipes.size()) {
-      return;
+      return false;
     }
     recipe = panel_->catalog.recipes[panel_->catalog_cursor];
     paths = panel_->paths;
@@ -560,18 +587,23 @@ void AppComponent::start_selected_deploy() {
       panel_->deploy_cancelled = false;
       panel_->deploy_error = parsed.error().ctx();
       panel_->deploy_status = "no deploy started";
-      return;
+      return false;
     }
     port = std::move(parsed).value();
   }
   start_deploy(panel_, paths, recipe, port);
+  return true;
 }
 
 void AppComponent::handle_services_key(const std::string& key) {
   std::string name;
   {
     std::lock_guard lock(panel_->mutex);
-    if (panel_->rows.empty() || !panel_->action.empty()) {
+    // Nothing selected, an action already running, or a refresh in flight (the
+    // rows are mid-replace and the cursor may point at a row that is gone): a
+    // key press must not queue a subprocess against stale data.
+    if (panel_->rows.empty() || !panel_->action.empty() ||
+        panel_->services_loading) {
       return;
     }
     if (panel_->services_cursor >= panel_->rows.size()) {
@@ -637,8 +669,17 @@ Element AppComponent::render_content() {
 void start_cancel_watcher(const std::shared_ptr<Panel>& panel,
                           const std::shared_ptr<std::atomic<bool>>& signalled) {
   std::thread watcher([panel, signalled]() {
-    while (!signalled->load(std::memory_order_relaxed)) {
+    // Also stop on a normal quit: after Loop returns the stack
+    // ScreenInteractive is on its way out, so this thread must not touch
+    // panel->screen again. It used to poll signalled forever after a 'q' (a
+    // leaked thread) and could call Exit() on a destroyed screen if a killed
+    // signal arrived in the window after the loop had already returned.
+    while (!signalled->load(std::memory_order_relaxed) &&
+           !panel->shutting_down.load(std::memory_order_relaxed)) {
       std::this_thread::sleep_for(kCancelPoll);
+    }
+    if (panel->shutting_down.load(std::memory_order_relaxed)) {
+      return;
     }
     static_cast<void>(panel->ops.cancel_all());
     panel->screen->Exit();
