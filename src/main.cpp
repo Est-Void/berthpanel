@@ -16,17 +16,20 @@
 
 #include <unistd.h>
 
+#include "analyzer/ports.h"
 #include "berth/cancel.h"
 #include "berth/catalog.h"
 #include "berth/deploy.h"
 #include "berth/detect.h"
 #include "berth/gitclone.h"
+#include "berth/journal.h"
 #include "berth/lock.h"
 #include "berth/net/egress.h"
 #include "berth/net/github_api.h"
 #include "berth/recipes.h"
 #include "berth/sandbox.h"
 #include "berth/serve.h"
+#include "berth/status.h"
 #include "berth/toolcheck.h"
 #include "berth/units.h"
 #include "berth/userrecipes.h"
@@ -108,6 +111,8 @@ void print_usage() {
                "[--json]\n"
                "       berthpanel __cleanup [--install] [--quiet]\n"
                "       berthpanel __serve-static <root> [--listen "
+               "127.0.0.1:<port>]\n"
+               "       berthpanel __serve-status [--listen "
                "127.0.0.1:<port>]\n";
 }
 
@@ -382,6 +387,89 @@ int serve_static_command(const std::string_view root_arg,
   return 0;
 }
 
+// `berthpanel __serve-status [--listen 127.0.0.1:<port>]` — the read-only
+// status page of plan 5.4. It reuses the serve.cpp accept loop and the same
+// loopback-only bind policy; the page reports the registry, the dumb port
+// scan (no attribution, §7) and the deploy journal, and it gathers them per
+// request so it never serves a stale snapshot.
+int serve_status_command(const std::string_view listen_arg) {
+  std::string address = "127.0.0.1";
+  std::uint16_t port = 0;
+  if (!listen_arg.empty()) {
+    const berth::Result<std::pair<std::string, std::uint16_t>> parsed =
+        berth::parse_listen_arg(listen_arg);
+    if (parsed.is_err())
+      return fail(parsed.error().ctx());
+    address = parsed.value().first;
+    port = parsed.value().second;
+  }
+  const berth::Result<berth::Paths> paths = berth::paths_from_env();
+  if (paths.is_err())
+    return fail(paths.error().ctx());
+
+  const berth::Paths captured = paths.value();
+  berth::RequestHandler handler =
+      berth::make_status_handler([captured]() -> berth::StatusSnapshot {
+        berth::StatusSnapshot snapshot;
+        const berth::Result<std::vector<berth::ServiceRecord>> listed =
+            berth::registry_list(captured);
+        if (listed.is_err()) {
+          snapshot.error = "registry: " + listed.error().ctx();
+        } else {
+          for (const berth::ServiceRecord& record : listed.value()) {
+            snapshot.services.push_back(berth::StatusService{
+                record.service_name, record.display_name, record.description,
+                record.repo, record.commit, record.port});
+          }
+        }
+        const berth::Result<berth::PortReport> ports =
+            berth::listening_ports(captured);
+        if (ports.is_err()) {
+          if (!snapshot.error.empty())
+            snapshot.error += "; ";
+          snapshot.error += "ports: " + ports.error().ctx();
+        } else {
+          for (const berth::ListeningPort& p : ports.value().ports) {
+            snapshot.ports.push_back(berth::StatusPort{
+                p.address, p.port, p.loopback, p.wildcard, p.owned});
+          }
+        }
+        const berth::Result<std::vector<berth::JournalEntry>> journal =
+            berth::journal_load(captured);
+        if (journal.is_err()) {
+          if (!snapshot.error.empty())
+            snapshot.error += "; ";
+          snapshot.error += "journal: " + journal.error().ctx();
+        } else {
+          for (const berth::JournalEntry& entry : journal.value()) {
+            snapshot.open_deploys.push_back(berth::StatusDeploy{
+                entry.service_name, entry.stage, entry.started_at_unix});
+          }
+        }
+        return snapshot;
+      });
+
+  std::atomic<bool> cancel_flag{false};
+  const berth::Result<void> signalling =
+      berth::install_exit_signalling(&cancel_flag);
+  if (signalling.is_err())
+    return fail(signalling.error().ctx());
+
+  berth::ServerConfig config;
+  config.listen_address = address;
+  config.port = port;
+  const std::string host = address == "::1" ? "[::1]" : address;
+  const berth::Result<void> ran = berth::run_http_server(
+      config, handler, &cancel_flag, [&host](const std::uint16_t bound) {
+        std::cout << "listening on http://" << host << ":" << bound << "\n"
+                  << std::flush;
+      });
+  if (ran.is_err())
+    return fail(ran.error().ctx());
+  std::cout << "stopped\n";
+  return 0;
+}
+
 // `berthpanel __recipe-draft <github_url> [ref] [--apply] [--force]` — the
 // CLI front end of the wizard. The FLOW lives in berth/wizard.cpp: the panel
 // runs the same prepare/store pair, and two copies of a clone+detect flow
@@ -533,6 +621,19 @@ int run(const std::span<const char* const> args) {
         }
       }
       return serve_static_command(args[1], listen);
+    }
+    if (first == "__serve-status") {
+      std::string_view listen;
+      for (std::size_t i = 1; i < args.size(); ++i) {
+        const std::string_view arg(args[i]);
+        if (arg == "--listen" && i + 1 < args.size()) {
+          listen = args[i + 1];
+          ++i;
+        } else if (arg.rfind("--listen=", 0) == 0) {
+          listen = arg.substr(9);
+        }
+      }
+      return serve_status_command(listen);
     }
     // Test hook for the SIGKILL flock scenario (stage 4.3); not a user
     // command, documented in berth/lock.h.

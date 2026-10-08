@@ -79,6 +79,7 @@ LIB_SRC := \
 	src/berth/deploy.cpp \
 	src/berth/service_ops.cpp \
 	src/berth/serve.cpp \
+	src/berth/status.cpp \
 	src/analyzer/ports.cpp \
 	src/analyzer/scan.cpp \
 	src/util/fs.cpp \
@@ -168,6 +169,7 @@ TEST_SRC := \
 	tests/deploy_view_test.cpp \
 	tests/tui_view_test.cpp \
 	tests/serve_test.cpp \
+	tests/status_test.cpp \
 	tests/layering_test.cpp
 
 INCLUDES := -Iinclude -Isrc -I$(BUILD)/generated -isystem third_party -isystem third_party/mbedtls/include -isystem third_party/ftxui/include -isystem third_party/ftxui/src
