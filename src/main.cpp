@@ -30,6 +30,7 @@
 #include "berth/units.h"
 #include "berth/userrecipes.h"
 #include "berth/validate.h"
+#include "berth/wizard.h"
 #include "core/json.h"
 #include "core/names.h"
 #include "core/netlog.h"
@@ -302,6 +303,10 @@ int cleanup_command(const bool install, const bool quiet) {
   return report.value().failed.empty() ? 0 : 1;
 }
 
+// `berthpanel __recipe-draft <github_url> [ref] [--apply] [--force]` — the
+// CLI front end of the wizard. The FLOW lives in berth/wizard.cpp: the panel
+// runs the same prepare/store pair, and two copies of a clone+detect flow
+// would drift (§11).
 int recipe_draft_command(const std::string_view url_arg,
                          const std::string_view ref_arg, const bool apply,
                          const bool force) {
@@ -309,116 +314,57 @@ int recipe_draft_command(const std::string_view url_arg,
   if (paths.is_err())
     return fail(paths.error().ctx());
 
-  // Front-door egress policy (§6.1, stage 4.23): https, host exactly
-  // github.com — everything else is refused before any byte moves.
-  const berth::Result<std::string> owner_repo =
-      berth::github_owner_repo_from_url(std::string(url_arg));
-  if (owner_repo.is_err())
-    return fail(owner_repo.error().ctx());
-  const std::size_t slash = owner_repo.value().find('/');
-  const std::string owner = owner_repo.value().substr(0, slash);
-  const std::string name = owner_repo.value().substr(slash + 1);
-
   std::atomic<bool> cancel_flag{false};
   const berth::Result<void> signalling =
       berth::install_exit_signalling(&cancel_flag);
   if (signalling.is_err())
     return fail(signalling.error().ctx());
 
-  // The pin: an explicit 40-hex SHA is taken as-is, anything else is
-  // resolved through the API NOW — repos/<o>/<r> for the default branch,
-  // commits/<branch> for its head, both GETs net.log-logged (§6.6 anti-TOFU
-  // — the draft freezes one commit, it never tracks a branch). Public
-  // repos only: no token is attached (§6.3).
-  std::string commit(ref_arg);
-  if (commit.empty() || !berth::validate_commit_sha(commit).is_ok()) {
-    const std::string ref(ref_arg);
-    std::cout << "resolving " << owner_repo.value() << "@"
-              << (ref.empty() ? "default branch" : ref) << " via api...\n";
-    const berth::Result<std::string> resolved = berth::resolve_head_sha(
-        paths.value(), owner_repo.value(), ref, &cancel_flag);
-    if (resolved.is_err())
-      return fail(resolved.error().ctx());
-    commit = resolved.value();
+  const berth::Result<berth::DraftResult> prepared = berth::prepare_draft(
+      paths.value(),
+      berth::DraftRequest{.url = std::string(url_arg),
+                          .ref = std::string(ref_arg)},
+      &cancel_flag, [](const std::string& line) { std::cout << line << "\n"; });
+  if (prepared.is_err())
+    return fail(prepared.error().ctx());
+  const berth::DraftResult& result = prepared.value();
+
+  // Asked BEFORE storing, so the answer can still be "no" (§8: an overwrite is
+  // an explicit act, and this is where the explicit act happens).
+  const berth::Result<berth::DraftClash> clash =
+      berth::find_recipe_clash(paths.value(), result.draft.service_name);
+  if (clash.is_err())
+    return fail(clash.error().ctx());
+  if (clash.value().exists && !force) {
+    std::cerr << "refusing to overwrite: " << clash.value().service_name
+              << (clash.value().in_catalog ? " is in the builtin catalog"
+                                           : " is already stored")
+              << "\n"
+              << "  existing: "
+              << (clash.value().existing_commit.empty()
+                      ? std::string("(unpinned)")
+                      : clash.value().existing_commit)
+              << "\n  draft:    " << result.commit << "\n"
+              << "rerun with --force to store the draft over it\n";
+    return 2;
   }
 
-  // Scratch checkout with a random suffix (§9); removed however detection
-  // ends. Detection only READS this tree (detect.h). The clone lands in a
-  // nested dir on purpose: clone_pinned manages its destination's parent
-  // (chmod included), and the only parent a TempDir owns is the TempDir
-  // itself — the wizard must not point it at /tmp.
-  const berth::Result<berth::TempDir> scratch = berth::TempDir::create("draft");
-  if (scratch.is_err())
-    return fail(scratch.error().ctx());
-  const std::filesystem::path dir = scratch.value().path() / "repo";
-
-  std::cout << "cloning " << owner_repo.value() << "@" << commit.substr(0, 7)
-            << "...\n";
-  const berth::Result<void> cloned = berth::clone_pinned({
-      .url = "https://" + std::string(berth::kTokenHost) + "/" +
-             owner_repo.value() + ".git",
-      .commit = commit,
-      .dest_dir = dir,
-      .timeout = std::chrono::milliseconds(600000),
-      .cancel = &cancel_flag,
-  });
-  if (cloned.is_err())
-    return fail(cloned.error().ctx());
-
-  // §6.1: a git clone is an outbound request to github.com that does not
-  // run through httpclient, so the attempt is logged here — before it
-  // happens, so the line exists even if the process dies mid-clone.
-  const std::string note = "draft clone " + owner_repo.value() + "@" + commit;
-  const berth::Result<void> net_logged =
-      berth::netlog_append(paths.value(), {.host = berth::kTokenHost,
-                                           .ip = "",
-                                           .port = 443,
-                                           .purpose = "git-fetch",
-                                           .note = note,
-                                           .allowed = true});
-  if (net_logged.is_err())
-    return fail(net_logged.error().ctx());
-
-  const berth::DetectRequest detect{
-      .dir = dir, .owner = owner, .name = name, .commit = commit};
-  const berth::Result<berth::RecipeDraft> detected =
-      berth::detect_recipe(detect);
-  if (detected.is_err())
-    return fail(detected.error().ctx());
-  const berth::Recipe& draft = detected.value().recipe;
-
-  // The draft is ALWAYS saved, untouched or not: what can be deployed is
-  // what is on disk (reproducibility, plan 4.21). Overwriting an existing
-  // recipe needs --force, like __recipe-add.
+  // The draft is ALWAYS saved, untouched or not: what can be deployed is what
+  // is on disk (reproducibility, plan 4.21).
   const berth::Result<std::filesystem::path> stored =
-      berth::user_recipe_store(paths.value(), draft, force);
+      berth::store_draft(paths.value(), result.draft, clash.value().exists);
   if (stored.is_err())
     return fail(stored.error().ctx());
 
-  // toolcheck verifies the detected tools; a missing tool is a warning —
-  // install it, then deploy. The draft deploys through the same preflight
-  // gate either way.
-  const berth::Result<std::vector<berth::ToolStatus>> tools =
-      berth::check_tools(draft.tools, &cancel_flag);
-  if (tools.is_err())
-    return fail(tools.error().ctx());
-
-  std::cout << "draft " << draft.service_name << " (" << draft.language << ", "
-            << draft.res.memory_max << "/" << draft.res.tasks_max << ")\n"
+  std::cout << berth::render_draft_report(result, clash.value())
             << "  saved: " << stored.value().string() << "\n"
-            << "  start: " << draft.start_cmd << "\n"
-            << "  tools:\n"
-            << berth::render_tool_report(tools.value());
-  for (const std::string& warning : detected.value().warnings) {
-    std::cout << "  warning: " << warning << "\n";
-  }
-  std::cout << "the heuristics may be wrong — edit " << stored.value().string()
+            << "the heuristics may be wrong — edit " << stored.value().string()
             << ", then:\n"
             << "  berthpanel __recipe-add " << stored.value().string()
             << " --force\n";
   if (apply) {
     std::cout << "deploy it with:\n"
-              << "  berthpanel __deploy " << draft.service_name << "\n";
+              << "  berthpanel __deploy " << result.draft.service_name << "\n";
   }
   return 0;
 }
