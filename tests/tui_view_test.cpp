@@ -118,10 +118,9 @@ TEST(chrome_the_version_is_printed_verbatim) {
 
 TEST(chrome_pending_tabs_say_what_is_missing_and_how_to_work_around_it) {
   // An honest sentence with a working command in it, not an empty box (§11:
-  // silence on a missing feature reads as a broken feature).
-  const std::string_view deploy = tui::pending_notice(tui::Tab::kDeploy);
-  CHECK(deploy.find("next stage") != std::string_view::npos);
-  CHECK(deploy.find("berthpanel __deploy") != std::string_view::npos);
+  // silence on a missing feature reads as a broken feature). Only Logs is
+  // still a placeholder: Catalog and Deploy are built (dev.md §12.11), and
+  // pending_notice() aborts on a built tab so the two cannot drift apart.
   const std::string_view logs = tui::pending_notice(tui::Tab::kLogs);
   CHECK(logs.find("net.log") != std::string_view::npos);
   CHECK(logs.find("--show-endpoints") != std::string_view::npos);

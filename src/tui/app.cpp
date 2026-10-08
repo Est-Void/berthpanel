@@ -2,7 +2,9 @@
 
 #include "app.h"
 
+#include <ftxui/component/component.hpp>
 #include <ftxui/component/component_base.hpp>
+#include <ftxui/component/component_options.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
@@ -18,9 +20,11 @@
 #include <vector>
 
 #include "../berth/cancel.h"
+#include "../util/strutil.h"
 #include "chrome.h"
 #include "panel.h"
 #include "screens.h"
+#include "view_deploy.h"
 
 namespace tui {
 
@@ -32,9 +36,31 @@ using ftxui::Event;
 // How often the signal watcher turns a cancelled flag into an exit.
 constexpr auto kCancelPoll = std::chrono::milliseconds(250);
 
+// The keys the port field owns on the Deploy tab. Digits only (the rule and
+// its reason are in view_deploy.h); Return, Backspace and Delete are named
+// events the app recognises itself.
+bool port_key_goes_to_field(const ftxui::Event& event) {
+  if (event == Event::Return || event == Event::Backspace ||
+      event == Event::Delete) {
+    return true;
+  }
+  return event.is_character() &&
+         port_field_accepts_digit(std::string(event.character()));
+}
+
 class AppComponent final : public ftxui::ComponentBase {
  public:
-  explicit AppComponent(const std::shared_ptr<Panel>& panel) : panel_(panel) {}
+  explicit AppComponent(const std::shared_ptr<Panel>& panel) : panel_(panel) {
+    // The port field is the one place the user types, and it is a Component
+    // because typing IS a component: app.cpp owns the event forwarding and
+    // screens.cpp only draws what it returns. Enter runs the deploy, so the
+    // launch key and the field cannot drift apart.
+    ftxui::InputOption port_option;
+    port_option.content = &panel_->deploy_port_field;
+    port_option.placeholder = "auto";
+    port_option.on_enter = [this]() { start_selected_deploy(); };
+    port_input_ = ftxui::Input(port_option);
+  }
 
   Element OnRender() override {
     std::lock_guard lock(panel_->mutex);
@@ -59,6 +85,18 @@ class AppComponent final : public ftxui::ComponentBase {
       if (handle_uninstall_key(*panel_, key) == UninstallKey::kQuit) {
         quit();
       }
+      return true;
+    }
+
+    // The port field gets digits, backspace and Enter — and nothing else. A
+    // port IS digits, and a field that swallowed every letter would take 'q'
+    // (quit), 'e' and 'r' hostage: the panel must always be quittable and the
+    // screen's own keys must always work. During a deploy the field is locked,
+    // which is what frees 'c' to mean cancel instead of "a c in the port box".
+    if (tabs()[panel_->tab].tab == Tab::kDeploy &&
+        !panel_->deploy_running.load(std::memory_order_relaxed) &&
+        port_key_goes_to_field(event)) {
+      port_input_->OnEvent(event);
       return true;
     }
 
@@ -102,6 +140,8 @@ class AppComponent final : public ftxui::ComponentBase {
         handle_services_key(key);
         return true;
       case Tab::kDeploy:
+        handle_deploy_key(key);
+        return true;
       case Tab::kLogs:
         return true;  // nothing to act on yet
     }
@@ -138,9 +178,18 @@ class AppComponent final : public ftxui::ComponentBase {
   // or an action already in flight) must not queue another subprocess.
   void handle_services_key(const std::string& key);
 
+  // c / e / r on Deploy. Enter never reaches here: the port Input consumes it
+  // and starts the deploy through its on_enter.
+  void handle_deploy_key(const std::string& key);
+
+  // The recipe under the cursor plus the port the user typed, validated. Both
+  // reads happen under the lock and nothing is spawned from inside it.
+  void start_selected_deploy();
+
   Element render_content();
 
   std::shared_ptr<Panel> panel_;
+  ftxui::Component port_input_;
 };
 
 void AppComponent::move_cursor(const int delta) {
@@ -152,11 +201,14 @@ void AppComponent::move_cursor(const int delta) {
       cursor = &panel_->catalog_cursor;
       count = panel_->catalog.recipes.size();
       break;
+    case Tab::kDeploy:
+      cursor = &panel_->catalog_cursor;
+      count = panel_->catalog.recipes.size();
+      break;
     case Tab::kServices:
       cursor = &panel_->services_cursor;
       count = panel_->rows.size();
       break;
-    case Tab::kDeploy:
     case Tab::kLogs:
       return;  // nothing to select on a not-yet-built screen
   }
@@ -168,6 +220,49 @@ void AppComponent::move_cursor(const int delta) {
   const std::size_t offset =
       delta >= 0 ? static_cast<std::size_t>(delta) : count - 1;
   *cursor = (*cursor + offset) % count;
+}
+
+void AppComponent::handle_deploy_key(const std::string& key) {
+  if (key == "c") {
+    cancel_deploy(panel_);
+    return;
+  }
+  if (key == "e") {
+    std::lock_guard lock(panel_->mutex);
+    panel_->catalog_details = !panel_->catalog_details;
+    return;
+  }
+  if (key == "r") {
+    refresh_catalog(panel_, panel_->paths);
+  }
+}
+
+void AppComponent::start_selected_deploy() {
+  berth::Recipe recipe;
+  berth::Paths paths;
+  std::uint16_t port = 0;
+  {
+    std::lock_guard lock(panel_->mutex);
+    if (panel_->catalog_cursor >= panel_->catalog.recipes.size()) {
+      return;
+    }
+    recipe = panel_->catalog.recipes[panel_->catalog_cursor];
+    paths = panel_->paths;
+    // A port that is not a number is a loud refusal here, before a worker is
+    // spawned: coercing it to 0 would deploy somewhere the user did not ask
+    // for, which is the worst possible reading of "I typed 808O".
+    const berth::Result<std::uint16_t> parsed =
+        parse_port_field(panel_->deploy_port_field);
+    if (parsed.is_err()) {
+      panel_->deploy_finished = false;
+      panel_->deploy_cancelled = false;
+      panel_->deploy_error = parsed.error().ctx();
+      panel_->deploy_status = "no deploy started";
+      return;
+    }
+    port = std::move(parsed).value();
+  }
+  start_deploy(panel_, paths, recipe, port);
 }
 
 void AppComponent::handle_services_key(const std::string& key) {
@@ -207,9 +302,10 @@ Element AppComponent::render_content() {
   switch (tabs()[panel_->tab].tab) {
     case Tab::kCatalog:
       return render_catalog_screen(*panel_);
+    case Tab::kDeploy:
+      return render_deploy_screen(*panel_, port_input_->Render());
     case Tab::kServices:
       return render_services_screen(*panel_);
-    case Tab::kDeploy:
     case Tab::kLogs:
       // Every placeholder says what is missing and how to work around it
       // today. An empty box would read as a broken feature (§11: silence on

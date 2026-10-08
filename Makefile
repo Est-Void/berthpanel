@@ -84,6 +84,7 @@ LIB_SRC := \
 	src/util/subprocess.cpp \
 	src/tui/chrome.cpp \
 	src/tui/view_catalog.cpp \
+	src/tui/view_deploy.cpp \
 	src/tui/view_services.cpp
 
 # Vendored C sources, compiled per mode (relaxed warnings on purpose; see
@@ -149,6 +150,7 @@ TEST_SRC := \
  	tests/cancel_test.cpp \
  	tests/gzip_test.cpp \
 	tests/ring_test.cpp \
+	tests/deploy_view_test.cpp \
 	tests/tui_view_test.cpp
 
 INCLUDES := -Iinclude -Isrc -I$(BUILD)/generated -isystem third_party -isystem third_party/mbedtls/include -isystem third_party/ftxui/include -isystem third_party/ftxui/src

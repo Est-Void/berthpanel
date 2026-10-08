@@ -99,6 +99,25 @@ TEST(ring_clear_resets_the_dropped_counter) {
   CHECK(got[0] == "fresh");
 }
 
+TEST(ring_at_reads_by_logical_index_without_copying) {
+  // The deploy tail and the logs screen read the buffer straight from the
+  // render thread, so at() has to agree with snapshot() AFTER a wrap — that is
+  // the case where a naive index would read the wrong line.
+  tui::RingBuffer<std::string> ring(3);
+  ring.push_back("a");
+  ring.push_back("b");
+  ring.push_back("c");
+  ring.push_back("d");
+  CHECK(ring.dropped() == 1);
+  CHECK(ring.at(0) == "b");
+  CHECK(ring.at(1) == "c");
+  CHECK(ring.at(2) == "d");
+  const std::vector<std::string> got = contents(ring);
+  for (std::size_t i = 0; i < got.size(); ++i) {
+    CHECK(ring.at(i) == got[i]);
+  }
+}
+
 TEST(ring_single_slot_keeps_only_the_newest) {
   tui::RingBuffer<int> ring(1);
   ring.push_back(1);

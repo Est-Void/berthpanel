@@ -131,7 +131,7 @@ TEST(netstatus_counts_every_netlog_entry_including_refusals) {
                                  .purpose = "system-scan",
                                  .note = "",
                              })
-             .is_ok());
+            .is_ok());
   CHECK(berth::netlog_append(paths,
                              {
                                  .host = "not-allowlisted.example",
@@ -141,7 +141,7 @@ TEST(netstatus_counts_every_netlog_entry_including_refusals) {
                                  .note = "refused by the allowlist",
                                  .allowed = false,
                              })
-             .is_ok());
+            .is_ok());
 
   const berth::NetSnapshot snapshot = berth::netstatus_snapshot();
   CHECK(snapshot.total == 2);

@@ -75,11 +75,10 @@ std::size_t window_start(const std::size_t count, const std::size_t cursor,
 
 Element line_list(const std::vector<std::string>& lines,
                   const std::size_t cursor, const Color accent,
-                  const bool cursor_visible) {
-  const std::size_t first = window_start(lines.size(), cursor, kVisibleRows);
+                  const bool cursor_visible, const std::size_t visible) {
+  const std::size_t first = window_start(lines.size(), cursor, visible);
   Elements rows;
-  for (std::size_t i = first; i < lines.size() && rows.size() < kVisibleRows;
-       ++i) {
+  for (std::size_t i = first; i < lines.size() && rows.size() < visible; ++i) {
     const bool selected = cursor_visible && (i == cursor);
     // The marker column is a fixed width so every row lines up.
     Element line = ftxui::text((selected ? "\xc2\xbb " : "  ") + lines[i]);

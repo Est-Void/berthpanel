@@ -59,6 +59,18 @@ class RingBuffer {
     return out;
   }
 
+  // Element at LOGICAL index, 0 = the oldest line still held. O(1) and
+  // copy-free, which is what lets the render thread draw the tail window
+  // without cloning the buffer every frame.
+  const T& at(const std::size_t index) const {
+    if (index >= size_) {
+      std::fputs("tui: invariant violated: RingBuffer index out of range\n",
+                 stderr);
+      std::abort();
+    }
+    return buf_[(head_ + index) % buf_.size()];
+  }
+
   [[nodiscard]] std::size_t size() const { return size_; }
   [[nodiscard]] std::size_t capacity() const { return buf_.size(); }
   [[nodiscard]] std::size_t dropped() const { return dropped_; }

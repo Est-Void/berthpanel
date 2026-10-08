@@ -21,9 +21,9 @@
 namespace tui {
 
 enum class Tab {
-  kCatalog,   // @ System Scan — the catalog list; the prerequisite scan itself
-              // is stage 6.5 and says so until it exists
-  kDeploy,    // ^ Deploy     — stage 6.3
+  kCatalog,   // @ System Scan — the prerequisite scan itself is stage 6.5 and
+              // says so until it exists
+  kDeploy,    // ^ Deploy     — stage 6.3, built
   kServices,  // # My Services — stage 6.4, built
   kLogs,      // ≡ Logs       — stage 6.6, with the NET banner
 };
@@ -59,7 +59,8 @@ struct FooterHint {
 // Header tagline, split so the version can take its own color. No "v" in
 // front of BERTH_VERSION: `git describe` already prints one when it has a
 // tag, and a second one reads as "vv0.1.0" (§11: text claims drift from code).
-inline constexpr std::string_view kTaglinePrefix = "self-hosting · local-only · ";
+inline constexpr std::string_view kTaglinePrefix =
+    "self-hosting · local-only · ";
 // The tagline + version, assembled. A function and not an inline expression
 // so the exact text is assertable in the test binary (this header is FTXUI-free
 // and the renderer is not).

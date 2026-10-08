@@ -62,24 +62,18 @@ std::string tagline_line() {
 
 std::string_view pending_notice(const Tab tab) {
   switch (tab) {
-    case Tab::kDeploy:
-      return "The deploy screen arrives in the next stage.\n"
-             "For now use the CLI:\n"
-             "  berthpanel __deploy <service_name>\n"
-             "The recipe's pinned commit, resource limits and start command\n"
-             "are on the Catalog screen — press Enter on a recipe to read "
-             "them.";
     case Tab::kLogs:
       return "The logs screen arrives in the next stage.\n"
              "net.log is already being written for every outbound request;\n"
              "the list of allowlisted endpoints is available right now:\n"
              "  berthpanel --show-endpoints";
     case Tab::kCatalog:
+    case Tab::kDeploy:
     case Tab::kServices:
-      // Both are built (screens.cpp). Asking for a "coming soon" notice for
-      // them would mean the tab table and the render switch disagree.
-      // Not abort_bug() from panel.h: chrome.cpp is linked into the TEST
-      // binary, which does not link FTXUI at all (§9).
+      // All three are built (screens.cpp). Asking for a "coming soon" notice
+      // for one of them would mean the tab table and the render switch
+      // disagree. Not abort_bug() from panel.h: chrome.cpp is linked into the
+      // TEST binary, which does not link FTXUI at all (§9).
       std::fputs("tui: invariant violated: pending_notice on a built tab\n",
                  stderr);
       std::abort();

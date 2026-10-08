@@ -28,11 +28,13 @@
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/color.hpp>
 
+#include "../berth/deploy.h"
 #include "../berth/service_ops.h"
 #include "../core/paths.h"
 #include "chrome.h"
 #include "ring.h"
 #include "view_catalog.h"
+#include "view_deploy.h"
 #include "view_services.h"
 
 namespace tui {
@@ -57,16 +59,41 @@ struct Panel {
   // is then a no-op.
   ftxui::ScreenInteractive* screen = nullptr;
 
-  // Bounded log buffer, owned here so the deploy and logs screens cannot
-  // invent their own unbounded vector (dev.md §5).
-  RingBuffer<std::string> log{kLogCapacity};
+  // Bounded log buffers, owned here so no screen can invent its own unbounded
+  // vector (dev.md §5). One per view: the deploy tail and the Logs screen's
+  // selection are different files and different lifetimes.
+  RingBuffer<std::string> logs_lines{kLogCapacity};
 
-  // Catalog (6.2)
+  // Catalog (6.2). Loaded once at startup; the DEPLOY screen is where the
+  // recipe list lives, because that is where a recipe becomes an action.
   bool catalog_loading = false;
   std::string catalog_error;
   Catalog catalog;
   std::size_t catalog_cursor = 0;
   bool catalog_details = false;
+
+  // Deploy (6.3). `deploy_running` is an ATOMIC and not mutex-guarded state
+  // because two threads read it without the panel lock: the render thread (can
+  // I start a second deploy?) and the log tail (is there still something to
+  // read?). `deploy_in_flight` is the mutex-guarded one, and it stays true
+  // from the key press until the result is folded in — a second deploy cannot
+  // be started in the window where the engine is done but the screen has not
+  // drawn the verdict yet. Everything else here is ordinary UI-thread state.
+  std::atomic<bool> deploy_running{false};
+  bool deploy_in_flight = false;
+  std::atomic<bool> deploy_cancel_requested{false};
+  // The engine's own cancel flag for THIS deploy. Not the panel-wide one: a
+  // deploy in flight must not be killed by an unrelated screen refresh.
+  std::shared_ptr<std::atomic<bool>> deploy_engine_cancel;
+  std::string deploy_status;
+  std::string deploy_error;
+  DeployStage deploy_stage = DeployStage::kOther;
+  bool deploy_finished = false;
+  bool deploy_cancelled = false;
+  berth::DeployOutcome deploy_outcome;
+  std::string deploy_service;     // the recipe being deployed
+  std::string deploy_port_field;  // the port Input's content, "" = auto
+  RingBuffer<std::string> deploy_log_lines{kLogCapacity};
 
   // My Services (6.4)
   bool services_loading = false;
@@ -128,15 +155,45 @@ void pad_to_width(std::string& out, std::size_t width);
                                        std::size_t visible);
 
 // A list of plain lines with one cursor row; everything but the cursor is
-// dimmed. `cursor_visible` is false when there is nothing to select.
+// dimmed. `cursor_visible` is false when there is nothing to select. `visible`
+// is the window height, so a screen with two lists gives each a share instead
+// of letting both ask for the full frame.
 [[nodiscard]] ftxui::Element line_list(const std::vector<std::string>& lines,
                                        std::size_t cursor, ftxui::Color accent,
-                                       bool cursor_visible);
+                                       bool cursor_visible,
+                                       std::size_t visible = kVisibleRows);
 
 // Free text, wrapped: ftxui::text() clips at the box edge, and a hint that
 // vanishes past the right margin is a hint that does not exist.
 [[nodiscard]] ftxui::Element paragraph_lines(
     const std::vector<std::string>& lines);
+
+// A log TAIL, scrolled. `scroll` is how many lines UP from the newest one the
+// window sits, so 0 pins the bottom — which is what a live log must do, or the
+// newest line scrolls off the moment it arrives. Copy-free: the buffer is read
+// through RingBuffer::at, never cloned per frame.
+template <typename T>
+[[nodiscard]] ftxui::Element log_window(const RingBuffer<T>& buffer,
+                                        std::size_t scroll, std::size_t visible,
+                                        ftxui::Color accent) {
+  if (buffer.empty()) {
+    return ftxui::text(" ") | ftxui::dim | ftxui::flex;
+  }
+  const std::size_t total = buffer.size();
+  // How many lines from the end the window starts. A scroll past the top
+  // clamps: the top of a live log is the oldest line still kept.
+  const std::size_t wanted = scroll + visible;
+  const std::size_t from_end = wanted < total ? wanted : total;
+  std::size_t first = total - from_end;
+  if (first + visible > total) {
+    first = total > visible ? total - visible : 0;
+  }
+  ftxui::Elements rows;
+  for (std::size_t i = first; i < total && rows.size() < visible; ++i) {
+    rows.push_back(ftxui::paragraph(buffer.at(i)) | ftxui::color(accent));
+  }
+  return ftxui::vbox(std::move(rows)) | ftxui::flex;
+}
 
 // The same, from a single multi-line string (chrome.h notices).
 [[nodiscard]] ftxui::Element notice_box(std::string_view notice);

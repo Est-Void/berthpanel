@@ -609,6 +609,10 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
   }
 
   stage("building");
+  // Stage lines are what the TUI's tail reads to show progress (the log is the
+  // engine's, never a second sink the panel owns), so they are written here
+  // rather than synthesized from the return value.
+  log("build " + recipe.service_name + " port " + std::to_string(port));
   Result<void> prefetched = ops.prefetch(recipe, paths, options);
   if (prefetched.is_err()) {
     return Error("deploy: prefetch failed: " +
@@ -621,6 +625,7 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
   }
 
   stage("registering");
+  log("start " + recipe.service_name);
   Result<std::filesystem::path> unit =
       ops.write_unit_file(recipe, work_dir, port, paths);
   if (unit.is_err()) {
@@ -651,8 +656,11 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
   record.port = port;
   Result<void> registered = ops.register_service(record, paths);
   if (registered.is_err()) {
-    return Error("deploy: REGISTRY WRITE FAILED: " +
-                 std::move(registered).error().ctx() +
+    // Logged as a stage of its own: this is the failure the panel must never
+    // render as a success — the unit is live and unregistered (§11).
+    log("REGISTRY WRITE FAILED " + recipe.service_name + ": " +
+        std::move(registered).error().ctx());
+    return Error("deploy: REGISTRY WRITE FAILED: " + registered.error().ctx() +
                  " — the unit is live but NOT registered; rerun the deploy");
   }
   Result<void> cleared = journal_remove(paths, recipe.service_name);

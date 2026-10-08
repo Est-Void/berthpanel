@@ -13,11 +13,12 @@
 // live in ONE atomic word and denied is derived from them, because a reader
 // that samples two counters separately can observe a moment that never
 // happened — and a banner printing a count that never was is worse than no
-// banner at all. last_host is an atomic shared_ptr, because std::atomic<std::string>
-// does not exist: reading it is a pointer load plus a refcount bump — no mutex
-// of ours, no I/O, no allocation — while the ONE allocation per record happens
-// on the network path, never on a render. Do NOT add anything to this header
-// that needs to block: it is read from the render path.
+// banner at all. last_host is an atomic shared_ptr, because
+// std::atomic<std::string> does not exist: reading it is a pointer load plus a
+// refcount bump — no mutex of ours, no I/O, no allocation — while the ONE
+// allocation per record happens on the network path, never on a render. Do NOT
+// add anything to this header that needs to block: it is read from the render
+// path.
 
 #include <cstdint>
 #include <string>
@@ -26,10 +27,10 @@
 namespace berth {
 
 struct NetSnapshot {
-  std::uint64_t total = 0;    // every recorded outbound attempt
+  std::uint64_t total = 0;  // every recorded outbound attempt
   std::uint64_t allowed = 0;
-  std::uint64_t denied = 0;   // refused by the allowlist — still logged (§6.1)
-  std::string last_host;      // empty until something has been recorded
+  std::uint64_t denied = 0;  // refused by the allowlist — still logged (§6.1)
+  std::string last_host;     // empty until something has been recorded
 };
 
 // One attempt, allowed or refused. Called by netlog_append BEFORE the log line
