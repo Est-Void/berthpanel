@@ -37,6 +37,7 @@
 #include "core/paths.h"
 #include "core/state.h"
 #include "tui/app.h"
+#include "tui/view_deploy.h"
 #include "util/argv.h"
 #include "util/fs.h"
 #include "util/result.h"
@@ -151,8 +152,13 @@ int deploy_command(const std::string_view service,
 
   std::uint16_t forced_port = 0;
   if (!port_arg.empty()) {
-    forced_port =
-        static_cast<std::uint16_t>(std::atoi(std::string(port_arg).c_str()));
+    // The ONE port parser, shared with the panel's port field. atoi() here
+    // silently wrapped "70000" to 4464 and read "abc" as "auto" — a deploy on
+    // a port nobody asked for, reported as success (§11 silent wrong answer).
+    const berth::Result<std::uint16_t> parsed = tui::parse_port_field(port_arg);
+    if (parsed.is_err())
+      return fail(parsed.error().ctx());
+    forced_port = parsed.value();
   }
 
   berth::RealDeployOps ops;
