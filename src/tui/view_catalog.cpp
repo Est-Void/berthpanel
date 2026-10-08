@@ -149,9 +149,10 @@ std::vector<std::string> catalog_detail_lines(const Catalog& catalog,
   out.emplace_back("  unit:   " + recipe.service_name);
   // The actionable line goes first: the details pane clips at the box edge
   // on a short terminal, and this is the one line the user came for.
-  out.emplace_back("  deploy: switch to the Deploy tab and press Enter "
-                   "  (CLI: berthpanel __deploy " +
-                   recipe.service_name + ")");
+  out.emplace_back(
+      "  deploy: switch to the Deploy tab and press Enter "
+      "  (CLI: berthpanel __deploy " +
+      recipe.service_name + ")");
   if (!recipe.description.empty()) {
     out.emplace_back("  " + recipe.description);
   }

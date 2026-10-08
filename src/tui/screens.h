@@ -41,6 +41,11 @@ void start_deploy(const std::shared_ptr<Panel>& panel,
 // subprocesses and returns; the journal entry stays for __cleanup (§6.7).
 void cancel_deploy(const std::shared_ptr<Panel>& panel);
 
+// System Scan (6.5): prerequisites, listening ports, service state, and ONE
+// bounded allowlisted GET. Refuses to start while one is in flight.
+void run_system_scan(const std::shared_ptr<Panel>& panel,
+                     const berth::Paths& paths);
+
 // My Services (6.4): the registry plus one bounded `systemctl is-active` per
 // row. Explicitly requested by the user, never polled from the render loop.
 void refresh_services(const std::shared_ptr<Panel>& panel,
@@ -57,12 +62,7 @@ void service_action_uninstall(const std::shared_ptr<Panel>& panel,
                               const std::string& service_name);
 
 // Render-thread entry points. All of them assume panel.mutex is already held.
-//
-// kCatalog still renders the recipe list with an honest note that the scan
-// itself lands in stage 6.5 (dev.md §12.11): it is the only place a user can
-// read a recipe before deciding to deploy it, and the Deploy screen shares the
-// same catalog data and the same cursor.
-[[nodiscard]] ftxui::Element render_catalog_screen(const Panel& panel);
+[[nodiscard]] ftxui::Element render_scan_screen(const Panel& panel);
 [[nodiscard]] ftxui::Element render_services_screen(const Panel& panel);
 [[nodiscard]] ftxui::Element confirm_uninstall_screen(const Panel& panel);
 

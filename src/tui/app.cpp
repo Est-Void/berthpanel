@@ -125,11 +125,8 @@ class AppComponent final : public ftxui::ComponentBase {
     // it themselves.
     switch (tabs()[panel_->tab].tab) {
       case Tab::kCatalog:
-        if (event == Event::Return) {
-          std::lock_guard lock(panel_->mutex);
-          panel_->catalog_details = !panel_->catalog_details;
-        } else if (key == "r") {
-          refresh_catalog(panel_, panel_->paths);
+        if (key == "r") {
+          run_system_scan(panel_, panel_->paths);
         }
         return true;
       case Tab::kServices:
@@ -150,7 +147,7 @@ class AppComponent final : public ftxui::ComponentBase {
 
   // Called once, before the loop: the two startup loads. Both are file reads
   // plus one bounded systemctl round trip per service — on workers, like
-  // everything else.
+  // everything else. The System Scan is NOT here; it runs on first visit.
   void start() {
     refresh_catalog(panel_, panel_->paths);
     refresh_services(panel_, panel_->paths);
@@ -164,12 +161,25 @@ class AppComponent final : public ftxui::ComponentBase {
     panel_->screen->Exit();
   }
 
+  // Switching tabs. The System Scan runs the FIRST time the user opens it,
+  // not at startup: a network GET should happen because someone went looking,
+  // and an idle panel should not touch the network uninvited (§6.1).
   void switch_tab(const int delta) {
-    std::lock_guard lock(panel_->mutex);
-    const std::size_t count = tabs().size();
-    panel_->tab =
-        (panel_->tab + static_cast<std::size_t>(delta) + count) % count;
-    panel_->catalog_details = false;
+    bool scan_the_first_time = false;
+    {
+      std::lock_guard lock(panel_->mutex);
+      const std::size_t count = tabs().size();
+      panel_->tab =
+          (panel_->tab + static_cast<std::size_t>(delta) + count) % count;
+      panel_->catalog_details = false;
+      if (tabs()[panel_->tab].tab == Tab::kCatalog && !panel_->scan_ever_ran) {
+        panel_->scan_ever_ran = true;
+        scan_the_first_time = true;
+      }
+    }
+    if (scan_the_first_time) {
+      run_system_scan(panel_, panel_->paths);
+    }
   }
 
   void move_cursor(const int delta);
@@ -198,9 +208,7 @@ void AppComponent::move_cursor(const int delta) {
   std::size_t count = 0;
   switch (tabs()[panel_->tab].tab) {
     case Tab::kCatalog:
-      cursor = &panel_->catalog_cursor;
-      count = panel_->catalog.recipes.size();
-      break;
+      return;  // the scan report selects nothing
     case Tab::kDeploy:
       cursor = &panel_->catalog_cursor;
       count = panel_->catalog.recipes.size();
@@ -301,7 +309,7 @@ Element AppComponent::render_content() {
   }
   switch (tabs()[panel_->tab].tab) {
     case Tab::kCatalog:
-      return render_catalog_screen(*panel_);
+      return render_scan_screen(*panel_);
     case Tab::kDeploy:
       return render_deploy_screen(*panel_, port_input_->Render());
     case Tab::kServices:

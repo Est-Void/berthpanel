@@ -28,6 +28,7 @@
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/color.hpp>
 
+#include "../analyzer/scan.h"
 #include "../berth/deploy.h"
 #include "../berth/service_ops.h"
 #include "../core/paths.h"
@@ -35,6 +36,7 @@
 #include "ring.h"
 #include "view_catalog.h"
 #include "view_deploy.h"
+#include "view_scan.h"
 #include "view_services.h"
 
 namespace tui {
@@ -103,6 +105,14 @@ struct Panel {
   std::string action;  // non-empty while a start/stop/uninstall is running
   bool confirming_uninstall = false;
   berth::ServiceRow uninstall_target;
+
+  // System Scan (6.5). One worker at a time; `scan_ever_ran` is what makes the
+  // tab run its scan on the first visit instead of at startup — a network GET
+  // should happen because the user went looking, not because the binary did.
+  bool scan_running = false;
+  bool scan_ever_ran = false;
+  std::string scan_error;
+  berth::ScanReport scan;
 
   std::size_t tab = 0;
 };

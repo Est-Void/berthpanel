@@ -13,6 +13,7 @@
 #include "../berth/deploy.h"
 #include "../berth/service_ops.h"
 #include "../util/result.h"
+#include "../util/strutil.h"
 
 namespace tui {
 
@@ -363,50 +364,102 @@ void refresh_catalog(const std::shared_ptr<Panel>& panel,
       });
 }
 
-Element render_catalog_screen(const Panel& panel) {
-  if (panel.catalog_loading) {
-    return notice_box("reading the catalog...");
+// --- System Scan (6.5) -----------------------------------------------------
+
+void run_system_scan(const std::shared_ptr<Panel>& panel,
+                     const berth::Paths& paths) {
+  {
+    std::lock_guard lock(panel->mutex);
+    if (panel->scan_running) {
+      return;
+    }
+    panel->scan_running = true;
+    panel->scan_ever_ran = true;
+    panel->scan_error.clear();
   }
-  if (!panel.catalog_error.empty()) {
-    // Loud on purpose: a corrupt recipe must not render as an empty catalog
-    // (§11), and the load is an Err precisely so this can say so.
-    return notice_box(
-        "the catalog could not be read. this is a loud failure on purpose: "
-        "a corrupt recipe must never look like an empty catalog.\n\n" +
-        panel.catalog_error +
-        "\n\nfix the file, then press r to read it again.");
+  run_on_worker<berth::ScanReport>(
+      panel,
+      [paths](std::atomic<bool>* cancel) {
+        return berth::run_system_scan(paths, cancel);
+      },
+      [](Panel& state, berth::Result<berth::ScanReport>&& report) {
+        state.scan_running = false;
+        if (report.is_err()) {
+          // The scan itself failed (not one of its sections). The previous
+          // report stays on screen next to this text, so a failing re-run does
+          // not erase what was known.
+          state.scan_error = report.error().ctx();
+          return;
+        }
+        state.scan_error.clear();
+        state.scan = std::move(report).value();
+      });
+}
+
+namespace {
+
+// One titled section of the report.
+Element scan_section(const std::string& title,
+                     const std::vector<std::string>& lines) {
+  Elements out;
+  out.push_back(ftxui::text(title) | ftxui::bold | ftxui::color(Color::Cyan));
+  out.push_back(paragraph_lines(lines));
+  out.push_back(ftxui::separator());
+  return ftxui::vbox(std::move(out));
+}
+
+}  // namespace
+
+Element render_scan_screen(const Panel& panel) {
+  Elements out;
+  out.push_back(ftxui::text("SYSTEM SCAN") | ftxui::bold |
+                ftxui::color(Color::Cyan));
+  // The same honesty as everywhere else: a static ellipsis, never an animated
+  // spinner the panel has no clock to advance.
+  if (panel.scan_running) {
+    out.push_back(ftxui::text("\xe2\x8b\xb0 running the scan (all four steps "
+                              "are bounded)...") |
+                  ftxui::dim);
+  } else if (!panel.scan_ever_ran) {
+    out.push_back(paragraph_lines(scan_idle_lines()) | ftxui::flex);
+    return ftxui::vbox(std::move(out)) | ftxui::flex;
+  } else {
+    out.push_back(ftxui::text(scan_summary_line(panel.scan)) |
+                  ftxui::color(Color::Green) | ftxui::bold);
   }
-  if (panel.catalog.recipes.empty()) {
-    return notice_box(
-        "the catalog is empty: no builtin recipes compiled into this binary "
-        "and no user recipes under the recipes dir.");
+  out.push_back(ftxui::separator());
+
+  if (!panel.scan_error.empty()) {
+    out.push_back(paragraph_lines(std::vector<std::string>{
+                      "the scan could not run:", "  " + panel.scan_error,
+                      "  the report below is the "
+                      "previous one"}) |
+                  ftxui::color(Color::Red));
+    out.push_back(ftxui::separator());
   }
 
-  Elements out;
-  out.push_back(ftxui::text("CATALOG") | ftxui::bold |
-                ftxui::color(Color::Cyan));
-  out.push_back(ftxui::paragraph(
-                    "read-only. the System Scan itself (prerequisites, ports, "
-                    "interfaces) lands with stage 6.5 — this tab lists "
-                    "recipes until then.") |
-                ftxui::dim);
-  out.push_back(ftxui::separator());
-  out.push_back(line_list(catalog_list_lines(panel.catalog),
-                          panel.catalog_cursor, Color::Cyan, true));
-  out.push_back(ftxui::separator());
-  if (panel.catalog_details) {
-    out.push_back(paragraph_lines(
-        catalog_detail_lines(panel.catalog, panel.catalog_cursor)));
-  } else {
-    out.push_back(
-        ftxui::paragraph("Enter — details for the selected recipe "
-                         "(description, tools, build steps, start command)") |
-        ftxui::dim);
-    out.push_back(
-        ftxui::paragraph("to deploy one, switch to the Deploy tab — the same "
-                         "recipes, with a port field and a cancel key.") |
-        ftxui::dim);
+  // The network alert gets its own emphasis: it is the only section whose
+  // failure the user can do something about, and the scan completes anyway.
+  const std::string alert = scan_network_alert(panel.scan);
+  if (!alert.empty()) {
+    out.push_back(paragraph_lines(berth::split(alert, "\n")) |
+                  ftxui::borderStyled(ftxui::ROUNDED, Color::Yellow));
+    out.push_back(ftxui::separator());
   }
+
+  if (panel.scan_running && !panel.scan_ever_ran) {
+    // Nothing collected yet: the idle text is more useful than four empty
+    // sections.
+    out.push_back(paragraph_lines({"first run in progress..."}) | ftxui::dim);
+    return ftxui::vbox(std::move(out)) | ftxui::flex;
+  }
+
+  out.push_back(scan_section("BUILD TOOLS THE CATALOG NEEDS",
+                             scan_prereq_lines(panel.scan)));
+  out.push_back(scan_section("PORTS IN USE", scan_port_lines(panel.scan)));
+  out.push_back(scan_section("YOUR SERVICES", scan_service_lines(panel.scan)));
+  out.push_back(scan_section("NETWORK", scan_network_lines(panel.scan)));
+  out.push_back(ftxui::paragraph("r  run the scan again") | ftxui::dim);
   return ftxui::vbox(std::move(out)) | ftxui::flex;
 }
 

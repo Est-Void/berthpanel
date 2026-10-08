@@ -77,6 +77,8 @@ LIB_SRC := \
  	src/berth/catalog.cpp \
 	src/berth/deploy.cpp \
 	src/berth/service_ops.cpp \
+	src/analyzer/ports.cpp \
+	src/analyzer/scan.cpp \
 	src/util/fs.cpp \
 	src/util/tmpdir.cpp \
 	src/util/which.cpp \
@@ -85,6 +87,7 @@ LIB_SRC := \
 	src/tui/chrome.cpp \
 	src/tui/view_catalog.cpp \
 	src/tui/view_deploy.cpp \
+	src/tui/view_scan.cpp \
 	src/tui/view_services.cpp
 
 # Vendored C sources, compiled per mode (relaxed warnings on purpose; see
@@ -150,6 +153,8 @@ TEST_SRC := \
  	tests/cancel_test.cpp \
  	tests/gzip_test.cpp \
 	tests/ring_test.cpp \
+	tests/ports_test.cpp \
+	tests/scan_view_test.cpp \
 	tests/deploy_view_test.cpp \
 	tests/tui_view_test.cpp
 
