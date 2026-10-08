@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "../berth/deploy.h"
+#include "../berth/wizard.h"
 #include "../util/result.h"
 
 namespace tui {
@@ -65,18 +66,60 @@ struct DeployLogLine {
 [[nodiscard]] berth::Result<std::uint16_t> parse_port_field(
     std::string_view field);
 
-// The port field owns digits and nothing else. A field that swallowed every
-// printable key would take 'q' (quit), 'e' and 'r' hostage: the panel must
-// always be quittable and the screen's own keys must always work. Return,
-// Backspace and Delete are routed to the field by the app, which knows the
-// key names; this predicate is the printable-character half of that rule, and
-// it is here so the rule is testable without a terminal.
-[[nodiscard]] bool port_field_accepts_digit(const std::string& key);
+// Which text field the Deploy screen is typing into. kNone is the default and
+// it is the DEFAULT ON PURPOSE: while no field has focus the screen's own keys
+// (q, e, r, c, j, k) work, and 'i' enters the fields. A field that swallowed
+// every printable key would take 'q' — quit — hostage, which is how the first
+// version of this screen had to be fixed (§12.16).
+enum class DraftField {
+  kNone,
+  kUrl,
+  kRef,
+  kPort,
+};
 
-// What the screen shows before anything was deployed, and the keys that act.
+[[nodiscard]] std::string_view draft_field_label(DraftField field);
+// The next field in the cycle: url → ref → port → url.
+[[nodiscard]] DraftField next_draft_field(DraftField field);
+
+// The three field LABELS, one per line, with '▸' on the focused one. The
+// values are not here: each Input renders its own, because it owns the cursor.
+// Fixed label widths, so the marker does not move when a field gains a value.
+[[nodiscard]] std::vector<std::string> draft_field_lines(DraftField focus);
+
+// The reviewed draft: what was detected, what the tools say, and every warning
+// the detector produced. A draft is heuristics — the screen has to say so, and
+// it has to print the warnings verbatim rather than count them (§11).
+[[nodiscard]] std::vector<std::string> draft_review_lines(
+    const berth::DraftResult& draft);
+
+// One line saying the store will ask first, and what it would replace. The
+// question itself is a modal (draft_clash_lines), not a block of text the user
+// has to read past.
+[[nodiscard]] std::vector<std::string> draft_clash_notice_lines(
+    const berth::DraftClash& clash);
+
+// The clash question. It MUST carry the pin being replaced: "overwrite?" is not
+// a decision a user can make, "overwrite 2b2192d with 91ab2c4?" is.
+[[nodiscard]] std::vector<std::string> draft_clash_lines(
+    const berth::DraftClash& clash, std::string_view new_commit);
+
+// Shown after the store: where the draft now lives, and that it is on disk
+// before anything deploys (reproducibility).
+[[nodiscard]] std::vector<std::string> draft_stored_lines(
+    const std::filesystem::path& recipe_path);
+
+// The keys this screen acts on right now. One line per group; the footer keeps
+// the global hints, this list is the screen's own.
+[[nodiscard]] std::vector<std::string> deploy_key_hints(bool running);
+[[nodiscard]] std::vector<std::string> draft_key_hints(DraftField focus,
+                                                       bool running,
+                                                       bool ready);
+
+// What the screen shows before anything was deployed: which recipe, and which
+// port the deploy would use.
 [[nodiscard]] std::vector<std::string> deploy_idle_lines(
     const berth::Recipe& recipe, std::uint16_t chosen_port, bool have_choice);
-[[nodiscard]] std::vector<std::string> deploy_key_hints(bool running);
 
 // The finished deploy: what is now true, and where the files are.
 [[nodiscard]] std::vector<std::string> deploy_outcome_lines(

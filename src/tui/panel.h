@@ -106,6 +106,24 @@ struct Panel {
   std::string deploy_port_field;  // the port Input's content, "" = auto
   RingBuffer<std::string> deploy_log_lines{kLogCapacity};
 
+  // BYO wizard (plan 4.21): paste a GitHub URL, review the draft, store it,
+  // deploy it. `draft_field` is kNone until 'i' — the fields are behind an
+  // explicit insert mode so that q / e / r / c keep working (§12.16).
+  DraftField draft_field = DraftField::kNone;
+  std::string draft_url;
+  std::string draft_ref;
+  bool draft_running = false;
+  bool draft_ready = false;  // a draft is waiting for review
+  berth::DraftResult draft;
+  berth::DraftClash draft_clash;
+  bool draft_stored = false;
+  std::filesystem::path draft_stored_path;
+  std::string draft_status;
+  std::string draft_error;
+  bool draft_clash_confirming = false;
+  // What the clash modal does after 'y': store AND deploy, or store only.
+  bool draft_pending_deploy = false;
+
   // My Services (6.4)
   bool services_loading = false;
   std::string services_status;
@@ -240,6 +258,13 @@ template <typename T>
   }
   return ftxui::vbox(std::move(rows)) | ftxui::flex;
 }
+
+// A modal dialog: the lines in a rounded border, centred with spacers. It
+// REPLACES the screen rather than overlaying it — a dbox over a full-width
+// table lets the table bleed through, and a confirmation you cannot read is
+// not a confirmation.
+[[nodiscard]] ftxui::Element boxed_dialog(const std::vector<std::string>& lines,
+                                          ftxui::Color accent);
 
 // The bordered header bar with the brand mark and the version. `net` is the
 // NET banner (view_logs.h): read from one atomic word on every render, which

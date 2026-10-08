@@ -14,6 +14,7 @@
 
 #include "../berth/deploy.h"
 #include "../berth/service_ops.h"
+#include "../berth/wizard.h"
 #include "../core/netstatus.h"
 #include "../util/result.h"
 #include "../util/strutil.h"
@@ -40,6 +41,11 @@ constexpr std::chrono::milliseconds kTailReadyBudget{1000};
 
 constexpr std::size_t kDeployListRows = 6;
 constexpr std::size_t kDeployTailRows = 8;
+// While a draft is on screen the recipe list and the log tail give up their
+// rows: the review needs them, and a vbox that overflows DROPS rows — which
+// silently eats the port field.
+constexpr std::size_t kDraftListRows = 2;
+constexpr std::size_t kDraftTailRows = 3;
 
 }  // namespace
 
@@ -221,7 +227,33 @@ void cancel_deploy(const std::shared_ptr<Panel>& panel) {
   request_render(*panel);
 }
 
-Element render_deploy_screen(const Panel& panel, ftxui::Element port_input) {
+namespace {
+
+// The index of a field, for the marker row above (kNone renders no marker).
+DraftField draft_field_at(const std::size_t index) {
+  switch (index) {
+    case 0:
+      return DraftField::kUrl;
+    case 1:
+      return DraftField::kRef;
+    default:
+      return DraftField::kPort;
+  }
+}
+
+}  // namespace
+
+Element render_deploy_screen(const Panel& panel, ftxui::Element url_input,
+                             ftxui::Element ref_input,
+                             ftxui::Element port_input) {
+  // The overwrite question replaces the screen, like every other dialog: it is
+  // the one thing that must not be read past.
+  if (panel.draft_clash_confirming) {
+    return boxed_dialog(
+        draft_clash_lines(panel.draft_clash, panel.draft.commit),
+        Color::Yellow);
+  }
+  const bool drafting = panel.draft_running || panel.draft_ready;
   Elements out;
   out.push_back(ftxui::text("DEPLOY") | ftxui::bold |
                 ftxui::color(Color::Magenta));
@@ -257,7 +289,7 @@ Element render_deploy_screen(const Panel& panel, ftxui::Element port_input) {
   } else {
     out.push_back(line_list(catalog_list_lines(panel.catalog),
                             panel.catalog_cursor, Color::Magenta, true,
-                            kDeployListRows));
+                            drafting ? kDraftListRows : kDeployListRows));
   }
   if (panel.catalog_details) {
     out.push_back(paragraph_lines(
@@ -265,23 +297,43 @@ Element render_deploy_screen(const Panel& panel, ftxui::Element port_input) {
   }
   out.push_back(ftxui::separator());
 
-  // The port field. It is inert while a deploy runs (the app stops forwarding
-  // keys to it then) — a port cannot change halfway through a build.
-  Elements port_row;
-  port_row.push_back(ftxui::text("port ") | ftxui::dim);
-  port_row.push_back(std::move(port_input));
-  if (panel.deploy_running.load(std::memory_order_relaxed)) {
-    port_row.push_back(ftxui::text("  (locked while deploying)") | ftxui::dim);
-  } else {
-    port_row.push_back(
-        ftxui::text("  empty = the recipe's own default, or a free port") |
-        ftxui::dim);
+  // The three text fields. The labels, the values and the focus marker are all
+  // laid out in one line each: an Input only draws its own box, so a bare
+  // hbox of three of them would stack them instead.
+  const bool locked = panel.deploy_running.load(std::memory_order_relaxed) ||
+                      panel.draft_running;
+  {
+    // The marker and the label are ours; the VALUE is the Input's own render,
+    // which brings its cursor with it. Each row is flex so the Input takes
+    // whatever width is left instead of wrapping onto the next field's line.
+    const ftxui::Element fields[3] = {url_input | ftxui::xflex,
+                                      ref_input | ftxui::xflex,
+                                      port_input | ftxui::xflex};
+    for (std::size_t i = 0; i < 3; ++i) {
+      const bool focused = panel.draft_field == draft_field_at(i);
+      Elements row;
+      row.push_back(ftxui::text(focused ? "\xe2\x96\xb8 " : "  ") |
+                    ftxui::color(focused ? Color::Magenta : Color::White));
+      row.push_back(
+          ftxui::text(std::string(draft_field_label(draft_field_at(i))) +
+                      "   ") |
+          ftxui::dim);
+      row.push_back(fields[i]);
+      out.push_back(ftxui::hbox(std::move(row)) | ftxui::flex);
+    }
+    out.push_back(locked ? ftxui::text("  fields are locked while work is in "
+                                       "flight")
+                         : ftxui::text("  i  edit  ·  empty port = the "
+                                       "recipe's default or a free one"));
   }
-  out.push_back(ftxui::hbox(std::move(port_row)));
   out.push_back(ftxui::separator());
 
-  out.push_back(paragraph_lines(deploy_stage_lines(
-      panel.deploy_stage, panel.deploy_finished, panel.deploy_status)));
+  // The ladder is the deploy's progress; while a draft is being reviewed it
+  // would just be five lines of "nothing yet".
+  if (!drafting) {
+    out.push_back(paragraph_lines(deploy_stage_lines(
+        panel.deploy_stage, panel.deploy_finished, panel.deploy_status)));
+  }
   if (panel.deploy_cancelled) {
     for (const std::string& line :
          deploy_cancelled_lines(panel.deploy_service)) {
@@ -297,6 +349,32 @@ Element render_deploy_screen(const Panel& panel, ftxui::Element port_input) {
       out.push_back(ftxui::paragraph(line) | ftxui::color(Color::Red));
     }
   }
+  if (!panel.draft_status.empty()) {
+    out.push_back(ftxui::text("\xe2\x97\x8f " + panel.draft_status) |
+                  ftxui::dim);
+  }
+  if (panel.draft_ready) {
+    out.push_back(ftxui::text("DRAFT") | ftxui::bold |
+                  ftxui::color(Color::Yellow));
+    for (const std::string& line : draft_review_lines(panel.draft)) {
+      out.push_back(ftxui::paragraph(line));
+    }
+    for (const std::string& line :
+         draft_clash_notice_lines(panel.draft_clash)) {
+      out.push_back(ftxui::paragraph(line) | ftxui::color(Color::Yellow));
+    }
+    if (panel.draft_stored) {
+      for (const std::string& line :
+           draft_stored_lines(panel.draft_stored_path)) {
+        out.push_back(ftxui::paragraph(line) | ftxui::color(Color::Green));
+      }
+    }
+  }
+  if (!panel.draft_error.empty()) {
+    for (const std::string& part : berth::split(panel.draft_error, "\n")) {
+      out.push_back(ftxui::paragraph("  " + part) | ftxui::color(Color::Red));
+    }
+  }
   out.push_back(ftxui::separator());
 
   Elements tail_label;
@@ -309,11 +387,18 @@ Element render_deploy_screen(const Panel& panel, ftxui::Element port_input) {
         ftxui::dim);
   }
   out.push_back(ftxui::hbox(std::move(tail_label)) | ftxui::dim);
-  out.push_back(
-      log_window(panel.deploy_log_lines, 0, kDeployTailRows, Color::Cyan));
+  out.push_back(log_window(panel.deploy_log_lines, 0,
+                           drafting ? kDraftTailRows : kDeployTailRows,
+                           Color::Cyan));
   out.push_back(ftxui::separator());
-  for (const std::string& hint :
-       deploy_key_hints(panel.deploy_running.load(std::memory_order_relaxed))) {
+  const std::vector<std::string> hints =
+      panel.draft_field != DraftField::kNone || panel.draft_running ||
+              panel.draft_ready
+          ? draft_key_hints(panel.draft_field, panel.draft_running,
+                            panel.draft_ready)
+          : deploy_key_hints(
+                panel.deploy_running.load(std::memory_order_relaxed));
+  for (const std::string& hint : hints) {
     out.push_back(ftxui::paragraph(hint) | ftxui::dim);
   }
   return ftxui::vbox(std::move(out)) | ftxui::flex;
@@ -454,6 +539,180 @@ Element render_scan_screen(const Panel& panel) {
   out.push_back(scan_section("NETWORK", scan_network_lines(panel.scan)));
   out.push_back(ftxui::paragraph("r  run the scan again") | ftxui::dim);
   return ftxui::vbox(std::move(out)) | ftxui::flex;
+}
+
+// --- BYO wizard (plan 4.21) ------------------------------------------------
+
+namespace {
+
+// What the draft worker hands back: the draft AND the clash answer. Both are
+// computed on the worker, in one pass — the clash needs the detected
+// service_name, so it cannot be asked before the clone, and asking it from the
+// render thread would mean file reads there (§5).
+struct DraftPrepared {
+  berth::DraftResult draft;
+  berth::DraftClash clash;
+  std::string error;  // empty when the draft was made
+};
+
+}  // namespace
+
+void start_draft(const std::shared_ptr<Panel>& panel,
+                 const berth::Paths& paths) {
+  std::string url;
+  std::string ref;
+  {
+    std::lock_guard lock(panel->mutex);
+    if (panel->draft_running || panel->deploy_in_flight) {
+      return;
+    }
+    url = berth::trim(panel->draft_url);
+    ref = berth::trim(panel->draft_ref);
+    if (url.empty()) {
+      // Silence on an empty field: there is nothing to say about nothing, and
+      // the field is on screen with its hint.
+      return;
+    }
+    panel->draft_running = true;
+    panel->draft_ready = false;
+    panel->draft_stored = false;
+    panel->draft_stored_path.clear();
+    panel->draft_error.clear();
+    panel->draft_clash = berth::DraftClash{};
+    panel->draft_status =
+        "resolving " + url + (ref.empty() ? "" : "@" + ref) + "...";
+  }
+
+  const std::shared_ptr<Panel> keep_alive = panel;
+  run_on_worker<DraftPrepared>(
+      panel, "recipe draft",
+      [paths, url, ref, keep_alive](const std::shared_ptr<Op>& op) {
+        // Progress from the worker lands in the status line under the panel
+        // lock, and asks for a redraw: the render thread reads it next frame.
+        const berth::DraftProgress progress =
+            [keep_alive](const std::string& line) {
+              std::lock_guard lock(keep_alive->mutex);
+              keep_alive->draft_status = line;
+              request_render(*keep_alive);
+            };
+        berth::Result<berth::DraftResult> prepared = berth::prepare_draft(
+            paths, berth::DraftRequest{.url = url, .ref = ref}, &op->cancel,
+            progress);
+        DraftPrepared out;
+        if (prepared.is_err()) {
+          out.error = prepared.error().ctx();
+          return out;
+        }
+        out.draft = std::move(prepared).value();
+        const berth::Result<berth::DraftClash> clash =
+            berth::find_recipe_clash(paths, out.draft.draft.service_name);
+        if (clash.is_err()) {
+          // A clash we could not determine is treated as a clash: a store that
+          // cannot check the name has to ask, never assume it is free.
+          out.clash.exists = true;
+          out.clash.service_name = out.draft.draft.service_name;
+        } else {
+          out.clash = clash.value();
+        }
+        return out;
+      },
+      [](Panel& state, berth::Result<DraftPrepared>&& prepared) {
+        state.draft_running = false;
+        if (!prepared.value().error.empty()) {
+          state.draft_ready = false;
+          state.draft_error = prepared.value().error;
+          state.draft_status = "the draft could not be made";
+          return;
+        }
+        state.draft_error.clear();
+        state.draft = std::move(prepared).value().draft;
+        state.draft_clash = std::move(prepared).value().clash;
+        state.draft_ready = true;
+        state.draft_status = "review it, then d to store and deploy";
+      });
+}
+
+void accept_draft(const std::shared_ptr<Panel>& panel,
+                  const berth::Paths& paths, const bool deploy_after,
+                  const bool force) {
+  berth::Recipe recipe;
+  std::uint16_t port = 0;
+  bool clash_needs_an_answer = false;
+  {
+    std::lock_guard lock(panel->mutex);
+    if (!panel->draft_ready || panel->draft_stored) {
+      return;
+    }
+    if (panel->draft_clash.exists && !force) {
+      clash_needs_an_answer = true;
+    } else {
+      recipe = panel->draft.draft;
+      const berth::Result<std::uint16_t> parsed =
+          parse_port_field(panel->deploy_port_field);
+      if (parsed.is_err()) {
+        panel->draft_error = parsed.error().ctx();
+        panel->draft_status = "nothing was stored";
+        return;
+      }
+      port = std::move(parsed).value();
+    }
+  }
+  if (clash_needs_an_answer) {
+    // The question, not the overwrite: the store has not happened yet, and it
+    // will not happen until the user says so (§8).
+    std::lock_guard lock(panel->mutex);
+    panel->draft_clash_confirming = true;
+    panel->draft_pending_deploy = deploy_after;
+    return;
+  }
+
+  run_on_worker<std::filesystem::path>(
+      panel, "store draft",
+      [paths, recipe, force](const std::shared_ptr<Op>& /*op*/) {
+        return berth::store_draft(paths, recipe, force);
+      },
+      [deploy_after, recipe, port](
+          Panel& state, berth::Result<std::filesystem::path>&& stored) {
+        state.draft_clash_confirming = false;
+        if (stored.is_err()) {
+          state.draft_error = stored.error().ctx();
+          state.draft_status = "the draft was NOT stored";
+          return;
+        }
+        state.draft_stored = true;
+        state.draft_stored_path = stored.value();
+        state.draft_error.clear();
+        state.draft_status = deploy_after ? "stored, deploying" : "stored";
+      });
+  if (deploy_after) {
+    // The catalog is what the recipe list is drawn from, so a freshly stored
+    // draft shows up only after it is re-read — and the deploy starts from the
+    // draft itself, never from the list, so the two do not race.
+    refresh_catalog(panel, paths);
+    start_deploy(panel, paths, recipe, port);
+  }
+}
+
+void discard_draft(const std::shared_ptr<Panel>& panel) {
+  std::lock_guard lock(panel->mutex);
+  panel->draft_ready = false;
+  panel->draft_stored = false;
+  panel->draft_stored_path.clear();
+  panel->draft_clash = berth::DraftClash{};
+  panel->draft_status.clear();
+  panel->draft_error.clear();
+}
+
+DraftKey handle_draft_clash_key(Panel& panel, const std::string& key) {
+  if (key == "y" || key == "Y") {
+    panel.draft_clash_confirming = false;
+    return DraftKey::kConfirmed;
+  }
+  if (key == "n" || key == "N" || key == "\x1b") {
+    panel.draft_clash_confirming = false;
+    return DraftKey::kDismissed;
+  }
+  return DraftKey::kEaten;  // the modal is modal
 }
 
 // --- Logs (6.6) ------------------------------------------------------------
@@ -713,24 +972,8 @@ Element render_services_screen(const Panel& panel) {
 }
 
 Element confirm_uninstall_screen(const Panel& panel) {
-  Elements body;
-  for (const std::string& line :
-       confirm_uninstall_lines(panel.uninstall_target)) {
-    body.push_back(line.empty() ? ftxui::text(" ") : ftxui::paragraph(line));
-  }
-  Element dialog = ftxui::vbox(std::move(body)) |
-                   ftxui::borderStyled(ftxui::ROUNDED, Color::Red);
-  // Slightly above centre, with the spacers doing the centring — no absolute
-  // coordinates, so the dialog survives a resize.
-  const Element spacer = ftxui::text(" ");
-  return ftxui::vbox({
-      ftxui::hbox({ftxui::xflex_shrink(spacer), std::move(dialog),
-                   ftxui::xflex_shrink(spacer)}) |
-          ftxui::yflex,
-      ftxui::yflex_shrink(spacer),
-      ftxui::yflex_shrink(spacer),
-      ftxui::yflex_shrink(spacer),
-  });
+  return boxed_dialog(confirm_uninstall_lines(panel.uninstall_target),
+                      Color::Red);
 }
 
 UninstallKey handle_uninstall_key(Panel& panel, const std::string& key) {

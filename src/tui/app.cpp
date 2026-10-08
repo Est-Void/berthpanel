@@ -42,25 +42,40 @@ constexpr auto kCancelPoll = std::chrono::milliseconds(250);
 // the failure has to be reported rather than waited on forever (§11).
 constexpr std::chrono::milliseconds kShutdownJoinBudget{2000};
 
-// The keys the port field owns on the Deploy tab. Digits only (the rule and
-// its reason are in view_deploy.h); Return, Backspace and Delete are named
-// events the app recognises itself.
-bool port_key_goes_to_field(const ftxui::Event& event) {
-  if (event == Event::Return || event == Event::Backspace ||
-      event == Event::Delete) {
-    return true;
-  }
-  return event.is_character() &&
-         port_field_accepts_digit(std::string(event.character()));
+// The keys a focused text field owns. Everything TYPEABLE, because the fields
+// are behind an explicit insert mode: with no field focused, q / e / r / c / j
+// / k are the screen's own, and a port that is not a number is refused loudly
+// by parse_port_field rather than by silently dropping keystrokes.
+bool key_goes_to_field(const ftxui::Event& event) {
+  return event.is_character() || event == Event::Backspace ||
+         event == Event::Delete;
+}
+
+// The Enter that means "act on what is typed here", per field. The port field
+// acts on a recipe; the url/ref fields make a draft.
+bool enter_goes_to_field(const ftxui::Event& event) {
+  return event == Event::Return;
 }
 
 class AppComponent final : public ftxui::ComponentBase {
  public:
   explicit AppComponent(const std::shared_ptr<Panel>& panel) : panel_(panel) {
-    // The port field is the one place the user types, and it is a Component
-    // because typing IS a component: app.cpp owns the event forwarding and
-    // screens.cpp only draws what it returns. Enter runs the deploy, so the
-    // launch key and the field cannot drift apart.
+    // The three text fields are Components because typing IS a component:
+    // app.cpp owns the event forwarding and the focus marker, screens.cpp only
+    // draws what they return. Each Enter means its own thing, so the launch
+    // key and the field cannot drift apart.
+    ftxui::InputOption url_option;
+    url_option.content = &panel_->draft_url;
+    url_option.placeholder = "https://github.com/owner/repo";
+    url_option.on_enter = [this]() { submit_draft(); };
+    url_input_ = ftxui::Input(url_option);
+
+    ftxui::InputOption ref_option;
+    ref_option.content = &panel_->draft_ref;
+    ref_option.placeholder = "default branch";
+    ref_option.on_enter = [this]() { submit_draft(); };
+    ref_input_ = ftxui::Input(ref_option);
+
     ftxui::InputOption port_option;
     port_option.content = &panel_->deploy_port_field;
     port_option.placeholder = "auto";
@@ -94,6 +109,18 @@ class AppComponent final : public ftxui::ComponentBase {
       return true;
     }
 
+    // The overwrite question is modal, and it is FIRST: a dialog that answers
+    // "store this over an existing recipe" must not be reachable while another
+    // dialog is open.
+    if (panel_->draft_clash_confirming) {
+      const DraftKey decision = handle_draft_clash_key(*panel_, key);
+      if (decision == DraftKey::kConfirmed) {
+        const bool deploy_after = panel_->draft_pending_deploy;
+        accept_draft(panel_, panel_->paths, deploy_after, /*force=*/true);
+      }
+      return true;
+    }
+
     // The confirmation is modal: it takes the key and nothing below it may
     // react. The dialog DECIDES, the caller ACTS — a confirmation that returns
     // "eaten" without an uninstall behind it is a dialog that lies (§11).
@@ -108,16 +135,46 @@ class AppComponent final : public ftxui::ComponentBase {
       return true;
     }
 
-    // The port field gets digits, backspace and Enter — and nothing else. A
-    // port IS digits, and a field that swallowed every letter would take 'q'
-    // (quit), 'e' and 'r' hostage: the panel must always be quittable and the
-    // screen's own keys must always work. During a deploy the field is locked,
-    // which is what frees 'c' to mean cancel instead of "a c in the port box".
-    if (tabs()[panel_->tab].tab == Tab::kDeploy &&
-        !panel_->deploy_running.load(std::memory_order_relaxed) &&
-        port_key_goes_to_field(event)) {
-      port_input_->OnEvent(event);
-      return true;
+    // Insert mode. The fields take typeable keys ONLY while one of them is
+    // focused ('i' enters, Esc leaves) — otherwise 'q' would be a letter in the
+    // URL box and the panel could not be quit from this tab (§12.16). During a
+    // deploy or a draft the fields are locked, which is also what frees 'c' to
+    // mean cancel.
+    const bool deploy_tab = tabs()[panel_->tab].tab == Tab::kDeploy;
+    if (deploy_tab) {
+      ftxui::ComponentBase* focused = nullptr;
+      {
+        std::lock_guard lock(panel_->mutex);
+        if (panel_->draft_field != DraftField::kNone &&
+            !panel_->deploy_in_flight && !panel_->draft_running) {
+          focused = input_for(panel_->draft_field);
+        }
+      }
+      if (focused != nullptr) {
+        if (event == Event::Escape) {
+          set_draft_field(DraftField::kNone);
+          return true;
+        }
+        // Tab walks the fields. 'i' deliberately does NOT: inside insert mode
+        // every printable key is text, and a URL is full of letters.
+        if (event == Event::Tab) {
+          set_draft_field(next_draft_field(current_draft_field()));
+          return true;
+        }
+        if (key_goes_to_field(event)) {
+          focused->OnEvent(event);
+          return true;
+        }
+        if (enter_goes_to_field(event)) {
+          // Enter acts on the field that has focus, not on a global rule.
+          if (current_draft_field() == DraftField::kPort) {
+            start_selected_deploy();
+          } else {
+            submit_draft();
+          }
+          return true;
+        }
+      }
     }
 
     if (event == Event::ArrowUp || key == "k") {
@@ -236,6 +293,17 @@ class AppComponent final : public ftxui::ComponentBase {
 
   bool scroll_logs(int delta);
 
+  // The focused field's Component, or null when no field is focused.
+  ftxui::ComponentBase* input_for(DraftField field);
+
+  // Insert mode on/off. Setting a field re-renders, because the marker moves.
+  void set_draft_field(DraftField field);
+  [[nodiscard]] DraftField current_draft_field();
+
+  // Enter on the url/ref fields: make the draft. Nothing else happens here —
+  // no store, no deploy — because the draft is not the user's yet.
+  void submit_draft();
+
   // The recipe under the cursor plus the port the user typed, validated. Both
   // reads happen under the lock and nothing is spawned from inside it.
   void start_selected_deploy();
@@ -243,6 +311,8 @@ class AppComponent final : public ftxui::ComponentBase {
   Element render_content();
 
   std::shared_ptr<Panel> panel_;
+  ftxui::Component url_input_;
+  ftxui::Component ref_input_;
   ftxui::Component port_input_;
 };
 
@@ -276,7 +346,33 @@ void AppComponent::move_cursor(const int delta) {
 
 void AppComponent::handle_deploy_key(const std::string& key) {
   if (key == "c") {
+    // Whatever is in flight: the deploy's own flag or the draft's. One key for
+    // both, because the screen can only be doing one thing at a time.
+    bool draft_busy = false;
+    {
+      std::lock_guard lock(panel_->mutex);
+      draft_busy = panel_->draft_running;
+    }
+    if (draft_busy) {
+      static_cast<void>(panel_->ops.cancel_all());
+      return;
+    }
     cancel_deploy(panel_);
+    return;
+  }
+  if (key == "i") {
+    set_draft_field(DraftField::kUrl);
+    return;
+  }
+  if (key == "d") {
+    // Quick mode: the reviewed draft is stored AND deployed with one key. The
+    // store comes first — what deploys is what is on disk (plan 4.21).
+    accept_draft(panel_, panel_->paths, /*deploy_after=*/true, /*force=*/false);
+    return;
+  }
+  if (key == "s") {
+    accept_draft(panel_, panel_->paths, /*deploy_after=*/false,
+                 /*force=*/false);
     return;
   }
   if (key == "e") {
@@ -287,6 +383,48 @@ void AppComponent::handle_deploy_key(const std::string& key) {
   if (key == "r") {
     refresh_catalog(panel_, panel_->paths);
   }
+}
+
+ftxui::ComponentBase* AppComponent::input_for(const DraftField field) {
+  switch (field) {
+    case DraftField::kUrl:
+      return url_input_.get();
+    case DraftField::kRef:
+      return ref_input_.get();
+    case DraftField::kPort:
+      return port_input_.get();
+    case DraftField::kNone:
+      return nullptr;
+  }
+  return nullptr;
+}
+
+DraftField AppComponent::current_draft_field() {
+  std::lock_guard lock(panel_->mutex);
+  return panel_->draft_field;
+}
+
+void AppComponent::set_draft_field(const DraftField field) {
+  {
+    std::lock_guard lock(panel_->mutex);
+    // Entering a field while a draft is up keeps the draft: pasting another URL
+    // must not throw away the one being reviewed without a word.
+    panel_->draft_field = field;
+  }
+  request_render(*panel_);
+}
+
+void AppComponent::submit_draft() {
+  {
+    std::lock_guard lock(panel_->mutex);
+    if (panel_->draft_field == DraftField::kNone) {
+      return;
+    }
+  }
+  start_draft(panel_, panel_->paths);
+  // The keys go back to the screen: the URL is on its way to the worker, and
+  // the next thing the user wants is d, s or q — not more typing.
+  set_draft_field(DraftField::kNone);
 }
 
 // `delta` > 0 moves one line further back in time. Returns false when the Logs
@@ -390,9 +528,6 @@ void AppComponent::handle_services_key(const std::string& key) {
 }
 
 Element AppComponent::render_content() {
-  // The confirmation REPLACES the content rather than overlaying it: a dbox
-  // over a full-width table lets the table bleed through the dialog, and a
-  // confirmation you cannot read is not a confirmation.
   if (panel_->confirming_uninstall) {
     return confirm_uninstall_screen(*panel_);
   }
@@ -400,7 +535,8 @@ Element AppComponent::render_content() {
     case Tab::kCatalog:
       return render_scan_screen(*panel_);
     case Tab::kDeploy:
-      return render_deploy_screen(*panel_, port_input_->Render());
+      return render_deploy_screen(*panel_, url_input_->Render(),
+                                  ref_input_->Render(), port_input_->Render());
     case Tab::kServices:
       return render_services_screen(*panel_);
     case Tab::kLogs:

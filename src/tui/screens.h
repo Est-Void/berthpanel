@@ -42,6 +42,31 @@ void start_deploy(const std::shared_ptr<Panel>& panel,
 // subprocesses and returns; the journal entry stays for __cleanup (§6.7).
 void cancel_deploy(const std::shared_ptr<Panel>& panel);
 
+// BYO wizard (plan 4.21). prepare_draft() is expensive — an API call, a clone,
+// a tree walk — so it runs on a worker like everything else here.
+void start_draft(const std::shared_ptr<Panel>& panel,
+                 const berth::Paths& paths);
+
+// The reviewed draft's next step: store it (always before a deploy, so what
+// deploys is what is on disk) and optionally deploy it right away. A name that
+// is already taken opens the confirmation instead of clobbering; the modal's
+// answer calls back in here with `force`.
+void accept_draft(const std::shared_ptr<Panel>& panel,
+                  const berth::Paths& paths, bool deploy_after, bool force);
+
+// Throws the reviewed draft away without storing it.
+void discard_draft(const std::shared_ptr<Panel>& panel);
+
+// The overwrite confirmation. Same shape as the uninstall dialog: the dialog
+// decides, the caller acts.
+enum class DraftKey {
+  kConfirmed,  // y: store with --force semantics
+  kEaten,      // anything else: the modal keeps the key
+  kDismissed,  // n / Escape: nothing is overwritten
+};
+[[nodiscard]] DraftKey handle_draft_clash_key(Panel& panel,
+                                              const std::string& key);
+
 // System Scan (6.5): prerequisites, listening ports, service state, and ONE
 // bounded allowlisted GET. Refuses to start while one is in flight.
 void run_system_scan(const std::shared_ptr<Panel>& panel,
@@ -74,9 +99,11 @@ void service_action_uninstall(const std::shared_ptr<Panel>& panel,
 [[nodiscard]] ftxui::Element render_services_screen(const Panel& panel);
 [[nodiscard]] ftxui::Element confirm_uninstall_screen(const Panel& panel);
 
-// Deploy (6.3). `port_input` is the FTXUI Input the app owns; it is passed in
+// Deploy (6.3, 4.21). The three FTXUI Inputs the app owns are passed in
 // because a Component's Render() belongs to the component tree in app.cpp.
 [[nodiscard]] ftxui::Element render_deploy_screen(const Panel& panel,
+                                                  ftxui::Element url_input,
+                                                  ftxui::Element ref_input,
                                                   ftxui::Element port_input);
 
 // What the modal confirmation did with a key. The dialog decides, the caller

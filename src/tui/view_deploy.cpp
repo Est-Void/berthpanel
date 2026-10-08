@@ -7,7 +7,10 @@
 #include <string>
 #include <vector>
 
+#include <utility>
+
 #include "../util/strutil.h"
+#include "view_catalog.h"
 
 namespace tui {
 
@@ -34,6 +37,13 @@ DeployStage stage_of(const std::string_view first) {
     return DeployStage::kRegistryFailed;
   }
   return DeployStage::kOther;
+}
+
+// Right-pads a label so the three field lines line up.
+void pad(std::string& text, const std::size_t width) {
+  if (text.size() < width) {
+    text.append(width - text.size(), ' ');
+  }
 }
 
 // The service token: "fetch berthpanel-memos@<sha> port 8080" names it in the
@@ -182,10 +192,6 @@ berth::Result<std::uint16_t> parse_port_field(const std::string_view field) {
   return static_cast<std::uint16_t>(value);
 }
 
-bool port_field_accepts_digit(const std::string& key) {
-  return key.size() == 1 && key[0] >= '0' && key[0] <= '9';
-}
-
 std::vector<std::string> deploy_idle_lines(const berth::Recipe& recipe,
                                            const std::uint16_t chosen_port,
                                            const bool have_choice) {
@@ -217,9 +223,147 @@ std::vector<std::string> deploy_key_hints(const bool running) {
             "q  quit — the deploy is cancelled and unwound first"};
   }
   return {"Enter  deploy the selected recipe at the typed port",
-          "digits  type a port in the field; empty keeps the recipe's default",
           "e  recipe details (pin, tools, build steps, start command)",
           "r  reload the catalog", "↑↓  select a recipe"};
+}
+
+std::string_view draft_field_label(const DraftField field) {
+  switch (field) {
+    case DraftField::kUrl:
+      return "url";
+    case DraftField::kRef:
+      return "ref";
+    case DraftField::kPort:
+      return "port";
+    case DraftField::kNone:
+      return "";
+  }
+  return "";
+}
+
+DraftField next_draft_field(const DraftField field) {
+  switch (field) {
+    case DraftField::kRef:
+      return DraftField::kPort;
+    case DraftField::kPort:
+      return DraftField::kUrl;
+    case DraftField::kNone:
+      return DraftField::kUrl;  // entering insert mode starts at the url
+    case DraftField::kUrl:
+      return DraftField::kRef;
+  }
+  return DraftField::kUrl;
+}
+
+std::vector<std::string> draft_field_lines(const DraftField focus) {
+  std::vector<std::string> lines;
+  for (const DraftField field :
+       {DraftField::kUrl, DraftField::kRef, DraftField::kPort}) {
+    std::string line = field == focus ? "\xe2\x96\xb8 " : "  ";
+    std::string label(draft_field_label(field));
+    pad(label, 7);
+    line += label;
+    lines.push_back(std::move(line));
+  }
+  return lines;
+}
+
+std::vector<std::string> draft_review_lines(const berth::DraftResult& draft) {
+  const berth::Recipe& recipe = draft.draft;
+  std::vector<std::string> lines;
+  lines.push_back("draft " + recipe.service_name + "  (" + recipe.language +
+                  ", " + recipe.res.memory_max + "/" +
+                  std::to_string(recipe.res.tasks_max) + ")");
+  lines.push_back("  repo:  " + draft.owner_repo + " @ " + draft.commit);
+  lines.push_back("  start: " + recipe.start_cmd);
+  lines.push_back("  build: " +
+                  (recipe.build_steps.empty()
+                       ? std::string("(a prebuilt binary — no build)")
+                       : render_step(recipe.build_steps.front())));
+  for (const berth::ToolStatus& tool : draft.tools) {
+    lines.push_back(std::string("  ") + (tool.present ? "ok   " : "MISS ") +
+                    tool.name +
+                    (tool.present ? "  " + tool.version
+                                  : "  — install it before this can build"));
+  }
+  for (const std::string& warning : draft.warnings) {
+    // Verbatim, not counted: "1 warning" says nothing about WHICH, and the
+    // whole point of the detector is that a human must read them (§11).
+    lines.push_back("  warning: " + warning);
+  }
+  lines.push_back("  heuristics, not truth — check these before deploying");
+  return lines;
+}
+
+// The one-liner the review carries. The full question is a MODAL on d/s, and
+// rendering both would look like the screen already asked and is waiting.
+std::vector<std::string> draft_clash_notice_lines(
+    const berth::DraftClash& clash);
+
+std::vector<std::string> draft_clash_lines(const berth::DraftClash& clash,
+                                           const std::string_view new_commit) {
+  std::vector<std::string> lines;
+  lines.push_back("overwrite " + clash.service_name + "?");
+  lines.push_back("");
+  lines.push_back(
+      std::string("  now:   ") +
+      (clash.in_catalog ? "the builtin catalog" : "a stored user recipe") +
+      (clash.existing_commit.empty()
+           ? std::string("  (unpinned)")
+           : "  pinned " + clash.existing_commit.substr(0, 7)));
+  lines.push_back("  then:  the draft above, pinned " +
+                  std::string(new_commit.substr(0, 7)));
+  if (!clash.existing_path.empty()) {
+    lines.push_back("  file:  " + clash.existing_path.string());
+  }
+  lines.push_back("");
+  lines.push_back("  y  yes, overwrite and store the draft");
+  lines.push_back("  n  no, leave it alone");
+  return lines;
+}
+
+std::vector<std::string> draft_clash_notice_lines(
+    const berth::DraftClash& clash) {
+  if (!clash.exists) {
+    return {};
+  }
+  std::string line = "  storing it will ask first: " + clash.service_name +
+                     " is already there";
+  if (clash.in_catalog) {
+    line += " (builtin catalog)";
+  }
+  if (!clash.existing_commit.empty()) {
+    line += ", pinned " + clash.existing_commit.substr(0, 7);
+  }
+  return {line};
+}
+
+std::vector<std::string> draft_stored_lines(
+    const std::filesystem::path& recipe_path) {
+  return {
+      "saved: " + recipe_path.string(),
+      "it is on disk before anything deploys — the draft you deploy is the "
+      "draft you can read",
+  };
+}
+
+std::vector<std::string> draft_key_hints(const DraftField focus,
+                                         const bool running, const bool ready) {
+  if (running) {
+    return {"c  cancel — the draft is thrown away and nothing is stored",
+            "q  quit"};
+  }
+  if (focus != DraftField::kNone) {
+    return {"Enter  act on this field", "Tab  next field (url, ref, port)",
+            "Esc  leave the fields — q, e, r work again"};
+  }
+  if (ready) {
+    return {"d  store the draft and deploy it", "s  store the draft only",
+            "i  paste another URL", "↑↓  select a recipe"};
+  }
+  return {"i  paste a GitHub URL to deploy anything (BYO)",
+          "Enter  deploy the selected recipe at the typed port",
+          "e  recipe details", "r  reload the catalog", "↑↓  select a recipe"};
 }
 
 std::vector<std::string> deploy_outcome_lines(

@@ -100,6 +100,27 @@ Element paragraph_lines(const std::vector<std::string>& lines) {
   return ftxui::vbox(std::move(out));
 }
 
+Element boxed_dialog(const std::vector<std::string>& lines,
+                     const Color accent) {
+  Elements body;
+  for (const std::string& line : lines) {
+    body.push_back(line.empty() ? ftxui::text(" ") : ftxui::paragraph(line));
+  }
+  Element dialog = ftxui::vbox(std::move(body)) |
+                   ftxui::borderStyled(ftxui::ROUNDED, accent);
+  // Slightly above centre, with the spacers doing the centring — no absolute
+  // coordinates, so the dialog survives a resize.
+  const Element spacer = ftxui::text(" ");
+  return ftxui::vbox({
+      ftxui::hbox({ftxui::xflex_shrink(spacer), std::move(dialog),
+                   ftxui::xflex_shrink(spacer)}) |
+          ftxui::yflex,
+      ftxui::yflex_shrink(spacer),
+      ftxui::yflex_shrink(spacer),
+      ftxui::yflex_shrink(spacer),
+  });
+}
+
 Element header_bar(const berth::NetSnapshot& net) {
   const std::vector<std::string>& sign = sign_lines();
   Elements lines;
