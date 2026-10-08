@@ -79,8 +79,10 @@ void service_action_uninstall(const std::shared_ptr<Panel>& panel,
 [[nodiscard]] ftxui::Element render_deploy_screen(const Panel& panel,
                                                   ftxui::Element port_input);
 
-// What the modal confirmation did with a key.
+// What the modal confirmation did with a key. The dialog decides, the caller
+// acts: kConfirmed means "run the uninstall", and nothing else does.
 enum class UninstallKey {
+  kConfirmed,  // y: the dialog closed AND the caller must uninstall
   kEaten,      // the dialog consumed it; nothing below it may react
   kDismissed,  // n / Escape: the dialog closed
   kQuit,       // q: the dialog closed AND the panel should quit

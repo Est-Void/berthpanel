@@ -752,7 +752,7 @@ Element confirm_uninstall_screen(const Panel& panel) {
 UninstallKey handle_uninstall_key(Panel& panel, const std::string& key) {
   if (key == "y" || key == "Y") {
     panel.confirming_uninstall = false;
-    return UninstallKey::kEaten;  // the caller runs the uninstall
+    return UninstallKey::kConfirmed;
   }
   if (key == "q") {
     // "q" keeps meaning quit; the dialog only lets it out.

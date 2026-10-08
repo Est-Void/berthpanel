@@ -55,9 +55,9 @@ std::vector<std::string> services_empty_lines() {
   return {
       "no services registered.",
       "",
-      "deploy one from the CLI:",
+      "switch to the Deploy tab and press Enter on a recipe,",
+      "or from the CLI:",
       "  berthpanel __deploy <service_name>",
-      "or pick a recipe on the Catalog tab to read its pin and limits.",
   };
 }
 

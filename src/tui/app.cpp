@@ -94,11 +94,16 @@ class AppComponent final : public ftxui::ComponentBase {
       return true;
     }
 
-    // The confirmation is modal: it takes the key and, for now, nothing else
-    // on the screen reacts.
+    // The confirmation is modal: it takes the key and nothing below it may
+    // react. The dialog DECIDES, the caller ACTS — a confirmation that returns
+    // "eaten" without an uninstall behind it is a dialog that lies (§11).
     if (panel_->confirming_uninstall) {
-      if (handle_uninstall_key(*panel_, key) == UninstallKey::kQuit) {
+      const UninstallKey decision = handle_uninstall_key(*panel_, key);
+      if (decision == UninstallKey::kQuit) {
         quit(panel_->ops.cancel_all());
+      } else if (decision == UninstallKey::kConfirmed) {
+        service_action_uninstall(panel_, panel_->paths,
+                                 panel_->uninstall_target.service_name);
       }
       return true;
     }
