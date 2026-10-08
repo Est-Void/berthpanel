@@ -56,9 +56,15 @@ struct FooterHint {
 
 [[nodiscard]] std::span<const FooterHint> footer_hints();
 
-// Header tagline, split so the version can take its own color.
-inline constexpr std::string_view kTaglinePrefix =
-    "self-hosting · local-only · v";
+// Header tagline, split so the version can take its own color. No "v" in
+// front of BERTH_VERSION: `git describe` already prints one when it has a
+// tag, and a second one reads as "vv0.1.0" (§11: text claims drift from code).
+inline constexpr std::string_view kTaglinePrefix = "self-hosting · local-only · ";
+// The tagline + version, assembled. A function and not an inline expression
+// so the exact text is assertable in the test binary (this header is FTXUI-free
+// and the renderer is not).
+[[nodiscard]] std::string tagline_line();
+
 inline constexpr std::string_view kProductSuffix = " · deploy panel";
 inline constexpr std::string_view kProductName = "BERTHPANEL";
 

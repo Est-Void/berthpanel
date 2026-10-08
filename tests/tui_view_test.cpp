@@ -13,6 +13,7 @@
 
 #include "berth/service_ops.h"
 #include "runner.h"
+#include "version.h"
 
 namespace {
 
@@ -99,6 +100,20 @@ TEST(chrome_footer_names_the_keys_and_the_words) {
   for (const tui::FooterHint& hint : hints) {
     CHECK(!hint.accent.empty());
   }
+}
+
+TEST(chrome_the_version_is_printed_verbatim) {
+  // `git describe` already emits the "v" of a tag; a second one in the
+  // tagline prefix read as "vv0.1.0" (§11: text claims drift from code).
+  const std::string tagline = tui::tagline_line();
+  CHECK(tagline == std::string(tui::kTaglinePrefix) + BERTH_VERSION);
+  CHECK(tagline.find("vv") == std::string::npos);
+  const std::string_view version = BERTH_VERSION;
+  CHECK(!version.empty());
+  CHECK(tagline.size() >= version.size() &&
+        tagline.compare(tagline.size() - version.size(), version.size(),
+                        version) == 0);
+  CHECK(tui::kTaglinePrefix.back() == ' ');
 }
 
 TEST(chrome_pending_tabs_say_what_is_missing_and_how_to_work_around_it) {

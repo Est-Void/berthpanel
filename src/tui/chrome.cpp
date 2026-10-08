@@ -5,6 +5,9 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
+
+#include "version.h"
 
 namespace tui {
 
@@ -49,6 +52,12 @@ const std::vector<std::string>& sign_lines() {
 
 std::span<const FooterHint> footer_hints() {
   return std::span<const FooterHint>(kFooterHints);
+}
+
+std::string tagline_line() {
+  // BERTH_VERSION is `git describe` output: it carries its own "v" when the
+  // build has a tag, so the prefix supplies only the separator.
+  return std::string(kTaglinePrefix) + BERTH_VERSION;
 }
 
 std::string_view pending_notice(const Tab tab) {

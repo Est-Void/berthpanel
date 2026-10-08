@@ -12,7 +12,6 @@
 #include <utility>
 
 #include "../util/strutil.h"
-#include "version.h"
 
 namespace tui {
 
@@ -123,9 +122,7 @@ Element header_bar() {
                     ftxui::color(Color::Cyan));
       row.push_back(ftxui::text(std::string(kProductSuffix)) | ftxui::dim);
     } else if (i == 1) {
-      row.push_back(ftxui::text(std::string(kTaglinePrefix)) | ftxui::dim);
-      row.push_back(ftxui::text(std::string(BERTH_VERSION)) |
-                    ftxui::color(Color::Blue));
+      row.push_back(ftxui::text(tagline_line()) | ftxui::dim);
     }
     // Line 2 (the beacon) carries nothing but the mark, so it reads as a
     // light over water sitting under the wordmark.
