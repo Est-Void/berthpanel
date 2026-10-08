@@ -155,9 +155,16 @@ Result<std::size_t> TlsSession::read_some(
     const std::atomic<bool>* cancel) {
   while (true) {
     const int rc = mbedtls_ssl_read(&ssl_, buf, buf_size);
-    if (rc == MBEDTLS_ERR_SSL_WANT_READ) {
+    // mbedtls_ssl_read may need to WRITE during a read (post-handshake TLS
+    // 1.3 traffic, key updates). Treating WANT_WRITE as fatal aborted an
+    // otherwise-valid connection; the handshake loop above and write_all()
+    // both already wait on the direction mbedTLS asked for.
+    if (rc == MBEDTLS_ERR_SSL_WANT_READ ||
+        rc == MBEDTLS_ERR_SSL_WANT_WRITE) {
+      const short want =
+          rc == MBEDTLS_ERR_SSL_WANT_READ ? POLLIN : POLLOUT;
       const Result<void> waited =
-          wait_socket(fd_, POLLIN, deadline, cancel, "tls read");
+          wait_socket(fd_, want, deadline, cancel, "tls read");
       if (waited.is_err())
         return std::move(waited).error();
       continue;
