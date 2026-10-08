@@ -886,6 +886,24 @@ void refresh_services(const std::shared_ptr<Panel>& panel,
 
 namespace {
 
+// What the freeze/unfreeze did, said in words: a frozen service holds its port,
+// which is the part a user cannot un-derive from "active".
+std::string row_is_frozen_after(const bool frozen_now, const bool freezing,
+                                const std::string& service_name) {
+  if (frozen_now) {
+    return service_name +
+           " is frozen: it holds its port and answers nothing until you "
+           "unfreeze it";
+  }
+  if (freezing) {
+    // The signal went out and the substate says it did not take: say THAT
+    // rather than claim a freeze that never happened (§11).
+    return service_name + " did not freeze (systemd says it is still " +
+           "running) — nothing was changed";
+  }
+  return service_name + " is running again";
+}
+
 // start / stop / uninstall share one shape: a label, one blocking call, and
 // the outcome folded into the status line. Only the call differs.
 void service_action(const std::shared_ptr<Panel>& panel,
@@ -925,6 +943,68 @@ void service_action_stop(const std::shared_ptr<Panel>& panel,
   service_action(panel, "stopping " + service_name, [service_name]() {
     return berth::service_stop(service_name);
   });
+}
+
+void service_action_restart(const std::shared_ptr<Panel>& panel,
+                            const std::string& service_name) {
+  service_action(panel, "restarting " + service_name, [service_name]() {
+    return berth::service_restart(service_name);
+  });
+}
+
+void service_action_kill(const std::shared_ptr<Panel>& panel,
+                         const std::string& service_name,
+                         const bool confirmed) {
+  if (!confirmed) {
+    return;
+  }
+  service_action(panel, "killing " + service_name, [service_name]() {
+    return berth::service_kill(service_name);
+  });
+}
+
+void service_action_freeze(const std::shared_ptr<Panel>& panel,
+                           const std::string& service_name) {
+  // The label depends on what the row believes now, so the status line says
+  // "freezing" only when the service is actually running.
+  bool freezing = true;
+  {
+    std::lock_guard lock(panel->mutex);
+    if (!panel->action.empty()) {
+      return;
+    }
+    for (const berth::ServiceRow& row : panel->rows) {
+      if (row.service_name == service_name) {
+        freezing = !row.frozen;
+      }
+    }
+    panel->action = (freezing ? "freezing " : "unfreezing ") + service_name;
+  }
+  // The freeze reports back a BOOL — a signal that was sent is not a state —
+  // so it does not fit service_action()'s Result<void> shape.
+  run_on_worker<bool>(
+      panel, "freeze",
+      [service_name, freezing](const std::shared_ptr<Op>& /*op*/) {
+        return freezing ? berth::service_freeze(service_name)
+                        : berth::service_unfreeze(service_name);
+      },
+      [service_name, freezing](Panel& state, berth::Result<bool>&& frozen) {
+        state.action.clear();
+        if (frozen.is_err()) {
+          state.services_status = frozen.error().ctx();
+          return;
+        }
+        for (berth::ServiceRow& row : state.rows) {
+          if (row.service_name != service_name) {
+            continue;
+          }
+          // Both verbs return "true = frozen now", confirmed against the
+          // process: the row shows what IS, not what we asked for.
+          row.frozen = frozen.value();
+        }
+        state.services_status =
+            row_is_frozen_after(frozen.value(), freezing, service_name);
+      });
 }
 
 void service_action_uninstall(const std::shared_ptr<Panel>& panel,
@@ -974,6 +1054,28 @@ Element render_services_screen(const Panel& panel) {
 Element confirm_uninstall_screen(const Panel& panel) {
   return boxed_dialog(confirm_uninstall_lines(panel.uninstall_target),
                       Color::Red);
+}
+
+Element confirm_kill_screen(const Panel& panel) {
+  return boxed_dialog(confirm_kill_lines(panel.kill_target), Color::Red);
+}
+
+// The kill dialog reuses the uninstall dialog's key rules: same shape, same
+// "the caller acts" contract. A second near-identical enum would be a trap.
+UninstallKey handle_kill_key(Panel& panel, const std::string& key) {
+  if (key == "y" || key == "Y") {
+    panel.confirming_kill = false;
+    return UninstallKey::kConfirmed;
+  }
+  if (key == "q") {
+    panel.confirming_kill = false;
+    return UninstallKey::kQuit;
+  }
+  if (key == "n" || key == "N" || key == "\x1b") {
+    panel.confirming_kill = false;
+    return UninstallKey::kDismissed;
+  }
+  return UninstallKey::kEaten;
 }
 
 UninstallKey handle_uninstall_key(Panel& panel, const std::string& key) {

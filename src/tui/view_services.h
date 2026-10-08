@@ -25,6 +25,11 @@ namespace tui {
 // Shown instead of the table when the registry is empty.
 [[nodiscard]] std::vector<std::string> services_empty_lines();
 
+// The kill confirmation: SIGKILL is irreversible for whatever the process had
+// not flushed, and the dialog says what that costs rather than just asking.
+[[nodiscard]] std::vector<std::string> confirm_kill_lines(
+    const berth::ServiceRow& row);
+
 // The uninstall confirmation. It MUST name what stays behind: the work dir
 // and the user's data are not removed, and a confirmation that hides that is
 // a confirmation for a different operation (§11 — silent data deletion is

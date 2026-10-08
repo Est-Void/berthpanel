@@ -39,7 +39,14 @@ std::vector<std::string> services_table_lines(
   for (const berth::ServiceRow& row : rows) {
     std::string line;
     pad_to(line, row.service_name, kNameWidth);
-    pad_to(line, berth::service_state_label(row.state), kStateWidth);
+    std::string state(berth::service_state_label(row.state));
+    // is-active still answers "active" for a SIGSTOPped service, so the freeze
+    // has to be visible here or the table claims a service is serving when it
+    // is not answering at all.
+    if (row.frozen && row.state == berth::ServiceState::kActive) {
+      state = "frozen";
+    }
+    pad_to(line, state, kStateWidth);
     if (row.port == 0) {
       pad_to(line, "-", kPortWidth);
     } else {
@@ -61,6 +68,30 @@ std::vector<std::string> services_empty_lines() {
   };
 }
 
+// The kill confirmation. It MUST say what SIGKILL means — a killed service
+// loses whatever it had not flushed, and it stays down unless the unit itself
+// says Restart= — because a confirmation that hides the cost of saying yes is
+// not a confirmation.
+std::vector<std::string> confirm_kill_lines(const berth::ServiceRow& row) {
+  return {
+      "kill " + row.service_name + "?",
+      "",
+      "  SIGKILL to the service's main process, right now.",
+      "",
+      "  WHAT THIS COSTS:",
+      "    · whatever it had not written to disk is gone — a database",
+      "      mid-write does not survive this",
+      "    · it does NOT come back on its own unless the unit says",
+      "      Restart= (ours do not)",
+      "",
+      "  to make it stop answering for a while WITHOUT losing anything,",
+      "  freeze it with p instead — that one is reversible.",
+      "",
+      "  y  yes, kill it",
+      "  n  no, leave it alone",
+  };
+}
+
 std::vector<std::string> confirm_uninstall_lines(const berth::ServiceRow& row) {
   return {
       "uninstall " + row.service_name + "?",
@@ -78,9 +109,13 @@ std::vector<std::string> confirm_uninstall_lines(const berth::ServiceRow& row) {
 
 std::vector<std::string> services_key_hints() {
   return {
-      "s start   x stop   u uninstall   r refresh   Enter refresh",
+      "s  start      x  stop       t  restart    p  freeze / unfreeze",
+      "K  kill (SIGKILL, asks first)   u  uninstall   r / Enter  refresh",
       "status comes from `systemctl --user is-active`, one bounded call per "
-      "row, on a worker.",
+      "row, on a worker. A frozen service still reads active to is-active, so "
+      "it shows as frozen here.",
+      "freeze is SIGSTOP: the process stops answering but keeps its port — it "
+      "is not a suspend.",
   };
 }
 

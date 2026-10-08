@@ -50,6 +50,25 @@ berth::ServiceRecord memos() {
   return r;
 }
 
+// proc_stat_state is the instrument a freeze is confirmed with, and it has to
+// survive the two things /proc throws at it: a process name with spaces and
+// parentheses in it, and a line that is not what we expected.
+TEST(proc_stat_state_reads_the_state_after_the_last_paren) {
+  using berth::proc_stat_state;
+  // The ordinary case.
+  CHECK(proc_stat_state("1234 (memos) S 1234 1 0 0 -1 4194560") == 'S');
+  // comm with a space AND parentheses: everything up to the LAST ')' is comm.
+  CHECK(proc_stat_state("99 (weird (name) here) T 99 1 0 0 -1 0") == 'T');
+  // Stopped and traced-stopped are both "frozen".
+  CHECK(proc_stat_state("7 (a) T 7 0 0") == 'T');
+  CHECK(proc_stat_state("7 (a) t 7 0 0") == 't');
+  // A line we cannot parse must NOT read as running.
+  CHECK(proc_stat_state("") == '\0');
+  CHECK(proc_stat_state("no parens here S 1") == '\0');
+  CHECK(proc_stat_state("1234 (truncated") == '\0');
+  CHECK(proc_stat_state("1234 (memos) ? 1 2") == '\0');
+}
+
 }  // namespace
 
 TEST(service_ops_unit_file_stays_inside_units_dir) {

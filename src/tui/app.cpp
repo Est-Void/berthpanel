@@ -64,19 +64,33 @@ class AppComponent final : public ftxui::ComponentBase {
     // app.cpp owns the event forwarding and the focus marker, screens.cpp only
     // draws what they return. Each Enter means its own thing, so the launch
     // key and the field cannot drift apart.
+    // A standalone Input has no inactive parent, so Focused() is ALWAYS true
+    // and InputOption::Default() paints it `inverted` — a white block on a dark
+    // terminal. The panel draws its own focus marker (DraftField), so this
+    // style only has to render text: white, dim placeholder, cursor intact.
+    const auto field_style = [](ftxui::InputState state) {
+      state.element |= ftxui::color(ftxui::Color::White);
+      if (state.is_placeholder) {
+        state.element |= ftxui::dim;
+      }
+      return state.element;
+    };
     ftxui::InputOption url_option;
+    url_option.transform = field_style;
     url_option.content = &panel_->draft_url;
     url_option.placeholder = "https://github.com/owner/repo";
     url_option.on_enter = [this]() { submit_draft(); };
     url_input_ = ftxui::Input(url_option);
 
     ftxui::InputOption ref_option;
+    ref_option.transform = field_style;
     ref_option.content = &panel_->draft_ref;
     ref_option.placeholder = "default branch";
     ref_option.on_enter = [this]() { submit_draft(); };
     ref_input_ = ftxui::Input(ref_option);
 
     ftxui::InputOption port_option;
+    port_option.transform = field_style;
     port_option.content = &panel_->deploy_port_field;
     port_option.placeholder = "auto";
     port_option.on_enter = [this]() { start_selected_deploy(); };
@@ -124,6 +138,17 @@ class AppComponent final : public ftxui::ComponentBase {
     // The confirmation is modal: it takes the key and nothing below it may
     // react. The dialog DECIDES, the caller ACTS — a confirmation that returns
     // "eaten" without an uninstall behind it is a dialog that lies (§11).
+    // SIGKILL is the most destructive thing here, so its question is asked
+    // before anything else can consume the key.
+    if (panel_->confirming_kill) {
+      const UninstallKey decision = handle_kill_key(*panel_, key);
+      if (decision == UninstallKey::kConfirmed) {
+        service_action_kill(panel_, panel_->kill_target.service_name,
+                            /*confirmed=*/true);
+      }
+      return true;
+    }
+
     if (panel_->confirming_uninstall) {
       const UninstallKey decision = handle_uninstall_key(*panel_, key);
       if (decision == UninstallKey::kQuit) {
@@ -519,15 +544,32 @@ void AppComponent::handle_services_key(const std::string& key) {
       panel_->confirming_uninstall = true;
       return;
     }
+    // K, not k: 'k' is the vim cursor key panel-wide, and stealing it from two
+    // screens to save one keystroke would break cursor movement everywhere
+    // else.
+    if (key == "K") {
+      // SIGKILL is irreversible for whatever the service had not flushed: it
+      // asks, and the dialog names the cost instead of just the verb.
+      panel_->kill_target = selected;
+      panel_->confirming_kill = true;
+      return;
+    }
   }
   if (key == "s") {
     service_action_start(panel_, name);
   } else if (key == "x") {
     service_action_stop(panel_, name);
+  } else if (key == "t") {
+    service_action_restart(panel_, name);
+  } else if (key == "p") {
+    service_action_freeze(panel_, name);
   }
 }
 
 Element AppComponent::render_content() {
+  if (panel_->confirming_kill) {
+    return confirm_kill_screen(*panel_);
+  }
   if (panel_->confirming_uninstall) {
     return confirm_uninstall_screen(*panel_);
   }

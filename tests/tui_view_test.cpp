@@ -217,8 +217,57 @@ TEST(services_empty_registry_points_at_the_way_forward) {
 
 TEST(services_key_hints_name_every_action) {
   const std::vector<std::string> hints = tui::services_key_hints();
-  CHECK(contains(hints, "s start"));
-  CHECK(contains(hints, "x stop"));
-  CHECK(contains(hints, "u uninstall"));
-  CHECK(contains(hints, "r refresh"));
+  CHECK(contains(hints, "s  start"));
+  CHECK(contains(hints, "x  stop"));
+  CHECK(contains(hints, "t  restart"));
+  CHECK(contains(hints, "p  freeze"));
+  CHECK(contains(hints, "K  kill"));
+  CHECK(contains(hints, "u  uninstall"));
+  CHECK(contains(hints, "refresh"));
+  // The hint has to say what freeze really is: a SIGSTOPped service keeps its
+  // port, and calling that a pause would be a lie the user pays for.
+  CHECK(contains(hints, "keeps its port"));
+  CHECK(contains(hints, "not a suspend"));
+}
+
+TEST(services_table_shows_a_frozen_service_as_frozen) {
+  // is-active still answers "active" for a SIGSTOPped unit. A table that shows
+  // active for a process that cannot answer a request is the quiet wrong answer
+  // §11 is about, so the freeze has to be visible.
+  berth::ServiceRow row;
+  row.service_name = "berthpanel-memos";
+  row.state = berth::ServiceState::kActive;
+  row.port = 8234;
+  row.frozen = true;
+
+  const std::vector<std::string> lines = tui::services_table_lines({row});
+  CHECK(contains({lines[1]}, "frozen"));
+  CHECK(!contains({lines[1]}, "active"));
+
+  // Unfrozen, or frozen while systemd says otherwise, reads as the state
+  // systemd reports — the freeze flag only annotates an ACTIVE unit.
+  row.frozen = false;
+  CHECK(contains({tui::services_table_lines({row})[1]}, "active"));
+  berth::ServiceRow dead = row;
+  dead.state = berth::ServiceState::kInactive;
+  dead.frozen = true;
+  CHECK(contains({tui::services_table_lines({dead})[1]}, "inactive"));
+}
+
+TEST(services_kill_confirmation_says_what_sigkill_costs) {
+  // A confirmation that hides the price of saying yes is not a confirmation.
+  berth::ServiceRow row;
+  row.service_name = "berthpanel-memos";
+  const std::vector<std::string> lines = tui::confirm_kill_lines(row);
+  CHECK(contains(lines, "kill berthpanel-memos?"));
+  CHECK(contains(lines, "SIGKILL"));
+  CHECK(contains(lines, "not written to disk is gone"));
+  CHECK(contains(lines, "does NOT come back on its own"));
+  // The reversible alternative is named, because it usually is what was meant.
+  CHECK(contains(lines, "freeze it with p"));
+  // Shift-K, because 'k' is the panel-wide cursor key — the hint has to show
+  // the real key or the user presses k and nothing happens.
+  CHECK(contains(tui::services_key_hints(), "K  kill"));
+  CHECK(contains(lines, "y  yes, kill it"));
+  CHECK(contains(lines, "n  no, leave it alone"));
 }

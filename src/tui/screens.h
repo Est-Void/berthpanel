@@ -89,6 +89,16 @@ void service_action_start(const std::shared_ptr<Panel>& panel,
                           const std::string& service_name);
 void service_action_stop(const std::shared_ptr<Panel>& panel,
                          const std::string& service_name);
+void service_action_restart(const std::shared_ptr<Panel>& panel,
+                            const std::string& service_name);
+// SIGKILL. The confirmation is UI, the kill is not: `confirmed` is the dialog's
+// answer as data, exactly like `uninstall`.
+void service_action_kill(const std::shared_ptr<Panel>& panel,
+                         const std::string& service_name, bool confirmed);
+// Freeze / unfreeze (SIGSTOP / SIGCONT). The engine reads the unit's SubState
+// back afterwards, and the row is updated from what it actually says.
+void service_action_freeze(const std::shared_ptr<Panel>& panel,
+                           const std::string& service_name);
 void service_action_uninstall(const std::shared_ptr<Panel>& panel,
                               const berth::Paths& paths,
                               const std::string& service_name);
@@ -98,6 +108,7 @@ void service_action_uninstall(const std::shared_ptr<Panel>& panel,
 [[nodiscard]] ftxui::Element render_logs_screen(const Panel& panel);
 [[nodiscard]] ftxui::Element render_services_screen(const Panel& panel);
 [[nodiscard]] ftxui::Element confirm_uninstall_screen(const Panel& panel);
+[[nodiscard]] ftxui::Element confirm_kill_screen(const Panel& panel);
 
 // Deploy (6.3, 4.21). The three FTXUI Inputs the app owns are passed in
 // because a Component's Render() belongs to the component tree in app.cpp.
@@ -116,5 +127,10 @@ enum class UninstallKey {
 };
 [[nodiscard]] UninstallKey handle_uninstall_key(Panel& panel,
                                                 const std::string& key);
+
+// The kill confirmation: the same shape, the same contract — the caller runs
+// the kill, the dialog only decides.
+[[nodiscard]] UninstallKey handle_kill_key(Panel& panel,
+                                           const std::string& key);
 
 }  // namespace tui

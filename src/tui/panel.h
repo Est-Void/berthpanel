@@ -132,6 +132,8 @@ struct Panel {
   std::string action;  // non-empty while a start/stop/uninstall is running
   bool confirming_uninstall = false;
   berth::ServiceRow uninstall_target;
+  bool confirming_kill = false;
+  berth::ServiceRow kill_target;
 
   // System Scan (6.5). One worker at a time; `scan_ever_ran` is what makes the
   // tab run its scan on the first visit instead of at startup — a network GET

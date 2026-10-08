@@ -10,6 +10,9 @@
 #include "../core/names.h"
 #include "../core/state.h"
 #include "../util/fs.h"
+#include "../util/strutil.h"
+#include "../util/subprocess.h"
+#include "../util/which.h"
 #include "units.h"
 
 namespace berth {
@@ -127,6 +130,134 @@ Result<void> service_stop(const std::string& service_name) {
   }
   return with_context(systemctl_user({"stop", service_name + ".service"}),
                       "stopping " + service_name);
+}
+
+Result<void> service_restart(const std::string& service_name) {
+  if (!validate_unit_name(service_name)) {
+    return Error("service_ops: invalid service name: '" + service_name + "'");
+  }
+  // `systemctl restart` exists, but stop-then-start is what the two verbs
+  // above already prove, and a restart that silently no-ops when the unit is
+  // not loaded would be a lie about a repair.
+  Result<void> stopped = service_stop(service_name);
+  if (stopped.is_err()) {
+    return stopped;
+  }
+  return with_context(service_start(service_name),
+                      "restarting " + service_name);
+}
+
+Result<void> service_kill(const std::string& service_name) {
+  if (!validate_unit_name(service_name)) {
+    return Error("service_ops: invalid service name: '" + service_name + "'");
+  }
+  return with_context(
+      systemctl_user({"kill", "--signal=SIGKILL", "--kill-who=main",
+                      service_name + ".service"}),
+      "killing " + service_name);
+}
+
+namespace {
+
+// The unit's MainPID, as systemd reports it. One bounded call; "" when the
+// unit has none (never started, or failed to start).
+Result<std::string> main_pid_of(const std::string& unit) {
+  // `show --value` prints on stdout and systemctl_user() throws the output
+  // away, so this one call goes through run() directly — with the same argv
+  // array and timeout as everything else (§11: never a command string).
+  const Result<std::string> systemctl = resolve_executable("systemctl");
+  if (systemctl.is_err()) {
+    return with_context(std::move(systemctl).error(), "reading " + unit);
+  }
+  RunLimits limits;
+  limits.timeout = kIsActiveTimeout;
+  const Result<RunOutput> shown = run({systemctl.value(), "--user", "show",
+                                       "--property=MainPID", "--value", unit},
+                                      limits);
+  if (shown.is_err()) {
+    return with_context(std::move(shown).error(), "reading " + unit);
+  }
+  if (shown.value().exit_code != 0) {
+    return Error("service_ops: systemctl show failed for " + unit + ": " +
+                 std::string(berth::trim(shown.value().err)));
+  }
+  return std::string(berth::trim(shown.value().out));
+}
+
+}  // namespace
+
+char proc_stat_state(const std::string_view stat_line) {
+  // "1234 (some (weird) name) T 1234 ..." — the comm field is in parentheses
+  // and may contain both, so the LAST ')' is the only reliable separator.
+  const std::size_t close = stat_line.rfind(')');
+  if (close == std::string_view::npos || close + 2 > stat_line.size()) {
+    return '\0';
+  }
+  const char state = stat_line[close + 2];
+  // Only the documented state letters are accepted; anything else means the
+  // line is not what we think it is.
+  static constexpr std::string_view kStates = "RSDZTtWXxKWPslNNI";
+  if (kStates.find(state) == std::string_view::npos) {
+    return '\0';
+  }
+  return state;
+}
+
+Result<bool> service_is_frozen(const std::string& service_name) {
+  if (!validate_unit_name(service_name)) {
+    return Error("service_ops: invalid service name: '" + service_name + "'");
+  }
+  const Result<std::string> pid = main_pid_of(service_name + ".service");
+  if (pid.is_err()) {
+    return std::move(pid).error();
+  }
+  if (pid.value().empty() || pid.value() == "0") {
+    return false;  // no process, so nothing is stopped
+  }
+  const Result<std::string> stat = read_file("/proc/" + pid.value() + "/stat");
+  if (stat.is_err()) {
+    // The process may have exited between the two calls; that is not a failure
+    // of the freeze check, it means there is nothing frozen.
+    return false;
+  }
+  const char state = proc_stat_state(stat.value());
+  if (state == '\0') {
+    return Error("service_ops: cannot read the process state of " +
+                 service_name + " (pid " + pid.value() +
+                 ") — treating it as NOT frozen, which is the safe direction");
+  }
+  return state == 'T' || state == 't';
+}
+
+Result<bool> service_freeze(const std::string& service_name) {
+  if (!validate_unit_name(service_name)) {
+    return Error("service_ops: invalid service name: '" + service_name + "'");
+  }
+  Result<void> sent =
+      systemctl_user({"kill", "--signal=SIGSTOP", "--kill-who=main",
+                      service_name + ".service"});
+  if (sent.is_err()) {
+    return with_context(std::move(sent).error(), "freezing " + service_name);
+  }
+  // Sent is not stopped. Confirm against the process itself (§11: a signal
+  // that went out is not a state).
+  return service_is_frozen(service_name);
+}
+
+Result<bool> service_unfreeze(const std::string& service_name) {
+  if (!validate_unit_name(service_name)) {
+    return Error("service_ops: invalid service name: '" + service_name + "'");
+  }
+  Result<void> sent =
+      systemctl_user({"kill", "--signal=SIGCONT", "--kill-who=main",
+                      service_name + ".service"});
+  if (sent.is_err()) {
+    return with_context(std::move(sent).error(), "unfreezing " + service_name);
+  }
+  // Same meaning as service_freeze(): true = FROZEN NOW. Two functions whose
+  // bool means opposite things is a trap for the caller, and it already was
+  // one.
+  return service_is_frozen(service_name);
 }
 
 Result<void> service_uninstall(const Paths& paths,
