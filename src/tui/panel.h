@@ -13,6 +13,7 @@
 // an engine call belongs on a worker (app.h).
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -35,6 +36,7 @@
 #include "../core/netstatus.h"
 #include "../core/paths.h"
 #include "chrome.h"
+#include "ops.h"
 #include "ring.h"
 #include "view_catalog.h"
 #include "view_deploy.h"
@@ -55,9 +57,13 @@ struct Panel {
   // The XDG layout, copied in once: no screen builds a path itself (§3).
   berth::Paths paths;
 
-  std::atomic<bool> cancel{false};
   std::atomic<bool> shutting_down{false};
   mutable std::mutex mutex;
+
+  // The running long operations. The quit path goes through it; it is the
+  // difference between "q cancelled the thing you were waiting for" and "q
+  // hoped for the best" (dev.md §6.7).
+  OpRegistry ops;
 
   // The one handle a worker may use to reach the render loop. Owned by
   // app.cpp for the panel's lifetime; null in tests, where request_render()
@@ -87,9 +93,9 @@ struct Panel {
   std::atomic<bool> deploy_running{false};
   bool deploy_in_flight = false;
   std::atomic<bool> deploy_cancel_requested{false};
-  // The engine's own cancel flag for THIS deploy. Not the panel-wide one: a
-  // deploy in flight must not be killed by an unrelated screen refresh.
-  std::shared_ptr<std::atomic<bool>> deploy_engine_cancel;
+  // The operation THIS deploy runs as. 'c' flips its cancel flag, which is the
+  // same flag the quit path flips — one path to the engine, not two.
+  std::shared_ptr<Op> deploy_op;
   std::string deploy_status;
   std::string deploy_error;
   DeployStage deploy_stage = DeployStage::kOther;
@@ -129,6 +135,11 @@ struct Panel {
   std::vector<std::optional<std::size_t>> log_counts;
   std::size_t log_scroll = 0;  // lines up from the newest (0 = live)
 
+  // How many long operations the last quit had to cancel. Set on the quit path
+  // and reported on stderr afterwards, because a panel that swallows Ctrl-C
+  // without saying what it interrupted has told the user nothing (§11).
+  std::size_t cancelled_on_quit = 0;
+
   std::size_t tab = 0;
 };
 
@@ -137,22 +148,32 @@ struct Panel {
 // what lets the workers be detached instead of joined.
 void request_render(const Panel& panel);
 
-// The one way off the render thread. `work` runs on a detached thread with
-// the cancel flag; `apply` runs back on the render thread with the mutex
-// held, so a worker result is folded into the state without a second lock
-// and without a torn read.
+// The one way off the render thread. `work` runs on a detached thread with the
+// operation's own cancel flag (pass `&op->cancel` to the engine); `apply` runs
+// back on the render thread with the mutex held, so a worker result is folded
+// into the state without a second lock and without a torn read.
 //
 // Detached, not joined: a `systemctl` that ignores its timeout must not hold
-// the quit hostage. The safety comes from the shared_ptr capture (the state
-// outlives the panel) and from request_render() going quiet after shutdown.
+// the quit hostage. What makes that safe is stated here once: the state is
+// captured by shared_ptr (so it outlives the panel), the op deregisters itself
+// on the way out (so a later cancel_all() never flips a flag nobody reads),
+// request_render() goes quiet after shutdown. A worker that is still running
+// when the process exits has already been told to stop.
 template <typename T>
 void run_on_worker(
-    const std::shared_ptr<Panel>& panel,
-    const std::function<berth::Result<T>(std::atomic<bool>*)>& work,
+    const std::shared_ptr<Panel>& panel, const std::string& label,
+    const std::function<berth::Result<T>(const std::shared_ptr<Op>&)>& work,
     const std::function<void(Panel&, berth::Result<T>&&)>& apply) {
+  // The registry carries its own mutex, so this does NOT need the panel lock:
+  // the two are never held at once, and a worker never blocks the render thread
+  // on the registry.
+  const std::shared_ptr<Op> op = panel->ops.begin(label);
   const std::shared_ptr<Panel> keep_alive = panel;
-  std::thread worker([keep_alive, work, apply]() {
-    berth::Result<T> outcome = work(&keep_alive->cancel);
+  std::thread worker([keep_alive, work, apply, op]() {
+    berth::Result<T> outcome = work(op);
+    // Deregister BEFORE the shutdown check: an op that finished during the
+    // quit must not be left in the list for a later cancel to find.
+    static_cast<void>(keep_alive->ops.end(op));
     if (keep_alive->shutting_down.load()) {
       return;
     }

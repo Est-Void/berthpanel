@@ -35,8 +35,12 @@ namespace {
 using ftxui::Element;
 using ftxui::Event;
 
-// How often the signal watcher turns a cancelled flag into an exit.
+// How often the signal watcher looks at its flag.
 constexpr auto kCancelPoll = std::chrono::milliseconds(250);
+// How long a quit waits for a cancelled operation to actually unwind. Bounded
+// on purpose: a worker wedged in a syscall must not hold the exit hostage, and
+// the failure has to be reported rather than waited on forever (§11).
+constexpr std::chrono::milliseconds kShutdownJoinBudget{2000};
 
 // The keys the port field owns on the Deploy tab. Digits only (the rule and
 // its reason are in view_deploy.h); Return, Backspace and Delete are named
@@ -81,11 +85,20 @@ class AppComponent final : public ftxui::ComponentBase {
     const std::string key =
         event.is_character() ? std::string(event.character()) : std::string();
 
+    // Ctrl-C is ours, not FTXUI's: it cancels what is running and takes the
+    // SAME path as q (screen.ForceHandleCtrlC(false) in run_tui). Handled
+    // before everything else, including the modal — a quit must not be stuck
+    // behind a dialog.
+    if (event == Event::CtrlC) {
+      quit(panel_->ops.cancel_all());
+      return true;
+    }
+
     // The confirmation is modal: it takes the key and, for now, nothing else
     // on the screen reacts.
     if (panel_->confirming_uninstall) {
       if (handle_uninstall_key(*panel_, key) == UninstallKey::kQuit) {
-        quit();
+        quit(panel_->ops.cancel_all());
       }
       return true;
     }
@@ -126,7 +139,9 @@ class AppComponent final : public ftxui::ComponentBase {
       return true;
     }
     if (key == "q" || event == Event::Escape) {
-      quit();
+      // Cancel FIRST, then leave the loop: every long operation polls its flag
+      // (§11), so a quit unwinds what is running instead of orphaning it.
+      quit(panel_->ops.cancel_all());
       return true;
     }
 
@@ -164,10 +179,11 @@ class AppComponent final : public ftxui::ComponentBase {
   }
 
  private:
-  void quit() {
-    // Every long operation in the engine polls this flag, so a quit unwinds
-    // rather than orphaning a half-run action.
-    panel_->cancel.store(true);
+  // The quit. `cancelled_ops` is carried so run_tui() can say what it was
+  // unwinding — a quit that silently abandons a running deploy is the §11
+  // frozen-screen bug wearing a different hat.
+  void quit(const std::size_t cancelled_ops) {
+    panel_->cancelled_on_quit = cancelled_ops;
     panel_->screen->Exit();
   }
 
@@ -388,17 +404,19 @@ Element AppComponent::render_content() {
   abort_bug("unknown tab in render_content");
 }
 
-void start_cancel_watcher(const std::shared_ptr<Panel>& panel) {
-  // SIGINT/SIGTERM flip the cancel flag and nothing more; a TUI that only
-  // flipped a flag would ignore systemd's stop until SIGKILL. The watcher
-  // turns a signal into a clean exit, and it is itself interruptible.
-  std::thread watcher([panel]() {
-    while (!panel->cancel.load() && !panel->shutting_down.load()) {
+// SIGINT/SIGTERM are the only thing that can interrupt a quit from outside,
+// and they arrive as a flag — there is no "panel-wide cancel flag" any more,
+// because a flag nothing polls is exactly the §11 bug. The watcher asks for the
+// same shutdown a key press asks for: cancel what is running, then leave the
+// loop.
+void start_cancel_watcher(const std::shared_ptr<Panel>& panel,
+                          const std::shared_ptr<std::atomic<bool>>& signalled) {
+  std::thread watcher([panel, signalled]() {
+    while (!signalled->load(std::memory_order_relaxed)) {
       std::this_thread::sleep_for(kCancelPoll);
     }
-    if (!panel->shutting_down.load()) {
-      panel->screen->Exit();
-    }
+    static_cast<void>(panel->ops.cancel_all());
+    panel->screen->Exit();
   });
   watcher.detach();
 }
@@ -408,11 +426,17 @@ void start_cancel_watcher(const std::shared_ptr<Panel>& panel) {
 int run_tui(const berth::Paths& paths) {
   auto panel = std::make_shared<Panel>();
   panel->paths = paths;
+  // The counters describe THIS session (§6.1): net.log survives across runs, a
+  // counter that did not reset would claim requests this panel never made.
+  berth::netstatus_reset();
 
-  // Ctrl-C and SIGTERM become the cooperative cancel flag every long
-  // operation already polls. The watcher thread turns the flag into an exit.
+  // Ctrl-C and SIGTERM become a flag the watcher polls. The terminal is put
+  // back on every exit path: Exit() restores it before Loop() returns, and the
+  // ScreenInteractive destructor restores it again if we ever leave another
+  // way. Shared, not on the stack: the watcher thread can outlive this frame.
+  auto signalled = std::make_shared<std::atomic<bool>>(false);
   const berth::Result<void> signalling =
-      berth::install_exit_signalling(&panel->cancel);
+      berth::install_exit_signalling(signalled.get());
   if (signalling.is_err()) {
     std::fputs("berthpanel: ", stderr);
     std::fputs(signalling.error().ctx().c_str(), stderr);
@@ -422,16 +446,50 @@ int run_tui(const berth::Paths& paths) {
 
   ftxui::ScreenInteractive screen = ftxui::ScreenInteractive::Fullscreen();
   panel->screen = &screen;
+  // Ctrl-C is ours to handle, so FTXUI must not turn it into its own SIGABRT:
+  // we cancel what is running, unwind it and restore the terminal exactly like
+  // a normal quit.
+  screen.ForceHandleCtrlC(false);
 
   auto app = std::make_shared<AppComponent>(panel);
   app->start();
-  start_cancel_watcher(panel);
+  start_cancel_watcher(panel, signalled);
   screen.Loop(app);
 
   // From here on no worker may touch the screen: they check shutting_down
   // before posting, and they hold their own shared_ptr to the state.
   panel->shutting_down.store(true);
+
+  // Stage 6.7: the quit already asked every live op to stop, and now we WAIT
+  // for them — bounded. An unwound deploy leaves a journal entry that __cleanup
+  // sweeps, so two seconds is worth spending to know the worker really stopped.
+  // A worker that ignores the request is DETACHED, loudly: silence there is the
+  // one outcome nobody can debug (§11).
+  if (const std::size_t live = panel->ops.size(); live > 0) {
+    static_cast<void>(panel->ops.cancel_all());
+    if (panel->ops.wait_until_empty(kShutdownJoinBudget)) {
+      std::fputs("berthpanel: unwound ", stderr);
+      std::fputs(std::to_string(live).c_str(), stderr);
+      std::fputs(" running operation(s) before exiting\n", stderr);
+    } else {
+      std::fputs("berthpanel: ", stderr);
+      std::fputs(std::to_string(live).c_str(), stderr);
+      std::fputs(" operation(s) did not stop within ", stderr);
+      std::fputs(std::to_string(kShutdownJoinBudget.count()).c_str(), stderr);
+      std::fputs(
+          "s and were left detached — a journal entry, if any, stays "
+          "for __cleanup\n",
+          stderr);
+    }
+  }
+  if (panel->cancelled_on_quit > 0) {
+    std::fputs("berthpanel: cancelled ", stderr);
+    std::fputs(std::to_string(panel->cancelled_on_quit).c_str(), stderr);
+    std::fputs(" running operation(s) on quit\n", stderr);
+  }
+
   berth::uninstall_exit_signalling();
+  screen.Exit();
   return 0;
 }
 

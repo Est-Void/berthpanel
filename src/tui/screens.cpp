@@ -130,7 +130,8 @@ void follow_deploy_log(const std::shared_ptr<Panel>& panel,
     };
 
     gate->ready.store(true, std::memory_order_release);
-    while (keep_alive->deploy_running.load(std::memory_order_relaxed)) {
+    while (keep_alive->deploy_running.load(std::memory_order_relaxed) &&
+           !keep_alive->shutting_down.load(std::memory_order_relaxed)) {
       drain();
       std::this_thread::sleep_for(kDeployTailPoll);
     }
@@ -147,7 +148,6 @@ void follow_deploy_log(const std::shared_ptr<Panel>& panel,
 void start_deploy(const std::shared_ptr<Panel>& panel,
                   const berth::Paths& paths, const berth::Recipe& recipe,
                   const std::uint16_t forced_port) {
-  std::shared_ptr<std::atomic<bool>> engine_cancel;
   {
     std::lock_guard lock(panel->mutex);
     // One deploy at a time, in the UI. The engine's deploy.lock is the second
@@ -167,8 +167,6 @@ void start_deploy(const std::shared_ptr<Panel>& panel,
     panel->deploy_service = recipe.service_name;
     panel->deploy_log_lines.clear();
     panel->deploy_status = "starting " + recipe.service_name;
-    engine_cancel = std::make_shared<std::atomic<bool>>(false);
-    panel->deploy_engine_cancel = engine_cancel;
   }
 
   // The tail goes first: it must know the log's end offset before the engine
@@ -178,15 +176,21 @@ void start_deploy(const std::shared_ptr<Panel>& panel,
 
   const std::shared_ptr<Panel> keep_alive = panel;
   run_on_worker<berth::DeployOutcome>(
-      panel,
-      [paths, recipe, forced_port, engine_cancel, gate,
-       keep_alive](std::atomic<bool>* /*panel_cancel*/) {
+      panel, "deploy " + recipe.service_name,
+      [paths, recipe, forced_port, gate, keep_alive,
+       panel](const std::shared_ptr<Op>& op) {
         static_cast<void>(wait_bounded(gate->ready, kTailReadyBudget));
+        {
+          // 'c' flips this same flag, so the key and the quit reach the engine
+          // by one path instead of two. A screen refresh must NOT be able to
+          // kill a deploy in flight, which is why it is the op's flag and not
+          // the panel-wide one.
+          std::lock_guard lock(panel->mutex);
+          panel->deploy_op = op;
+        }
         berth::RealDeployOps ops;
         berth::DeployOptions options;
-        // The deploy's OWN cancel flag, not the panel-wide one: a screen
-        // refresh must not be able to kill a deploy in flight.
-        options.cancel = engine_cancel.get();
+        options.cancel = &op->cancel;
         berth::Result<berth::DeployOutcome> outcome =
             run_deploy(paths, recipe, forced_port, ops, options);
         // Tell the tail to stop, then WAIT for it, so the done/failed lines
@@ -199,7 +203,7 @@ void start_deploy(const std::shared_ptr<Panel>& panel,
       [](Panel& state, berth::Result<berth::DeployOutcome>&& outcome) {
         state.deploy_finished = true;
         state.deploy_in_flight = false;
-        state.deploy_engine_cancel.reset();
+        state.deploy_op.reset();
         if (outcome.is_err()) {
           state.deploy_cancelled =
               state.deploy_cancel_requested.load(std::memory_order_relaxed);
@@ -216,7 +220,7 @@ void start_deploy(const std::shared_ptr<Panel>& panel,
 }
 
 void cancel_deploy(const std::shared_ptr<Panel>& panel) {
-  std::shared_ptr<std::atomic<bool>> engine_cancel;
+  std::shared_ptr<Op> op;
   {
     std::lock_guard lock(panel->mutex);
     if (!panel->deploy_running.load(std::memory_order_relaxed) ||
@@ -224,11 +228,11 @@ void cancel_deploy(const std::shared_ptr<Panel>& panel) {
       return;
     }
     panel->deploy_cancel_requested.store(true, std::memory_order_relaxed);
-    engine_cancel = panel->deploy_engine_cancel;
+    op = panel->deploy_op;
     panel->deploy_status = "cancelling " + panel->deploy_service + "...";
   }
-  if (engine_cancel != nullptr) {
-    engine_cancel->store(true, std::memory_order_relaxed);
+  if (op != nullptr) {
+    op->cancel.store(true, std::memory_order_relaxed);
   }
   request_render(*panel);
 }
@@ -344,8 +348,9 @@ void refresh_catalog(const std::shared_ptr<Panel>& panel,
     panel->catalog_error.clear();
   }
   run_on_worker<Catalog>(
-      panel,
-      [paths](std::atomic<bool>* cancel) -> berth::Result<Catalog> {
+      panel, "catalog load",
+      [paths](const std::shared_ptr<Op>& op) -> berth::Result<Catalog> {
+        std::atomic<bool>* cancel = &op->cancel;
         // Cancelled before it started is not a failure worth rendering; the
         // load simply never happens.
         if (cancel->load()) {
@@ -382,9 +387,9 @@ void run_system_scan(const std::shared_ptr<Panel>& panel,
     panel->scan_error.clear();
   }
   run_on_worker<berth::ScanReport>(
-      panel,
-      [paths](std::atomic<bool>* cancel) {
-        return berth::run_system_scan(paths, cancel);
+      panel, "system scan",
+      [paths](const std::shared_ptr<Op>& op) {
+        return berth::run_system_scan(paths, &op->cancel);
       },
       [](Panel& state, berth::Result<berth::ScanReport>&& report) {
         state.scan_running = false;
@@ -508,8 +513,8 @@ void refresh_logs(const std::shared_ptr<Panel>& panel,
   }
   const std::filesystem::path path = log_path_of(paths, file);
   run_on_worker<berth::Tail>(
-      panel,
-      [path](std::atomic<bool>* /*cancel*/) {
+      panel, "log tail",
+      [path](const std::shared_ptr<Op>& /*op*/) {
         return berth::tail_lines(path, kLogViewLines);
       },
       [file, scroll](Panel& state, berth::Result<berth::Tail>&& tail) {
@@ -616,9 +621,9 @@ void refresh_services(const std::shared_ptr<Panel>& panel,
     panel->services_status = "querying systemctl --user is-active...";
   }
   run_on_worker<std::vector<berth::ServiceRow>>(
-      panel,
-      [paths](std::atomic<bool>* cancel) {
-        return berth::service_rows(paths, cancel);
+      panel, "service refresh",
+      [paths](const std::shared_ptr<Op>& op) {
+        return berth::service_rows(paths, &op->cancel);
       },
       [](Panel& state, berth::Result<std::vector<berth::ServiceRow>>&& rows) {
         state.services_loading = false;
@@ -651,7 +656,8 @@ void service_action(const std::shared_ptr<Panel>& panel,
     panel->action = label;
   }
   run_on_worker<void>(
-      panel, [op](std::atomic<bool>* /*cancel*/) { return op(); },
+      panel, label,
+      [op](const std::shared_ptr<Op>& /*registered*/) { return op(); },
       [label](Panel& state, berth::Result<void>&& done) {
         state.action.clear();
         if (done.is_err()) {
