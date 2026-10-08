@@ -204,13 +204,29 @@ Result<PortReport> listening_ports(const Paths& paths,
   // state.json rather than by asking the kernel who owns it (§7).
   std::vector<std::uint16_t> owned;
   Result<std::vector<ServiceRecord>> registered = registry_list(paths);
-  if (registered.is_ok()) {
-    for (const ServiceRecord& record : registered.value()) {
-      if (record.port != 0) {
-        owned.push_back(record.port);
-      }
+  if (registered.is_err()) {
+    // A registry that cannot be read is NOT an empty registry (§11): quietly
+    // marking every port "not yours" is the exact quiet wrong answer the
+    // `owned` flag exists to avoid. state.json is already quarantined loudly
+    // by registry_list; surface the error here too.
+    return with_context(std::move(registered).error(),
+                        "scan: reading the service registry");
+  }
+  for (const ServiceRecord& record : registered.value()) {
+    if (record.port != 0) {
+      owned.push_back(record.port);
     }
   }
+
+  const auto sort_ports = [](std::vector<ListeningPort>* ports) {
+    std::sort(ports->begin(), ports->end(),
+              [](const ListeningPort& a, const ListeningPort& b) {
+                if (a.port != b.port) {
+                  return a.port < b.port;
+                }
+                return a.address < b.address;
+              });
+  };
 
   PortReport report;
   const Result<std::string> tcp = read_file(proc_net_root / "tcp");
@@ -227,10 +243,12 @@ Result<PortReport> listening_ports(const Paths& paths,
   report.unparsed = v4.unparsed;
 
   // No IPv6 on this host is a fact to state, not a failure: the screen shows
-  // the section and says the file was not there.
+  // the section and says the file was not there. The IPv4 rows are still
+  // sorted before the early return.
   const Result<std::string> tcp6 = read_file(proc_net_root / "tcp6");
   if (tcp6.is_err()) {
     report.ipv6_error = tcp6.error().ctx();
+    sort_ports(&report.ports);
     return report;
   }
   Result<ParsedPorts> parsed_v6 = parse_proc_net(tcp6.value(), true, owned);
@@ -244,13 +262,7 @@ Result<PortReport> listening_ports(const Paths& paths,
     report.ports.push_back(std::move(entry));
   }
 
-  std::sort(report.ports.begin(), report.ports.end(),
-            [](const ListeningPort& a, const ListeningPort& b) {
-              if (a.port != b.port) {
-                return a.port < b.port;
-              }
-              return a.address < b.address;
-            });
+  sort_ports(&report.ports);
   return report;
 }
 

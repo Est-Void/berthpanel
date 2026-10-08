@@ -189,3 +189,50 @@ TEST(ports_a_missing_tcp_file_is_a_loud_error_not_an_empty_report) {
   CHECK(report.is_err());
   CHECK(report.error().ctx().find("tcp") != std::string::npos);
 }
+
+TEST(ports_are_sorted_even_when_tcp6_is_absent) {
+  // The tcp6 early return used to skip the sort, so a host without IPv6 got
+  // its IPv4 rows in /proc order.
+  const TempDir tmp;
+  const std::filesystem::path root = tmp.path() / "net";
+  CHECK(berth::ensure_dir(root).is_ok());
+  CHECK(berth::atomic_write(
+            root / "tcp",
+            R"(  sl  local_address rem_address   st
+   0: 00000000:5000 00000000:0000 0A
+   1: 0100007F:0016 00000000:0000 0A
+)")
+            .is_ok());
+
+  berth::Paths paths;
+  paths.state_dir = tmp.path() / "state";
+  paths.state_json = paths.state_dir / "state.json";
+  CHECK(berth::ensure_dir(paths.state_dir).is_ok());
+
+  const berth::Result<berth::PortReport> report =
+      berth::listening_ports(paths, root);
+  CHECK(report.is_ok());
+  CHECK(!report.value().ipv6_read);
+  CHECK(!report.value().ipv6_error.empty());
+  CHECK(report.value().ports.size() == 2);
+  CHECK(report.value().ports[0].port == 22);      // 0x0016
+  CHECK(report.value().ports[1].port == 20480);   // 0x5000
+}
+
+TEST(ports_registry_error_is_loud_not_an_empty_owned_set) {
+  // A corrupt registry must not silently mean "no port is ours" (§11).
+  const TempDir tmp;
+  const std::filesystem::path root = tmp.path() / "net";
+  CHECK(berth::ensure_dir(root).is_ok());
+  CHECK(berth::atomic_write(root / "tcp", kTcp4).is_ok());
+
+  berth::Paths paths;
+  paths.state_dir = tmp.path() / "state";
+  paths.state_json = paths.state_dir / "state.json";
+  CHECK(berth::ensure_dir(paths.state_dir).is_ok());
+  CHECK(berth::atomic_write(paths.state_json, "{ this is not json").is_ok());
+
+  const berth::Result<berth::PortReport> report =
+      berth::listening_ports(paths, root);
+  CHECK(report.is_err());
+}
