@@ -20,11 +20,13 @@
 #include <vector>
 
 #include "../berth/cancel.h"
+#include "../core/netstatus.h"
 #include "../util/strutil.h"
 #include "chrome.h"
 #include "panel.h"
 #include "screens.h"
 #include "view_deploy.h"
+#include "view_logs.h"
 
 namespace tui {
 
@@ -65,7 +67,7 @@ class AppComponent final : public ftxui::ComponentBase {
   Element OnRender() override {
     std::lock_guard lock(panel_->mutex);
     return ftxui::vbox({
-        header_bar(),
+        header_bar(berth::netstatus_snapshot()),
         ftxui::hbox({
             tab_strip(panel_->tab),
             ftxui::separator(),
@@ -100,12 +102,19 @@ class AppComponent final : public ftxui::ComponentBase {
       return true;
     }
 
-    if (event == Event::ArrowDown || key == "j") {
-      move_cursor(1);
+    if (event == Event::ArrowUp || key == "k") {
+      // Up in a log is BACK in time: +1 is one line older.
+      if (scroll_logs(1)) {
+        return true;
+      }
+      move_cursor(-1);
       return true;
     }
-    if (event == Event::ArrowUp || key == "k") {
-      move_cursor(-1);
+    if (event == Event::ArrowDown || key == "j") {
+      if (scroll_logs(-1)) {
+        return true;
+      }
+      move_cursor(1);
       return true;
     }
     if (event == Event::ArrowRight || event == Event::Tab) {
@@ -140,7 +149,8 @@ class AppComponent final : public ftxui::ComponentBase {
         handle_deploy_key(key);
         return true;
       case Tab::kLogs:
-        return true;  // nothing to act on yet
+        handle_logs_key(key, event);
+        return true;
     }
     return true;
   }
@@ -166,6 +176,7 @@ class AppComponent final : public ftxui::ComponentBase {
   // and an idle panel should not touch the network uninvited (§6.1).
   void switch_tab(const int delta) {
     bool scan_the_first_time = false;
+    bool reload_logs = false;
     {
       std::lock_guard lock(panel_->mutex);
       const std::size_t count = tabs().size();
@@ -176,9 +187,15 @@ class AppComponent final : public ftxui::ComponentBase {
         panel_->scan_ever_ran = true;
         scan_the_first_time = true;
       }
+      reload_logs = tabs()[panel_->tab].tab == Tab::kLogs;
     }
     if (scan_the_first_time) {
       run_system_scan(panel_, panel_->paths);
+    }
+    if (reload_logs) {
+      // Entering the tab IS the explicit request: one bounded tail read of at
+      // most 64 KiB, on a worker, and never from the render thread.
+      refresh_logs(panel_, panel_->paths);
     }
   }
 
@@ -191,6 +208,12 @@ class AppComponent final : public ftxui::ComponentBase {
   // c / e / r on Deploy. Enter never reaches here: the port Input consumes it
   // and starts the deploy through its on_enter.
   void handle_deploy_key(const std::string& key);
+
+  // 1 / 2 / 3 and r on Logs. Scrolling is handled earlier (scroll_logs), so
+  // only the file switch and the reload are here.
+  void handle_logs_key(const std::string& key, const ftxui::Event& event);
+
+  bool scroll_logs(int delta);
 
   // The recipe under the cursor plus the port the user typed, validated. Both
   // reads happen under the lock and nothing is spawned from inside it.
@@ -242,6 +265,51 @@ void AppComponent::handle_deploy_key(const std::string& key) {
   }
   if (key == "r") {
     refresh_catalog(panel_, panel_->paths);
+  }
+}
+
+// `delta` > 0 moves one line further back in time. Returns false when the Logs
+// tab is not the active one, so the same arrow keys keep moving a list cursor
+// everywhere else.
+bool AppComponent::scroll_logs(const int delta) {
+  if (tabs()[panel_->tab].tab != Tab::kLogs) {
+    return false;
+  }
+  std::lock_guard lock(panel_->mutex);
+  if (delta > 0) {
+    ++panel_->log_scroll;
+  } else if (panel_->log_scroll > 0) {
+    // Scrolling toward the newest line stops AT zero, where the view is
+    // pinned: a log that follows its own tail is the point.
+    panel_->log_scroll -= 1;
+  }
+  return true;
+}
+
+void AppComponent::handle_logs_key(const std::string& key,
+                                   const ftxui::Event& event) {
+  if (key == "1" || key == "2" || key == "3") {
+    const std::size_t index = static_cast<std::size_t>(key[0] - '1');
+    LogFile wanted = LogFile::kDeploy;
+    if (index < kLogFileCount) {
+      wanted = log_file_at(index);
+    }
+    {
+      std::lock_guard lock(panel_->mutex);
+      if (panel_->log_selected == wanted) {
+        return;
+      }
+      panel_->log_selected = wanted;
+      panel_->log_scroll = 0;
+      panel_->log_error.clear();
+      // The old file's lines must not stay on screen under the new file's name.
+      panel_->logs_lines.clear();
+    }
+    refresh_logs(panel_, panel_->paths);
+    return;
+  }
+  if (key == "r" || event == Event::Return) {
+    refresh_logs(panel_, panel_->paths);
   }
 }
 
@@ -315,10 +383,7 @@ Element AppComponent::render_content() {
     case Tab::kServices:
       return render_services_screen(*panel_);
     case Tab::kLogs:
-      // Every placeholder says what is missing and how to work around it
-      // today. An empty box would read as a broken feature (§11: silence on
-      // a rejected input is a bug, not a policy).
-      return notice_box(pending_notice(tabs()[panel_->tab].tab)) | ftxui::flex;
+      return render_logs_screen(*panel_);
   }
   abort_bug("unknown tab in render_content");
 }

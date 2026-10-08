@@ -20,12 +20,14 @@
 
 namespace tui {
 
+// Every tab here is BUILT. A tab that only says what it cannot do yet is
+// dead code the moment it works (dev.md §11), so this enum and the render
+// switch in app.cpp are kept in step by the test that pins the order.
 enum class Tab {
-  kCatalog,   // @ System Scan — the prerequisite scan itself is stage 6.5 and
-              // says so until it exists
-  kDeploy,    // ^ Deploy     — stage 6.3, built
-  kServices,  // # My Services — stage 6.4, built
-  kLogs,      // ≡ Logs       — stage 6.6, with the NET banner
+  kCatalog,   // @ System Scan — prerequisites, ports, services, one GET (6.5)
+  kDeploy,    // ^ Deploy     — recipe picker, worker, log tail, cancel (6.3)
+  kServices,  // # My Services — start / stop / uninstall (6.4)
+  kLogs,      // ≡ Logs       — deploy.log / net.log / crash.log (6.6)
 };
 
 inline constexpr std::size_t kTabCount = 4;
@@ -68,9 +70,5 @@ inline constexpr std::string_view kTaglinePrefix =
 
 inline constexpr std::string_view kProductSuffix = " · deploy panel";
 inline constexpr std::string_view kProductName = "BERTHPANEL";
-
-// The exact text the not-yet-built tabs show. An honest sentence, never an
-// empty box: the panel has to be able to say what it cannot do yet.
-[[nodiscard]] std::string_view pending_notice(Tab tab);
 
 }  // namespace tui

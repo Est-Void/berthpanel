@@ -46,6 +46,12 @@ void cancel_deploy(const std::shared_ptr<Panel>& panel);
 void run_system_scan(const std::shared_ptr<Panel>& panel,
                      const berth::Paths& paths);
 
+// Logs (6.6): the tail of the selected log, on a worker. Reads at most
+// kTailWindowBytes from the END of the file — never the whole thing, and never
+// on the render thread. An absent file is not an error (tail.h).
+void refresh_logs(const std::shared_ptr<Panel>& panel,
+                  const berth::Paths& paths);
+
 // My Services (6.4): the registry plus one bounded `systemctl is-active` per
 // row. Explicitly requested by the user, never polled from the render loop.
 void refresh_services(const std::shared_ptr<Panel>& panel,
@@ -63,6 +69,7 @@ void service_action_uninstall(const std::shared_ptr<Panel>& panel,
 
 // Render-thread entry points. All of them assume panel.mutex is already held.
 [[nodiscard]] ftxui::Element render_scan_screen(const Panel& panel);
+[[nodiscard]] ftxui::Element render_logs_screen(const Panel& panel);
 [[nodiscard]] ftxui::Element render_services_screen(const Panel& panel);
 [[nodiscard]] ftxui::Element confirm_uninstall_screen(const Panel& panel);
 

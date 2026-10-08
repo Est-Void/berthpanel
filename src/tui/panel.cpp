@@ -104,7 +104,7 @@ Element notice_box(const std::string_view notice) {
   return paragraph_lines(berth::split(notice, "\n")) | ftxui::flex;
 }
 
-Element header_bar() {
+Element header_bar(const berth::NetSnapshot& net) {
   const std::vector<std::string>& sign = sign_lines();
   Elements lines;
   for (std::size_t i = 0; i < sign.size(); ++i) {
@@ -126,6 +126,18 @@ Element header_bar() {
     // Line 2 (the beacon) carries nothing but the mark, so it reads as a
     // light over water sitting under the wordmark.
     lines.push_back(ftxui::hbox(std::move(row)));
+  }
+
+  // The NET banner hangs under the header. Empty when nothing has been
+  // requested, so the header does not carry a row of zeroes (§6.1: the number
+  // is a claim, and a claim about zero requests is noise). It is deliberately
+  // SHORT: an over-long header row does not clip its tail, it gets shrunk cell
+  // by cell, and a clipped count is a wrong count. The sentence explaining it
+  // lives on the Logs screen, where there is room for it.
+  const std::string banner = net_banner(net);
+  if (!banner.empty()) {
+    lines.push_back(ftxui::text("  " + banner) | ftxui::bold |
+                    ftxui::color(Color::Yellow));
   }
   return ftxui::vbox(std::move(lines)) |
          ftxui::borderStyled(ftxui::ROUNDED, Color::Cyan);

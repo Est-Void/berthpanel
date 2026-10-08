@@ -116,16 +116,6 @@ TEST(chrome_the_version_is_printed_verbatim) {
   CHECK(tui::kTaglinePrefix.back() == ' ');
 }
 
-TEST(chrome_pending_tabs_say_what_is_missing_and_how_to_work_around_it) {
-  // An honest sentence with a working command in it, not an empty box (§11:
-  // silence on a missing feature reads as a broken feature). Only Logs is
-  // still a placeholder: Catalog and Deploy are built (dev.md §12.11), and
-  // pending_notice() aborts on a built tab so the two cannot drift apart.
-  const std::string_view logs = tui::pending_notice(tui::Tab::kLogs);
-  CHECK(logs.find("net.log") != std::string_view::npos);
-  CHECK(logs.find("--show-endpoints") != std::string_view::npos);
-}
-
 // --- catalog view model ----------------------------------------------------
 
 TEST(catalog_list_lines_have_a_header_and_fixed_columns) {

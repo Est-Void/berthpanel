@@ -84,10 +84,12 @@ LIB_SRC := \
 	src/util/which.cpp \
 	src/util/gzip.cpp \
 	src/util/subprocess.cpp \
+	src/util/tail.cpp \
 	src/tui/chrome.cpp \
 	src/tui/view_catalog.cpp \
 	src/tui/view_deploy.cpp \
 	src/tui/view_scan.cpp \
+	src/tui/view_logs.cpp \
 	src/tui/view_services.cpp
 
 # Vendored C sources, compiled per mode (relaxed warnings on purpose; see
@@ -153,6 +155,8 @@ TEST_SRC := \
  	tests/cancel_test.cpp \
  	tests/gzip_test.cpp \
 	tests/ring_test.cpp \
+	tests/tail_test.cpp \
+	tests/logs_view_test.cpp \
 	tests/ports_test.cpp \
 	tests/scan_view_test.cpp \
 	tests/deploy_view_test.cpp \

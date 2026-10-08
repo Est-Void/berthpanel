@@ -17,6 +17,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -31,11 +32,13 @@
 #include "../analyzer/scan.h"
 #include "../berth/deploy.h"
 #include "../berth/service_ops.h"
+#include "../core/netstatus.h"
 #include "../core/paths.h"
 #include "chrome.h"
 #include "ring.h"
 #include "view_catalog.h"
 #include "view_deploy.h"
+#include "view_logs.h"
 #include "view_scan.h"
 #include "view_services.h"
 
@@ -113,6 +116,18 @@ struct Panel {
   bool scan_ever_ran = false;
   std::string scan_error;
   berth::ScanReport scan;
+
+  // Logs (6.6). One buffer for the SELECTED log, refilled by a worker on an
+  // explicit r — never polled from the render loop, and never the whole file.
+  LogFile log_selected = LogFile::kDeploy;
+  bool log_loading = false;
+  bool log_truncated = false;
+  bool log_existed = false;
+  std::string log_error;
+  // Lines on screen per log file; unset until that file has been read, so
+  // the tab line never prints a count for a log nobody has looked at.
+  std::vector<std::optional<std::size_t>> log_counts;
+  std::size_t log_scroll = 0;  // lines up from the newest (0 = live)
 
   std::size_t tab = 0;
 };
@@ -208,8 +223,10 @@ template <typename T>
 // The same, from a single multi-line string (chrome.h notices).
 [[nodiscard]] ftxui::Element notice_box(std::string_view notice);
 
-// The bordered header bar with the brand mark and the version.
-[[nodiscard]] ftxui::Element header_bar();
+// The bordered header bar with the brand mark and the version. `net` is the
+// NET banner (view_logs.h): read from one atomic word on every render, which
+// is the only reason it can be there at all.
+[[nodiscard]] ftxui::Element header_bar(const berth::NetSnapshot& net);
 
 // The fixed-width vertical tab strip.
 [[nodiscard]] ftxui::Element tab_strip(std::size_t active);

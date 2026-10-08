@@ -3,6 +3,8 @@
 #include "screens.h"
 
 #include <cstdio>
+#include <filesystem>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -12,8 +14,10 @@
 
 #include "../berth/deploy.h"
 #include "../berth/service_ops.h"
+#include "../core/netstatus.h"
 #include "../util/result.h"
 #include "../util/strutil.h"
+#include "../util/tail.h"
 
 namespace tui {
 
@@ -460,6 +464,142 @@ Element render_scan_screen(const Panel& panel) {
   out.push_back(scan_section("YOUR SERVICES", scan_service_lines(panel.scan)));
   out.push_back(scan_section("NETWORK", scan_network_lines(panel.scan)));
   out.push_back(ftxui::paragraph("r  run the scan again") | ftxui::dim);
+  return ftxui::vbox(std::move(out)) | ftxui::flex;
+}
+
+// --- Logs (6.6) ------------------------------------------------------------
+
+namespace {
+
+// How many lines a log view holds. Bounded because the buffer is a ring
+// (§5) and because a screen that tries to draw 20k lines is a screen that
+// takes a second to redraw.
+constexpr std::size_t kLogViewLines = 1000;
+constexpr std::size_t kLogVisibleRows = 14;
+
+std::filesystem::path log_path_of(const berth::Paths& paths,
+                                  const LogFile file) {
+  switch (file) {
+    case LogFile::kDeploy:
+      return paths.deploy_log;
+    case LogFile::kNet:
+      return paths.net_log;
+    case LogFile::kCrash:
+      return paths.crash_log;
+  }
+  abort_bug("unknown LogFile");
+}
+
+}  // namespace
+
+void refresh_logs(const std::shared_ptr<Panel>& panel,
+                  const berth::Paths& paths) {
+  LogFile file = LogFile::kDeploy;
+  std::size_t scroll = 0;
+  {
+    std::lock_guard lock(panel->mutex);
+    if (panel->log_loading) {
+      return;
+    }
+    panel->log_loading = true;
+    panel->log_error.clear();
+    file = panel->log_selected;
+    scroll = panel->log_scroll;
+  }
+  const std::filesystem::path path = log_path_of(paths, file);
+  run_on_worker<berth::Tail>(
+      panel,
+      [path](std::atomic<bool>* /*cancel*/) {
+        return berth::tail_lines(path, kLogViewLines);
+      },
+      [file, scroll](Panel& state, berth::Result<berth::Tail>&& tail) {
+        state.log_loading = false;
+        if (state.log_counts.size() != kLogFileCount) {
+          state.log_counts.assign(kLogFileCount, std::nullopt);
+        }
+        const std::size_t slot = log_file_index(file);
+        if (tail.is_err()) {
+          // An unreadable log is NOT an empty one: the buffer is cleared so the
+          // screen cannot show a stale tail next to an error about this file.
+          state.log_error = tail.error().ctx();
+          state.logs_lines.clear();
+          state.log_counts[slot] = std::nullopt;
+          state.log_existed = false;
+          state.log_truncated = false;
+          return;
+        }
+        state.log_error.clear();
+        state.log_existed = tail.value().existed;
+        state.log_truncated = tail.value().truncated;
+        state.logs_lines.clear();
+        for (const std::string& line : tail.value().lines) {
+          state.logs_lines.push_back(line);
+        }
+        state.log_counts[slot] = state.logs_lines.size();
+        // A refresh must not yank the view back to the bottom: someone
+        // scrolling up to read an old line is doing so on purpose.
+        state.log_scroll = scroll;
+      });
+}
+
+Element render_logs_screen(const Panel& panel) {
+  Elements out;
+  out.push_back(ftxui::text("LOGS") | ftxui::bold |
+                ftxui::color(Color::Yellow));
+  out.push_back(
+      ftxui::text(log_tabs_line(panel.log_selected, panel.log_counts)) |
+      ftxui::dim);
+  out.push_back(ftxui::text(std::string("  ") + std::string(log_file_path_hint(
+                                                    panel.log_selected))) |
+                ftxui::dim);
+  // What the header's NET number means, spelled out once, here where there is
+  // room for it. The banner itself is only the count.
+  const berth::NetSnapshot net = berth::netstatus_snapshot();
+  out.push_back(ftxui::text("  " + net_banner_note(net)) | ftxui::dim);
+  out.push_back(ftxui::separator());
+
+  if (panel.log_loading) {
+    out.push_back(ftxui::text("\xe2\x8b\xb0 reading the tail...") | ftxui::dim);
+    return ftxui::vbox(std::move(out)) | ftxui::flex;
+  }
+  if (!panel.log_error.empty()) {
+    out.push_back(
+        paragraph_lines(log_error_lines(panel.log_selected, panel.log_error)) |
+        ftxui::color(Color::Red));
+  } else if (panel.logs_lines.empty()) {
+    // No error and no lines: the file is genuinely empty (or absent, which is
+    // the same thing for crash.log). Tail.h says so in words per file.
+    out.push_back(paragraph_lines(log_empty_lines(panel.log_selected)));
+  } else {
+    Elements meta;
+    meta.push_back(
+        ftxui::text(std::to_string(panel.logs_lines.size()) + " lines" +
+                    (panel.log_scroll == 0
+                         ? ", pinned to the newest"
+                         : ", scrolled up " + std::to_string(panel.log_scroll) +
+                               " lines")) |
+        ftxui::dim);
+    if (panel.log_truncated) {
+      // A log longer than the window is not a log the panel can show whole,
+      // and pretending otherwise would be a silent lie.
+      meta.push_back(ftxui::text("  (the file is longer than the read window; "
+                                 "this is its tail)") |
+                     ftxui::dim);
+    }
+    if (panel.logs_lines.dropped() > 0) {
+      meta.push_back(ftxui::text("  (" +
+                                 std::to_string(panel.logs_lines.dropped()) +
+                                 " older lines dropped)") |
+                     ftxui::dim);
+    }
+    out.push_back(ftxui::hbox(std::move(meta)));
+    out.push_back(log_window(panel.logs_lines, panel.log_scroll,
+                             kLogVisibleRows, Color::Yellow));
+  }
+  out.push_back(ftxui::separator());
+  out.push_back(ftxui::paragraph("1 2 3  switch log  ·  r  reload  ·  "
+                                 "↑↓ scroll  ·  End pinned to the newest") |
+                ftxui::dim);
   return ftxui::vbox(std::move(out)) | ftxui::flex;
 }
 
