@@ -50,3 +50,22 @@ TEST(toolbox_install_refuses_without_pin) {
   CHECK(installed.is_err());
   CHECK(installed.error().ctx().find("sha256") != std::string::npos);
 }
+
+TEST(toolbox_install_refuses_a_traversing_member_before_any_download) {
+  // `member` becomes install_dir/member, so a user recipe must not be able to
+  // aim it outside install_dir. The refusal happens before the network call,
+  // so this is offline.
+  const TempDir tmp;
+  berth::Paths paths;
+  paths.state_dir = tmp.path() / "state";
+  const berth::Result<std::filesystem::path> installed = install_pinned_tool(
+      {.name = "evil",
+       .url = "https://dl.google.com/evil.tar.gz",
+       .sha256 = std::string(64, 'a'),
+       .inner_path = "../../escape.service",
+       .install_dir = tmp.path() / "tools"},
+      paths, nullptr);
+  CHECK(installed.is_err());
+  CHECK(installed.error().ctx().find("member") != std::string::npos);
+  CHECK(!std::filesystem::exists(tmp.path() / "escape.service"));
+}

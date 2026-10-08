@@ -89,8 +89,26 @@ Result<std::filesystem::path> install_pinned_tool(const PinnedTool& tool,
   if (tool.sha256.empty()) {
     return Error("toolbox: " + tool.name + " has no sha256 pin");
   }
+  // `inner_path` is the recipe's `member` and is interpolated into the install
+  // path: a user recipe with member "../../.config/systemd/user/x.service"
+  // would otherwise write outside install_dir (§11: validate every value that
+  // reaches a path). tar_list does not apply archive_path_safe either.
+  if (!archive_path_safe(tool.inner_path)) {
+    return Error("toolbox: " + tool.name + " member is not a safe relative "
+                 "path: '" + tool.inner_path + "'");
+  }
   const std::filesystem::path staging =
       paths.state_dir / "toolbox" / (tool.name + ".staging");
+  // A failed install (bad archive, missing member, write error) must not leave
+  // the verified download behind.
+  struct StagingGuard {
+    std::filesystem::path dir;
+    ~StagingGuard() {
+      Result<std::size_t> removed = remove_tree(dir);
+      static_cast<void>(removed);
+    }
+  } guard{staging};
+
   const Result<std::filesystem::path> downloaded =
       download_verified(tool.url, tool.sha256, staging, paths, cancel);
   if (downloaded.is_err())
@@ -127,9 +145,17 @@ Result<std::filesystem::path> install_pinned_tool(const PinnedTool& tool,
     if (found->size > toolbox_max_tool_bytes) {
       return Error("toolbox: " + tool.name + " member exceeds the size cap");
     }
-    payload =
-        std::string_view(archive_bytes)
-            .substr(found->data_offset, static_cast<std::size_t>(found->size));
+    // A pax `size` override is not re-validated by tar_parse against the
+    // archive length, so the member's declared extent must be checked before
+    // substr, or a crafted archive silently installs a truncated payload.
+    if (found->data_offset > archive_bytes.size() ||
+        found->size > archive_bytes.size() - found->data_offset) {
+      return Error("toolbox: " + tool.name + " member '" + tool.inner_path +
+                   "' extends past the archive");
+    }
+    payload = std::string_view(archive_bytes)
+                  .substr(found->data_offset,
+                          static_cast<std::size_t>(found->size));
   } else {
     Result<std::string> raw = read_file(downloaded.value());
     if (raw.is_err())
@@ -154,8 +180,6 @@ Result<std::filesystem::path> install_pinned_tool(const PinnedTool& tool,
   if (placed.is_err())
     return std::move(placed).error();
 
-  Result<std::size_t> cleaned = remove_tree(staging);
-  static_cast<void>(cleaned);
   return target;
 }
 
