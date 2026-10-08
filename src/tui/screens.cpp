@@ -82,26 +82,27 @@ void follow_deploy_log(const std::shared_ptr<Panel>& panel,
                        const std::shared_ptr<TailGate>& gate) {
   const std::shared_ptr<Panel> keep_alive = panel;
   std::thread tail([keep_alive, log_path, gate]() {
+    // Where this deploy's lines begin. If the log already exists we start at
+    // its current end — this screen shows THIS deploy, not the history of every
+    // deploy that ever ran. If it does not exist yet it is created by the
+    // engine's first append, and the start offset is 0: exactly the beginning
+    // of this deploy's own lines.
+    std::size_t start_offset = 0;
     std::FILE* file = std::fopen(log_path.c_str(), "r");
-    if (file == nullptr) {
-      // No log yet (it is created on the first append). Say so and leave: the
-      // deploy still runs and its result still lands.
-      gate->ready.store(true, std::memory_order_relaxed);
-      gate->drained.store(true, std::memory_order_relaxed);
-      return;
+    if (file != nullptr && std::fseek(file, 0, SEEK_END) == 0) {
+      const long end = std::ftell(file);
+      start_offset = end > 0 ? static_cast<std::size_t>(end) : 0;
     }
-    // Start at EOF: this screen shows THIS deploy, not the history of every
-    // deploy that ever ran on this machine.
-    std::fseek(file, 0, SEEK_END);
 
     std::string partial;  // a line split across two reads stays one line
     std::vector<std::string> fresh;
     const auto read_new = [&file, &partial, &fresh]() {
+      if (file == nullptr) {
+        return;
+      }
       char buffer[8192];
-      bool any = false;
       std::size_t got = 0;
       while ((got = std::fread(buffer, 1, sizeof buffer, file)) > 0) {
-        any = true;
         partial.append(buffer, got);
         std::size_t newline = 0;
         while ((newline = partial.find('\n')) != std::string::npos) {
@@ -109,10 +110,8 @@ void follow_deploy_log(const std::shared_ptr<Panel>& panel,
           partial.erase(0, newline + 1);
         }
       }
-      return any;
     };
-    const auto drain = [&]() {
-      read_new();
+    const auto flush = [&]() {
       if (fresh.empty()) {
         return;
       }
@@ -124,12 +123,34 @@ void follow_deploy_log(const std::shared_ptr<Panel>& panel,
     gate->ready.store(true, std::memory_order_release);
     while (keep_alive->deploy_running.load(std::memory_order_relaxed) &&
            !keep_alive->shutting_down.load(std::memory_order_relaxed)) {
-      drain();
+      // The log is created on the engine's first append, which can happen
+      // after this reader starts. A missing file is not "no progress to show",
+      // it is "the first line has not been written yet" — so keep trying
+      // instead of giving up and losing the whole stage ladder (§11).
+      if (file == nullptr) {
+        file = std::fopen(log_path.c_str(), "r");
+        if (file != nullptr) {
+          static_cast<void>(
+              std::fseek(file, static_cast<long>(start_offset), SEEK_SET));
+        }
+      }
+      read_new();
+      flush();
       std::this_thread::sleep_for(kDeployTailPoll);
     }
     // One last pass: the engine wrote the done/failed lines while we slept.
-    drain();
-    std::fclose(file);
+    if (file == nullptr) {
+      file = std::fopen(log_path.c_str(), "r");
+      if (file != nullptr) {
+        static_cast<void>(
+            std::fseek(file, static_cast<long>(start_offset), SEEK_SET));
+      }
+    }
+    if (file != nullptr) {
+      read_new();
+      flush();
+      std::fclose(file);
+    }
     gate->drained.store(true, std::memory_order_release);
   });
   tail.detach();
@@ -282,18 +303,29 @@ Element render_deploy_screen(const Panel& panel, ftxui::Element url_input,
                                  panel.deploy_service + "...") |
                      ftxui::color(cancelling ? Color::Yellow : Color::Magenta));
   } else if (!panel.deploy_status.empty()) {
-    const bool ok = panel.deploy_finished && !panel.deploy_cancelled &&
-                    panel.deploy_error.empty();
-    status.push_back(ftxui::text(panel.deploy_status) |
-                     ftxui::color(ok ? Color::Green : Color::Red));
+    // A cancellation is not a failure: the engine returns an Error to unwind,
+    // but the status stays yellow and no "deploy failed:" box is drawn.
+    const DeployVerdict verdict = deploy_verdict(
+        panel.deploy_finished, panel.deploy_cancelled, panel.deploy_error);
+    const Color colour = verdict.success     ? Color::Green
+                         : verdict.cancelled ? Color::Yellow
+                                             : Color::Red;
+    status.push_back(ftxui::text(panel.deploy_status) | ftxui::color(colour));
   } else {
     status.push_back(ftxui::text("idle"));
   }
   out.push_back(ftxui::hbox(std::move(status)) | ftxui::dim);
   out.push_back(ftxui::separator());
 
-  if (panel.catalog_error.empty() && panel.catalog.recipes.empty() &&
-      !panel.catalog_loading) {
+  if (!panel.catalog_error.empty()) {
+    // A catalog that failed to load must say so (§11). The old screen fell
+    // through to an empty list and showed the user nothing at all.
+    std::vector<std::string> lines{"the catalog could not be read:"};
+    for (const std::string& part : berth::split(panel.catalog_error, "\n")) {
+      lines.push_back("  " + part);
+    }
+    out.push_back(paragraph_lines(lines) | ftxui::color(Color::Red));
+  } else if (panel.catalog.recipes.empty() && !panel.catalog_loading) {
     out.push_back(
         ftxui::paragraph("the catalog is empty: no builtin recipes compiled "
                          "into this binary and no user recipes under the "
@@ -353,11 +385,13 @@ Element render_deploy_screen(const Panel& panel, ftxui::Element url_input,
       out.push_back(ftxui::paragraph(line) | ftxui::color(Color::Yellow));
     }
   }
-  if (panel.deploy_finished && panel.deploy_error.empty()) {
+  const DeployVerdict verdict = deploy_verdict(
+      panel.deploy_finished, panel.deploy_cancelled, panel.deploy_error);
+  if (verdict.success) {
     out.push_back(paragraph_lines(deploy_outcome_lines(panel.deploy_outcome)) |
                   ftxui::color(Color::Green));
   }
-  if (!panel.deploy_error.empty()) {
+  if (verdict.failed) {
     for (const std::string& line : deploy_error_lines(panel.deploy_error)) {
       out.push_back(ftxui::paragraph(line) | ftxui::color(Color::Red));
     }
@@ -600,6 +634,12 @@ void start_draft(const std::shared_ptr<Panel>& panel,
   run_on_worker<DraftPrepared>(
       panel, "recipe draft",
       [paths, url, ref, keep_alive](const std::shared_ptr<Op>& op) {
+        {
+          // Publish the op so 'c' reaches the draft's own flag while it runs;
+          // it is reset in the apply once the draft is no longer in flight.
+          std::lock_guard lock(keep_alive->mutex);
+          keep_alive->draft_op = op;
+        }
         // Progress from the worker lands in the status line under the panel
         // lock, and asks for a redraw: the render thread reads it next frame.
         const berth::DraftProgress progress =
@@ -631,6 +671,7 @@ void start_draft(const std::shared_ptr<Panel>& panel,
       },
       [](Panel& state, berth::Result<DraftPrepared>&& prepared) {
         state.draft_running = false;
+        state.draft_op.reset();
         if (!prepared.value().error.empty()) {
           state.draft_ready = false;
           state.draft_error = prepared.value().error;
@@ -653,7 +694,10 @@ void accept_draft(const std::shared_ptr<Panel>& panel,
   bool clash_needs_an_answer = false;
   {
     std::lock_guard lock(panel->mutex);
-    if (!panel->draft_ready || panel->draft_stored) {
+    // A second 's'/'d' while a store, a draft or a deploy is in flight must not
+    // spawn a second writer over the same file.
+    if (!panel->draft_ready || panel->draft_stored || panel->draft_running ||
+        panel->draft_storing || panel->deploy_in_flight) {
       return;
     }
     if (panel->draft_clash.exists && !force) {
@@ -696,6 +740,13 @@ void accept_draft(const std::shared_ptr<Panel>& panel,
     return;
   }
 
+  {
+    std::lock_guard lock(panel->mutex);
+    if (panel->draft_storing) {
+      return;
+    }
+    panel->draft_storing = true;
+  }
   run_on_worker<std::filesystem::path>(
       panel, "store draft",
       [paths, recipe, force](const std::shared_ptr<Op>& /*op*/) {
@@ -703,6 +754,7 @@ void accept_draft(const std::shared_ptr<Panel>& panel,
       },
       [](Panel& state, berth::Result<std::filesystem::path>&& stored) {
         state.draft_clash_confirming = false;
+        state.draft_storing = false;
         if (stored.is_err()) {
           state.draft_error = stored.error().ctx();
           state.draft_status = "the draft was NOT stored";
@@ -765,16 +817,18 @@ std::filesystem::path log_path_of(const berth::Paths& paths,
 void refresh_logs(const std::shared_ptr<Panel>& panel,
                   const berth::Paths& paths) {
   LogFile file = LogFile::kDeploy;
-  std::size_t scroll = 0;
+  std::size_t generation = 0;
   {
     std::lock_guard lock(panel->mutex);
-    if (panel->log_loading) {
-      return;
-    }
+    // A newer request SUPERSEDES one in flight instead of being dropped. The
+    // old behavior returned early when a tail was loading, so switching 1→2
+    // while file 1 was being read left file 2 unloaded and then wrote file 1's
+    // lines under file 2's selected tab. The generation makes the stale reply
+    // a no-op and lets the new file load immediately.
+    file = panel->log_selected;
     panel->log_loading = true;
     panel->log_error.clear();
-    file = panel->log_selected;
-    scroll = panel->log_scroll;
+    generation = ++panel->log_generation;
   }
   const std::filesystem::path path = log_path_of(paths, file);
   run_on_worker<berth::Tail>(
@@ -782,7 +836,13 @@ void refresh_logs(const std::shared_ptr<Panel>& panel,
       [path](const std::shared_ptr<Op>& /*op*/) {
         return berth::tail_lines(path, kLogViewLines);
       },
-      [file, scroll](Panel& state, berth::Result<berth::Tail>&& tail) {
+      [file, generation](Panel& state, berth::Result<berth::Tail>&& tail) {
+        // A reply for a file the user has switched away from is dropped: the
+        // screen already cleared for the new selection, and writing this under
+        // it would show one file's tail under another file's name.
+        if (generation != state.log_generation) {
+          return;
+        }
         state.log_loading = false;
         if (state.log_counts.size() != kLogFileCount) {
           state.log_counts.assign(kLogFileCount, std::nullopt);
@@ -806,9 +866,9 @@ void refresh_logs(const std::shared_ptr<Panel>& panel,
           state.logs_lines.push_back(line);
         }
         state.log_counts[slot] = state.logs_lines.size();
-        // A refresh must not yank the view back to the bottom: someone
-        // scrolling up to read an old line is doing so on purpose.
-        state.log_scroll = scroll;
+        // The scroll position is left alone on purpose: a reload must not yank
+        // the view back to the bottom, and log_window clamps a scroll that is
+        // now past the top of a shorter file.
       });
 }
 
@@ -933,26 +993,53 @@ std::string row_is_frozen_after(const bool frozen_now, const bool freezing,
   return service_name + " is running again";
 }
 
-// start / stop / uninstall share one shape: a label, one blocking call, and
-// the outcome folded into the status line. Only the call differs.
+// start / stop / restart / kill / uninstall share one shape: a label, one
+// blocking call, and the outcome folded into the status line. Only the call
+// differs. The action and the re-list run on ONE worker and land in ONE apply,
+// so the row the user just acted on can never be left showing its old state
+// (start still reading "inactive", an uninstalled service still listed). Doing
+// the re-list here also avoids taking panel.mutex again from inside the apply,
+// which would self-deadlock.
 void service_action(const std::shared_ptr<Panel>& panel,
                     const std::string& label,
                     const std::function<berth::Result<void>()>& op) {
+  berth::Paths paths;
   {
     std::lock_guard lock(panel->mutex);
     if (!panel->action.empty()) {
       return;  // one action at a time: a second press is a no-op, not a race
     }
     panel->action = label;
+    paths = panel->paths;
   }
-  run_on_worker<void>(
+  run_on_worker<std::vector<berth::ServiceRow>>(
       panel, label,
-      [op](const std::shared_ptr<Op>& /*registered*/) { return op(); },
-      [label](Panel& state, berth::Result<void>&& done) {
-        state.action.clear();
+      [op, paths](const std::shared_ptr<Op>& registered)
+          -> berth::Result<std::vector<berth::ServiceRow>> {
+        const berth::Result<void> done = op();
         if (done.is_err()) {
-          state.services_status = done.error().ctx();
+          return std::move(done).error();
+        }
+        return berth::service_rows(paths, &registered->cancel);
+      },
+      [label](Panel& state,
+              berth::Result<std::vector<berth::ServiceRow>>&& refreshed) {
+        state.action.clear();
+        if (refreshed.is_err()) {
+          // The action succeeded but the re-list did not: say both, and leave
+          // the old rows rather than claim a state we could not read.
+          state.services_status = label +
+                                  ": ok (the list could not be refreshed: " +
+                                  refreshed.error().ctx() + ")";
           return;
+        }
+        const bool dialog_open =
+            state.confirming_uninstall || state.confirming_kill;
+        state.services_cursor = cursor_after_rows_refresh(
+            state.services_cursor, state.rows, refreshed.value());
+        state.rows = std::move(refreshed).value();
+        if (dialog_open && state.services_cursor >= state.rows.size()) {
+          state.services_cursor = 0;
         }
         state.services_status = label + ": ok";
       });

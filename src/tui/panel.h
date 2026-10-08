@@ -113,6 +113,13 @@ struct Panel {
   std::string draft_url;
   std::string draft_ref;
   bool draft_running = false;
+  // True while a store-only worker is writing the draft. Without it a second
+  // 's' press during the write queued a second writer over the same file.
+  bool draft_storing = false;
+  // The operation THIS draft runs as, so 'c' cancels the draft without
+  // touching a log tail or a service refresh that happens to be live (6.7:
+  // one flag per operation, never a panel-wide cancel).
+  std::shared_ptr<Op> draft_op;
   bool draft_ready = false;  // a draft is waiting for review
   berth::DraftResult draft;
   berth::DraftClash draft_clash;
@@ -147,6 +154,10 @@ struct Panel {
   // explicit r — never polled from the render loop, and never the whole file.
   LogFile log_selected = LogFile::kDeploy;
   bool log_loading = false;
+  // Bumped per tail request. A reply whose generation is stale belongs to a
+  // file the user has already switched away from, and must not land under the
+  // new file's name (a fast 1-2 switch used to show deploy.log as net.log).
+  std::size_t log_generation = 0;
   bool log_truncated = false;
   bool log_existed = false;
   std::string log_error;
