@@ -332,9 +332,15 @@ Element render_deploy_screen(const Panel& panel, ftxui::Element url_input,
                          "recipes dir") |
         ftxui::dim);
   } else {
-    out.push_back(line_list(catalog_list_lines(panel.catalog),
+    // Header and selectable rows are SEPARATE: line_list marks its own cursor
+    // row, and panel.catalog_cursor indexes panel.catalog.recipes, so the
+    // header must not be part of the vector the cursor walks. One row of the
+    // budget is the header, hence the -1.
+    const std::size_t rows = drafting ? kDraftListRows : kDeployListRows;
+    out.push_back(ftxui::text(catalog_header_line()) | ftxui::dim);
+    out.push_back(line_list(catalog_row_lines(panel.catalog),
                             panel.catalog_cursor, Color::Magenta, true,
-                            drafting ? kDraftListRows : kDeployListRows));
+                            rows > 0 ? rows - 1 : 0));
   }
   if (panel.catalog_details) {
     out.push_back(paragraph_lines(
@@ -1157,8 +1163,12 @@ Element render_services_screen(const Panel& panel) {
   if (panel.rows.empty()) {
     out.push_back(paragraph_lines(services_empty_lines()) | ftxui::flex);
   } else {
-    out.push_back(line_list(services_table_lines(panel.rows),
-                            panel.services_cursor, Color::Green, true));
+    // Same split as the catalog list: the header is not selectable, or the
+    // highlight and the action would be one row apart.
+    out.push_back(ftxui::text(services_header_line()) | ftxui::dim);
+    out.push_back(line_list(services_row_lines(panel.rows),
+                            panel.services_cursor, Color::Green, true,
+                            kVisibleRows - 1));
   }
   out.push_back(ftxui::separator());
   for (const std::string& hint : services_key_hints()) {

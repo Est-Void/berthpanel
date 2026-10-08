@@ -36,8 +36,13 @@ struct Catalog {
 
 [[nodiscard]] std::string_view recipe_source_label(RecipeSource source);
 
-// One line per recipe, fixed columns so the list reads as a table.
-[[nodiscard]] std::vector<std::string> catalog_list_lines(
+// The table is a NON-SELECTABLE header line plus one selectable line per
+// recipe, returned separately. They used to be one vector, and the screen fed
+// the whole thing to line_list() with a cursor that indexes `recipes`: the
+// highlight (and therefore Enter's target) was off by one row — the cursor
+// sat on the header, and the recipe it deployed was never the one shown.
+[[nodiscard]] std::string catalog_header_line();
+[[nodiscard]] std::vector<std::string> catalog_row_lines(
     const Catalog& catalog);
 
 // The details pane: description, tools, every argv step, the start command

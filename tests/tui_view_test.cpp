@@ -154,18 +154,28 @@ TEST(chrome_the_version_is_printed_verbatim) {
 
 // --- catalog view model ----------------------------------------------------
 
-TEST(catalog_list_lines_have_a_header_and_fixed_columns) {
+TEST(catalog_rows_exclude_the_header_and_the_cursor_indexes_recipes) {
+  // The list is a header plus one selectable row per recipe, and the screen's
+  // cursor indexes `recipes`. They MUST be separate: when the header was line 0
+  // of one vector, the highlight sat one row too high, so with two recipes the
+  // user could never reach the second one and Enter deployed a different recipe
+  // than the one shown.
   tui::Catalog catalog;
-  catalog.recipes.push_back(sample_recipe());
+  catalog.recipes.push_back(sample_recipe());  // Memos
+  berth::Recipe second = sample_recipe();
+  second.display_name = "ascii-live";
+  second.language = "go";
+  catalog.recipes.push_back(second);
+  catalog.sources.push_back(tui::RecipeSource::kBuiltin);
   catalog.sources.push_back(tui::RecipeSource::kBuiltin);
 
-  const std::vector<std::string> lines = tui::catalog_list_lines(catalog);
-  CHECK(lines.size() == 2);
-  CHECK(lines[0].find("SERVICE") == 0);
-  CHECK(lines[1].find("Memos") == 0);
-  CHECK(lines[1].find("go") != std::string::npos);
-  CHECK(lines[1].find("2b2192d") != std::string::npos);
-  CHECK(lines[1].find("512M/300") != std::string::npos);
+  CHECK(tui::catalog_header_line().find("SERVICE") == 0);
+  const std::vector<std::string> rows = tui::catalog_row_lines(catalog);
+  CHECK(rows.size() == catalog.recipes.size());
+  CHECK(rows[0].find("Memos") == 0);
+  CHECK(rows[1].find("ascii-live") == 0);
+  CHECK(rows[0].find("2b2192d") != std::string::npos);
+  CHECK(rows[0].find("512M/300") != std::string::npos);
 }
 
 TEST(catalog_detail_lines_show_the_pin_the_tools_the_steps_and_the_command) {
@@ -220,16 +230,16 @@ TEST(services_table_names_the_unit_the_state_the_port_and_the_pin) {
   unknown.state = berth::ServiceState::kUnknown;
   rows.push_back(unknown);
 
-  const std::vector<std::string> lines = tui::services_table_lines(rows);
-  CHECK(lines.size() == 3);
-  CHECK(lines[0].find("SERVICE") == 0);
-  CHECK(lines[1].find("berthpanel-memos") == 0);
-  CHECK(contains({lines[1]}, "active"));
-  CHECK(contains({lines[1]}, "8234"));
-  CHECK(contains({lines[1]}, "2b2192d"));
+  CHECK(tui::services_header_line().find("SERVICE") == 0);
+  const std::vector<std::string> lines = tui::services_row_lines(rows);
+  CHECK(lines.size() == 2);
+  CHECK(lines[0].find("berthpanel-memos") == 0);
+  CHECK(contains({lines[0]}, "active"));
+  CHECK(contains({lines[0]}, "8234"));
+  CHECK(contains({lines[0]}, "2b2192d"));
   // A row with no port and no pin shows placeholders, not empty columns.
-  CHECK(contains({lines[2]}, "unknown"));
-  CHECK(contains({lines[2]}, "-"));
+  CHECK(contains({lines[1]}, "unknown"));
+  CHECK(contains({lines[1]}, "-"));
 }
 
 TEST(services_uninstall_confirmation_says_the_data_stays) {
@@ -276,18 +286,18 @@ TEST(services_table_shows_a_frozen_service_as_frozen) {
   row.port = 8234;
   row.frozen = true;
 
-  const std::vector<std::string> lines = tui::services_table_lines({row});
-  CHECK(contains({lines[1]}, "frozen"));
-  CHECK(!contains({lines[1]}, "active"));
+  const std::vector<std::string> lines = tui::services_row_lines({row});
+  CHECK(contains({lines[0]}, "frozen"));
+  CHECK(!contains({lines[0]}, "active"));
 
   // Unfrozen, or frozen while systemd says otherwise, reads as the state
   // systemd reports — the freeze flag only annotates an ACTIVE unit.
   row.frozen = false;
-  CHECK(contains({tui::services_table_lines({row})[1]}, "active"));
+  CHECK(contains({tui::services_row_lines({row})[0]}, "active"));
   berth::ServiceRow dead = row;
   dead.state = berth::ServiceState::kInactive;
   dead.frozen = true;
-  CHECK(contains({tui::services_table_lines({dead})[1]}, "inactive"));
+  CHECK(contains({tui::services_row_lines({dead})[0]}, "inactive"));
 }
 
 TEST(services_kill_confirmation_says_what_sigkill_costs) {

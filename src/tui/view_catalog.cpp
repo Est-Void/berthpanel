@@ -110,16 +110,18 @@ std::string render_step(const std::vector<std::string>& step) {
   return berth::join(step, " ");
 }
 
-std::vector<std::string> catalog_list_lines(const Catalog& catalog) {
-  std::vector<std::string> lines;
-  lines.reserve(catalog.recipes.size() + 1);
-
+std::string catalog_header_line() {
   std::string head;
   pad_to(head, "SERVICE", kNameWidth);
   pad_to(head, "LANG", kLangWidth);
   pad_to(head, "PIN", kLimitsWidth);
   head.append("LIMITS");
-  lines.push_back(std::move(head));
+  return head;
+}
+
+std::vector<std::string> catalog_row_lines(const Catalog& catalog) {
+  std::vector<std::string> lines;
+  lines.reserve(catalog.recipes.size());
 
   for (std::size_t i = 0; i < catalog.recipes.size(); ++i) {
     const berth::Recipe& recipe = catalog.recipes[i];

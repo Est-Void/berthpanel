@@ -34,8 +34,12 @@ namespace tui {
     const std::vector<berth::ServiceRow>& new_rows);
 
 
-// The table: name, state, port, short commit. Fixed columns, one header.
-[[nodiscard]] std::vector<std::string> services_table_lines(
+// The table: a NON-SELECTABLE header plus one selectable line per row, returned
+// separately for the same reason as catalog_header_line()/catalog_row_lines():
+// the cursor indexes `rows`, so feeding line_list() a vector with a header at 0
+// made the highlight — and the key that acts — point one row too high.
+[[nodiscard]] std::string services_header_line();
+[[nodiscard]] std::vector<std::string> services_row_lines(
     const std::vector<berth::ServiceRow>& rows);
 
 // Shown instead of the table when the registry is empty.

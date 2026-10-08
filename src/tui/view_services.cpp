@@ -24,17 +24,19 @@ void pad_to(std::string& out, const std::string_view text,
 
 }  // namespace
 
-std::vector<std::string> services_table_lines(
-    const std::vector<berth::ServiceRow>& rows) {
-  std::vector<std::string> lines;
-  lines.reserve(rows.size() + 1);
-
+std::string services_header_line() {
   std::string head;
   pad_to(head, "SERVICE", kNameWidth);
   pad_to(head, "STATE", kStateWidth);
   pad_to(head, "PORT", kPortWidth);
   head.append("COMMIT");
-  lines.push_back(std::move(head));
+  return head;
+}
+
+std::vector<std::string> services_row_lines(
+    const std::vector<berth::ServiceRow>& rows) {
+  std::vector<std::string> lines;
+  lines.reserve(rows.size());
 
   for (const berth::ServiceRow& row : rows) {
     std::string line;
