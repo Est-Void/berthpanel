@@ -253,9 +253,11 @@ $$($(1)_DIR)/obj $$($(1)_DIR):
 -include $$($(1)_OBJ:.o=.d) $$($(1)_VOBJ:.o=.d) $$($(1)_VCXXOBJ:.o=.d) $$($(1)_GOBJ:.o=.d)
 endef
 
+ASAN_FLAGS := -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer
+
 $(eval $(call mode_template,debug,$(OPTFLAGS),-O2))
 $(eval $(call mode_template,release,-O2 -DNDEBUG $(REPROFLAGS),-O2))
-$(eval $(call mode_template,asan,$(OPTFLAGS) -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer,-O2 -fsanitize=address -fsanitize=undefined))
+$(eval $(call mode_template,asan,$(OPTFLAGS) $(ASAN_FLAGS),-O2 $(ASAN_FLAGS)))
 
 .PHONY: all
 all: debug
@@ -270,33 +272,50 @@ TEST_VENDOR_OBJ := $(addprefix $(TEST_DIR)/obj/,$(patsubst third_party/%.c,%.o,$
 TEST_TRUST_OBJ := $(TEST_DIR)/obj/trust_store.o
 TEST_OBJ := $(TEST_CASE_OBJ) $(TEST_LIB_OBJ)
 
+# Sanitizer flags for the test objects. Empty for `make test`; `make asan-test`
+# re-runs this makefile with SANITIZE set and a separate TEST_DIR, so the test
+# binary is instrumented exactly like the `asan` binary. Without this the
+# sanitizers covered only build/asan/berthpanel and every test-path leak or UB
+# was invisible (dev.md §6.10 names ASan/UBSan as THE gate).
+SANITIZE ?=
+
 .PHONY: test
 test: $(TEST_BIN)
 	$(TEST_BIN)
 
 $(TEST_CASE_OBJ): $(TEST_DIR)/obj/%.o: tests/%.cpp $(VERSION_H) | $(TEST_DIR)/obj
 	@mkdir -p $(@D)
-	$(CXX) $(INCLUDES) $(CXXSTD) $(WARNFLAGS) $(OPTFLAGS) $(DEPFLAGS) -c $< -o $@
+	$(CXX) $(INCLUDES) $(CXXSTD) $(WARNFLAGS) $(OPTFLAGS) $(SANITIZE) $(DEPFLAGS) -c $< -o $@
 
 $(TEST_LIB_OBJ): $(TEST_DIR)/obj/%.o: src/%.cpp $(VERSION_H) | $(TEST_DIR)/obj
 	@mkdir -p $(@D)
-	$(CXX) $(INCLUDES) $(CXXSTD) $(WARNFLAGS) $(OPTFLAGS) $(DEPFLAGS) -c $< -o $@
+	$(CXX) $(INCLUDES) $(CXXSTD) $(WARNFLAGS) $(OPTFLAGS) $(SANITIZE) $(DEPFLAGS) -c $< -o $@
 
 $(TEST_VENDOR_OBJ): $(TEST_DIR)/obj/%.o: third_party/%.c | $(TEST_DIR)/obj
 	@mkdir -p $(@D)
-	$(CC) -O2 -Ithird_party/mbedtls/include $(DEPFLAGS) -c $< -o $@
+	$(CC) -O2 $(SANITIZE) -Ithird_party/mbedtls/include $(DEPFLAGS) -c $< -o $@
 
 $(TEST_TRUST_OBJ): $(TEST_DIR)/obj/%.o: $(GEN_TRUST_CPP) | $(TEST_DIR)/obj
 	@mkdir -p $(@D)
-	$(CXX) $(INCLUDES) $(CXXSTD) $(WARNFLAGS) $(OPTFLAGS) $(DEPFLAGS) -c $< -o $@
+	$(CXX) $(INCLUDES) $(CXXSTD) $(WARNFLAGS) $(OPTFLAGS) $(SANITIZE) $(DEPFLAGS) -c $< -o $@
 
 $(TEST_BIN): $(TEST_OBJ) $(TEST_VENDOR_OBJ) $(TEST_TRUST_OBJ) | $(TEST_DIR)
-	$(CXX) $(filter %.o,$^) $(LDLIBS) -o $@
+	$(CXX) $(SANITIZE) $(filter %.o,$^) $(LDLIBS) -o $@
 
 $(TEST_DIR)/obj $(TEST_DIR):
 	mkdir -p $@
 
 -include $(TEST_OBJ:.o=.d) $(TEST_VENDOR_OBJ:.o=.d) $(TEST_TRUST_OBJ:.o=.d)
+
+# `make asan` must mean "the whole suite ran under ASan+UBSan+LSan", not just
+# that an instrumented binary exists: build the instrumented test binary and
+# run it. A separate TEST_DIR keeps the plain test objects intact (switching
+# SANITIZE without it would leave half-instrumented objects behind).
+.PHONY: asan-test
+asan-test:
+	$(MAKE) test TEST_DIR=$(BUILD)/asan-test SANITIZE="$(ASAN_FLAGS)"
+
+asan: asan-test
 
 # --- format: clang-format rewrites; deliberately NOT a CI gate (dev.md §12.7) ---
 
