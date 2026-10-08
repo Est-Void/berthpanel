@@ -51,8 +51,8 @@ TEST(prefetch_run_stops_at_the_first_bad_step) {
       {"bun", "install"},  // missing --ignore-scripts
       {"go", "mod", "download"},
   };
-  const auto ran = run_prefetch(steps, tmp.path(), nullptr,
-                                std::chrono::milliseconds(1000));
+  const auto ran =
+      run_prefetch(steps, tmp.path(), nullptr, std::chrono::milliseconds(1000));
   CHECK(ran.is_err());
   CHECK(ran.error().ctx().find("ignore-scripts") != std::string::npos);
 }
@@ -75,8 +75,8 @@ TEST(prefetch_steps_run_IN_the_checkout) {
   const std::vector<std::vector<std::string>> steps = {
       {"go", "mod", "download"},
   };
-  const auto ran = run_prefetch(steps, project, nullptr,
-                                std::chrono::milliseconds(30000));
+  const auto ran =
+      run_prefetch(steps, project, nullptr, std::chrono::milliseconds(30000));
   if (const auto go = berth::resolve_executable("go"); go.is_ok()) {
     // With a go.mod under the working directory, `go mod download` has
     // something to download and does NOT answer "no modules specified".

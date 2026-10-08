@@ -68,8 +68,7 @@ TEST(sandbox_argv_keeps_paths_with_spaces_as_one_element) {
   // ReadWritePaths is a list: the space is escaped so systemd-run does not
   // split the path.
   CHECK(body_has(
-      body,
-      "--property=ReadWritePaths=/home/u/My\\ Apps/berthpanel-memos"));
+      body, "--property=ReadWritePaths=/home/u/My\\ Apps/berthpanel-memos"));
 }
 
 TEST(sandbox_argv_has_no_way_to_disable_it) {

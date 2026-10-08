@@ -94,8 +94,10 @@ Result<std::filesystem::path> install_pinned_tool(const PinnedTool& tool,
   // would otherwise write outside install_dir (§11: validate every value that
   // reaches a path). tar_list does not apply archive_path_safe either.
   if (!archive_path_safe(tool.inner_path)) {
-    return Error("toolbox: " + tool.name + " member is not a safe relative "
-                 "path: '" + tool.inner_path + "'");
+    return Error("toolbox: " + tool.name +
+                 " member is not a safe relative "
+                 "path: '" +
+                 tool.inner_path + "'");
   }
   const std::filesystem::path staging =
       paths.state_dir / "toolbox" / (tool.name + ".staging");
@@ -153,9 +155,9 @@ Result<std::filesystem::path> install_pinned_tool(const PinnedTool& tool,
       return Error("toolbox: " + tool.name + " member '" + tool.inner_path +
                    "' extends past the archive");
     }
-    payload = std::string_view(archive_bytes)
-                  .substr(found->data_offset,
-                          static_cast<std::size_t>(found->size));
+    payload =
+        std::string_view(archive_bytes)
+            .substr(found->data_offset, static_cast<std::size_t>(found->size));
   } else {
     Result<std::string> raw = read_file(downloaded.value());
     if (raw.is_err())

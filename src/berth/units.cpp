@@ -229,8 +229,8 @@ Result<void> append_unit_section(std::string* out, const UnitSpec& spec) {
   if (description.is_err())
     return std::move(description).error();
   *out += "[Unit]\n";
-  *out += "Description=" + description.value() + " (" + spec.service_name +
-          ")\n";
+  *out +=
+      "Description=" + description.value() + " (" + spec.service_name + ")\n";
   *out += "After=network-online.target\n";
   *out += "Wants=network-online.target\n\n";
   return {};

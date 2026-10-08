@@ -160,8 +160,8 @@ Result<std::filesystem::path> install_go_toolchain(
     }
   } guard{staging};
 
-  Result<std::filesystem::path> verified = download_verified(
-      archive.url, archive.sha256, staging, paths, cancel);
+  Result<std::filesystem::path> verified =
+      download_verified(archive.url, archive.sha256, staging, paths, cancel);
   if (verified.is_err())
     return std::move(verified).error();
   Result<std::string> compressed = read_file(verified.value());

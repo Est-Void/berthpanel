@@ -128,8 +128,9 @@ Result<void> validate_owner_repo(const std::string_view owner_repo) {
   const std::string_view owner = owner_repo.substr(0, slash);
   const std::string_view repo = owner_repo.substr(slash + 1);
   if (owner == "." || owner == ".." || repo == "." || repo == "..") {
-    return Error("validate: '.' and '..' are not valid owner/repo components: '" +
-                 std::string(owner_repo) + "'");
+    return Error(
+        "validate: '.' and '..' are not valid owner/repo components: '" +
+        std::string(owner_repo) + "'");
   }
   return {};
 }

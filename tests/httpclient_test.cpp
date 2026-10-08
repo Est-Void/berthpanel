@@ -108,8 +108,7 @@ TEST(join_redirect_forms) {
         "https://github.com/a/b?y=2");
   // A base with no path resolves relative refs against its root, not the "//"
   // of the scheme.
-  CHECK(join_redirect("https://github.com", "v2") ==
-        "https://github.com/v2");
+  CHECK(join_redirect("https://github.com", "v2") == "https://github.com/v2");
 }
 
 TEST(redirect_loop_exercises_cap_boundary_for_real) {

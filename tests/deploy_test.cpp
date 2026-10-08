@@ -320,8 +320,8 @@ TEST(settle_accepts_only_a_unit_that_stays_active) {
   CHECK(berth::settle_active("berthpanel-x", {"active", "active", "active"})
             .is_ok());
   // The reported case: up, then gone (Restart=on-failure auto-restart).
-  const auto left = berth::settle_active(
-      "berthpanel-x", {"active", "active", "activating"});
+  const auto left =
+      berth::settle_active("berthpanel-x", {"active", "active", "activating"});
   CHECK(left.is_err());
   CHECK(left.error().ctx().find("left 'active'") != std::string::npos);
   CHECK(left.error().ctx().find("activating") != std::string::npos);

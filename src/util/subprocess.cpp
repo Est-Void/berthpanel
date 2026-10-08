@@ -59,7 +59,7 @@ class SpawnActions {
   // chdir added by the caller first is silently lost, which is exactly the kind
   // of bug that looks like the child ignored the argument.
   [[nodiscard]] Result<void> wire(const int out_fd, const int err_fd,
-                                 const std::filesystem::path* cwd);
+                                  const std::filesystem::path* cwd);
 
  private:
   posix_spawn_file_actions_t actions_{};
@@ -164,16 +164,16 @@ Result<void> add_dup2(posix_spawn_file_actions_t* actions, const int from,
 // chdir BEFORE the dup2s: posix_spawn applies the file actions in order, and
 // the pipe ends must be in place before the child starts talking.
 Result<void> add_chdir(posix_spawn_file_actions_t* actions,
-                      const std::filesystem::path& cwd) {
+                       const std::filesystem::path& cwd) {
   if (::posix_spawn_file_actions_addchdir_np(actions, cwd.c_str()) != 0) {
-    return Error("subprocess: chdir into " + cwd.string() + " failed: " +
-                 errno_text(errno));
+    return Error("subprocess: chdir into " + cwd.string() +
+                 " failed: " + errno_text(errno));
   }
   return {};
 }
 
 Result<void> SpawnActions::wire(const int out_fd, const int err_fd,
-                               const std::filesystem::path* cwd) {
+                                const std::filesystem::path* cwd) {
   if (posix_spawn_file_actions_init(&actions_) != 0) {
     return Error("subprocess: spawn actions init: " + errno_text(errno));
   }

@@ -196,9 +196,8 @@ TEST(ports_are_sorted_even_when_tcp6_is_absent) {
   const TempDir tmp;
   const std::filesystem::path root = tmp.path() / "net";
   CHECK(berth::ensure_dir(root).is_ok());
-  CHECK(berth::atomic_write(
-            root / "tcp",
-            R"(  sl  local_address rem_address   st
+  CHECK(berth::atomic_write(root / "tcp",
+                            R"(  sl  local_address rem_address   st
    0: 00000000:5000 00000000:0000 0A
    1: 0100007F:0016 00000000:0000 0A
 )")
@@ -215,8 +214,8 @@ TEST(ports_are_sorted_even_when_tcp6_is_absent) {
   CHECK(!report.value().ipv6_read);
   CHECK(!report.value().ipv6_error.empty());
   CHECK(report.value().ports.size() == 2);
-  CHECK(report.value().ports[0].port == 22);      // 0x0016
-  CHECK(report.value().ports[1].port == 20480);   // 0x5000
+  CHECK(report.value().ports[0].port == 22);     // 0x0016
+  CHECK(report.value().ports[1].port == 20480);  // 0x5000
 }
 
 TEST(ports_registry_error_is_loud_not_an_empty_owned_set) {

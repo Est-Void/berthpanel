@@ -122,18 +122,18 @@ Result<void> RealDeployOps::fetch_source(const Recipe& recipe,
                             " is already deployed");
   }
   std::error_code ec;
-  const bool occupied =
-      std::filesystem::exists(work_dir, ec) &&
-      !std::filesystem::is_empty(work_dir, ec);
+  const bool occupied = std::filesystem::exists(work_dir, ec) &&
+                        !std::filesystem::is_empty(work_dir, ec);
   if (occupied) {
     if (registered.value().has_value()) {
       // A LIVE service's checkout: replacing the tree under a running service
       // is not a repair, it is a surprise. Refuse, and say what to do instead.
       return Error(
-          "deploy: the checkout for " + recipe.service_name + " is already in " +
-          work_dir.string() +
+          "deploy: the checkout for " + recipe.service_name +
+          " is already in " + work_dir.string() +
           " and a pinned clone will not overwrite it. That service IS "
-          "registered, so this is a repair rather than a first deploy: its unit "
+          "registered, so this is a repair rather than a first deploy: its "
+          "unit "
           "is already serving. To rebuild it, move the work dir aside yourself "
           "(it holds your data) — berthpanel will not delete the tree a "
           "registered service runs from.");
@@ -287,9 +287,9 @@ Result<void> RealDeployOps::await_running(const std::string& service_name,
     }
     RunLimits limits;
     limits.timeout = std::chrono::milliseconds(5000);
-    Result<RunOutput> out =
-        run({systemctl.value(), "--user", "is-active", service_name + ".service"},
-            limits);
+    Result<RunOutput> out = run(
+        {systemctl.value(), "--user", "is-active", service_name + ".service"},
+        limits);
     std::string state = "unknown";
     if (out.is_ok()) {
       state = berth::trim(out.value().out);

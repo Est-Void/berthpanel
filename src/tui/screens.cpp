@@ -898,9 +898,8 @@ void refresh_services(const std::shared_ptr<Panel>& panel,
         }
         const bool dialog_open =
             state.confirming_uninstall || state.confirming_kill;
-        state.services_cursor =
-            cursor_after_rows_refresh(state.services_cursor, state.rows,
-                                      rows.value());
+        state.services_cursor = cursor_after_rows_refresh(
+            state.services_cursor, state.rows, rows.value());
         state.rows = std::move(rows).value();
         // While a confirm dialog is up it owns the screen: the cursor is frozen
         // so the highlight cannot walk off the service the dialog is naming.

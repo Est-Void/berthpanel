@@ -104,7 +104,8 @@ Result<std::vector<TreeFile>> parse_tree_response(const std::string_view body) {
     // ours.
     if (!item.is_object() || !item.contains("path") ||
         !item["path"].is_string() || !item.contains("type") ||
-        !item["type"].is_string() || item["type"].get<std::string>() != "blob") {
+        !item["type"].is_string() ||
+        item["type"].get<std::string>() != "blob") {
       continue;
     }
     TreeFile file;
