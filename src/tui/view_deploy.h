@@ -135,4 +135,17 @@ enum class DraftField {
 [[nodiscard]] std::vector<std::string> deploy_error_lines(
     const std::string& error);
 
+// The final verdict of a deploy, from the three facts the screen holds. A user
+// cancellation is NOT a failure even though the engine reports it as an Error
+// (the cancel path returns one to unwind): painting that red — "deploy failed:
+// cancel: cancelled while stopping ..." — next to the yellow cancellation text
+// tells the user two different stories about one event.
+struct DeployVerdict {
+  bool success = false;
+  bool cancelled = false;
+  bool failed = false;
+};
+[[nodiscard]] DeployVerdict deploy_verdict(bool finished, bool cancelled,
+                                           const std::string& error);
+
 }  // namespace tui

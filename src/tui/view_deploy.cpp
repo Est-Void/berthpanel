@@ -405,4 +405,15 @@ std::vector<std::string> deploy_error_lines(const std::string& error) {
   return lines;
 }
 
+DeployVerdict deploy_verdict(const bool finished, const bool cancelled,
+                             const std::string& error) {
+  DeployVerdict verdict;
+  verdict.cancelled = cancelled;
+  // A cancellation carries an engine error only to unwind; it is not a failure
+  // and must not render as one.
+  verdict.failed = !cancelled && !error.empty();
+  verdict.success = finished && !cancelled && error.empty();
+  return verdict;
+}
+
 }  // namespace tui

@@ -348,6 +348,38 @@ TEST(deploy_outcome_lines_show_the_port_the_unit_and_the_data) {
   CHECK(contains(lines, "leaves the data dir in place"));
 }
 
+TEST(deploy_verdict_treats_a_cancellation_as_a_cancel_not_a_failure) {
+  // A user cancellation unwinds through an engine Error, but the screen must
+  // not tell two stories about one event ("cancelled" in yellow next to a red
+  // "deploy failed: cancel: ..." box). This pins the three facts the screen
+  // holds to exactly one verdict.
+  const tui::DeployVerdict cancelled =
+      tui::deploy_verdict(/*finished=*/true, /*cancelled=*/true,
+                          "cancel: cancelled while stopping x");
+  CHECK(cancelled.cancelled);
+  CHECK(!cancelled.failed);
+  CHECK(!cancelled.success);
+
+  const tui::DeployVerdict failed = tui::deploy_verdict(
+      /*finished=*/true, /*cancelled=*/false, "deploy: build failed");
+  CHECK(failed.failed);
+  CHECK(!failed.cancelled);
+  CHECK(!failed.success);
+
+  const tui::DeployVerdict ok =
+      tui::deploy_verdict(/*finished=*/true, /*cancelled=*/false, "");
+  CHECK(ok.success);
+  CHECK(!ok.failed);
+  CHECK(!ok.cancelled);
+
+  // Still running: not yet anything.
+  const tui::DeployVerdict running =
+      tui::deploy_verdict(/*finished=*/false, /*cancelled=*/false, "");
+  CHECK(!running.success);
+  CHECK(!running.failed);
+  CHECK(!running.cancelled);
+}
+
 TEST(deploy_error_lines_keep_the_whole_error_text) {
   // §11: the full error, not a summary. deploy.cpp adds context at every
   // boundary and the screen must not truncate it away.

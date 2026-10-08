@@ -164,7 +164,8 @@ TEST_SRC := \
 	tests/ports_test.cpp \
 	tests/scan_view_test.cpp \
 	tests/deploy_view_test.cpp \
-	tests/tui_view_test.cpp
+	tests/tui_view_test.cpp \
+	tests/layering_test.cpp
 
 INCLUDES := -Iinclude -Isrc -I$(BUILD)/generated -isystem third_party -isystem third_party/mbedtls/include -isystem third_party/ftxui/include -isystem third_party/ftxui/src
 LDLIBS   := -lz -pthread
