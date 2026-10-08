@@ -6,6 +6,12 @@
 
 namespace tui {
 
+namespace {
+// Long enough that an operation stopping is noticed promptly, short enough
+// that a shutdown never sleeps longer than it must.
+constexpr auto kPollSlice = std::chrono::milliseconds(20);
+}  // namespace
+
 std::shared_ptr<Op> OpRegistry::begin(std::string label) {
   auto op = std::make_shared<Op>();
   op->label = std::move(label);
@@ -43,7 +49,6 @@ bool OpRegistry::empty() {
 }
 
 bool OpRegistry::wait_until_empty(const std::chrono::milliseconds budget) {
-  constexpr auto kSlice = std::chrono::milliseconds(20);
   const auto deadline = std::chrono::steady_clock::now() + budget;
   while (true) {
     if (empty()) {
@@ -52,7 +57,21 @@ bool OpRegistry::wait_until_empty(const std::chrono::milliseconds budget) {
     if (std::chrono::steady_clock::now() >= deadline) {
       return false;
     }
-    std::this_thread::sleep_for(kSlice);
+    std::this_thread::sleep_for(kPollSlice);
+  }
+}
+
+bool wait_for_flag(const std::atomic<bool>& flag,
+                   const std::chrono::milliseconds budget) {
+  const auto deadline = std::chrono::steady_clock::now() + budget;
+  while (true) {
+    if (flag.load(std::memory_order_relaxed)) {
+      return true;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      return false;
+    }
+    std::this_thread::sleep_for(kPollSlice);
   }
 }
 

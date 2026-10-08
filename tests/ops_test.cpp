@@ -130,6 +130,30 @@ TEST(ops_survive_concurrent_begin_and_end) {
   CHECK(ops.size() == 0);
 }
 
+TEST(
+    wait_for_flag_notices_a_flag_that_arrives_and_gives_up_on_one_that_does_not) {
+  // The deploy tail's handshake uses this, and so does anything else that has
+  // to wait for another thread without ever waiting forever.
+  std::atomic<bool> flag{false};
+  const auto started = std::chrono::steady_clock::now();
+  CHECK(!tui::wait_for_flag(flag, std::chrono::milliseconds(150)));
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+  CHECK(elapsed >= std::chrono::milliseconds(100));
+  CHECK(elapsed < std::chrono::seconds(2));
+
+  std::thread setter([&flag]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    flag.store(true);
+  });
+  CHECK(tui::wait_for_flag(flag, std::chrono::milliseconds(3000)));
+  setter.join();
+  // Already set: returns at once.
+  const auto immediate = std::chrono::steady_clock::now();
+  CHECK(tui::wait_for_flag(flag, std::chrono::milliseconds(2000)));
+  CHECK(std::chrono::steady_clock::now() - immediate <
+        std::chrono::milliseconds(200));
+}
+
 TEST(ops_a_cancelled_flag_is_visible_to_a_polling_worker) {
   // The worker half of the contract: a loop that polls its flag stops. This is
   // what makes "the engine unwinds" true instead of aspirational.

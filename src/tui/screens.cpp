@@ -41,20 +41,6 @@ constexpr std::chrono::milliseconds kTailReadyBudget{1000};
 constexpr std::size_t kDeployListRows = 6;
 constexpr std::size_t kDeployTailRows = 8;
 
-// Waits for a flag in slices, so a cancel or a shutdown is noticed promptly
-// instead of after a full sleep. A worker may wait; the render thread may not.
-bool wait_bounded(const std::atomic<bool>& flag,
-                  const std::chrono::milliseconds budget) {
-  const auto deadline = std::chrono::steady_clock::now() + budget;
-  while (!flag.load(std::memory_order_relaxed)) {
-    if (std::chrono::steady_clock::now() >= deadline) {
-      return false;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-  }
-  return true;
-}
-
 }  // namespace
 
 // --- Deploy (6.3) -----------------------------------------------------------
@@ -174,12 +160,10 @@ void start_deploy(const std::shared_ptr<Panel>& panel,
   const std::shared_ptr<TailGate> gate = std::make_shared<TailGate>();
   follow_deploy_log(panel, paths.deploy_log, gate);
 
-  const std::shared_ptr<Panel> keep_alive = panel;
   run_on_worker<berth::DeployOutcome>(
       panel, "deploy " + recipe.service_name,
-      [paths, recipe, forced_port, gate, keep_alive,
-       panel](const std::shared_ptr<Op>& op) {
-        static_cast<void>(wait_bounded(gate->ready, kTailReadyBudget));
+      [paths, recipe, forced_port, gate, panel](const std::shared_ptr<Op>& op) {
+        static_cast<void>(wait_for_flag(gate->ready, kTailReadyBudget));
         {
           // 'c' flips this same flag, so the key and the quit reach the engine
           // by one path instead of two. A screen refresh must NOT be able to
@@ -196,8 +180,8 @@ void start_deploy(const std::shared_ptr<Panel>& panel,
         // Tell the tail to stop, then WAIT for it, so the done/failed lines
         // land in the ring before the verdict is folded into the state. The
         // wait is bounded: a wedged reader must not hold the result back.
-        keep_alive->deploy_running.store(false, std::memory_order_release);
-        static_cast<void>(wait_bounded(gate->drained, kTailDrainBudget));
+        panel->deploy_running.store(false, std::memory_order_release);
+        static_cast<void>(wait_for_flag(gate->drained, kTailDrainBudget));
         return outcome;
       },
       [](Panel& state, berth::Result<berth::DeployOutcome>&& outcome) {

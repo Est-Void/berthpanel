@@ -69,4 +69,10 @@ class OpRegistry {
   std::vector<std::shared_ptr<Op>> ops_;
 };
 
+// Waits for a flag, in short slices, up to the budget. Returns whether it
+// arrived in time. The same discipline as OpRegistry::wait_until_empty and for
+// the same reason: a wait without a ceiling is how a UI hangs (§11).
+[[nodiscard]] bool wait_for_flag(const std::atomic<bool>& flag,
+                                 std::chrono::milliseconds budget);
+
 }  // namespace tui
