@@ -169,15 +169,15 @@ void start_deploy(const std::shared_ptr<Panel>& panel,
   run_on_worker<berth::DeployOutcome>(
       panel, "deploy " + recipe.service_name,
       [paths, recipe, forced_port, gate, panel](const std::shared_ptr<Op>& op) {
-        static_cast<void>(wait_for_flag(gate->ready, kTailReadyBudget));
         {
-          // 'c' flips this same flag, so the key and the quit reach the engine
-          // by one path instead of two. A screen refresh must NOT be able to
-          // kill a deploy in flight, which is why it is the op's flag and not
-          // the panel-wide one.
+          // Publish the op BEFORE the tail-ready wait. `c` reaches the engine
+          // only through panel->deploy_op; assigning it after a wait of up to
+          // a second let a cancel in that window flip nothing and the deploy
+          // run to completion while the screen said "cancelling".
           std::lock_guard lock(panel->mutex);
           panel->deploy_op = op;
         }
+        static_cast<void>(wait_for_flag(gate->ready, kTailReadyBudget));
         berth::RealDeployOps ops;
         berth::DeployOptions options;
         options.cancel = &op->cancel;
