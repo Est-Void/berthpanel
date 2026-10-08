@@ -100,10 +100,6 @@ Element paragraph_lines(const std::vector<std::string>& lines) {
   return ftxui::vbox(std::move(out));
 }
 
-Element notice_box(const std::string_view notice) {
-  return paragraph_lines(berth::split(notice, "\n")) | ftxui::flex;
-}
-
 Element header_bar(const berth::NetSnapshot& net) {
   const std::vector<std::string>& sign = sign_lines();
   Elements lines;

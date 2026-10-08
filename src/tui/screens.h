@@ -1,7 +1,7 @@
 #pragma once
 
-// src/tui/screens.h — the screens (Catalog 6.2, Deploy 6.3, My Services 6.4)
-// and their workers.
+// src/tui/screens.h — the four screens (System Scan 6.5, Deploy 6.3, My
+// Services 6.4, Logs 6.6) and their workers.
 //
 // Each screen gets exactly three entry points, and the split is the whole
 // design: `refresh_*` blocks and must run on a worker, `render_*` must not
@@ -24,7 +24,8 @@ namespace tui {
 
 // Catalog (6.2): reads the builtin catalog and the user recipes. Two file
 // reads; still a worker, because the rule "nothing blocks the render thread"
-// is absolute and a rule with an exception is a rule without one.
+// is absolute and a rule with an exception is a rule without one. The RECIPE
+// LIST itself lives on the Deploy screen, where a recipe becomes an action.
 void refresh_catalog(const std::shared_ptr<Panel>& panel,
                      const berth::Paths& paths);
 

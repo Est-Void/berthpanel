@@ -241,9 +241,6 @@ template <typename T>
   return ftxui::vbox(std::move(rows)) | ftxui::flex;
 }
 
-// The same, from a single multi-line string (chrome.h notices).
-[[nodiscard]] ftxui::Element notice_box(std::string_view notice);
-
 // The bordered header bar with the brand mark and the version. `net` is the
 // NET banner (view_logs.h): read from one atomic word on every render, which
 // is the only reason it can be there at all.
