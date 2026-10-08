@@ -26,6 +26,7 @@
 #include "berth/net/github_api.h"
 #include "berth/recipes.h"
 #include "berth/sandbox.h"
+#include "berth/serve.h"
 #include "berth/toolcheck.h"
 #include "berth/units.h"
 #include "berth/userrecipes.h"
@@ -101,7 +102,9 @@ void print_usage() {
                "       berthpanel __recipe-draft <github_url> [ref] [--apply] "
                "[--force]\n"
                "       berthpanel __deploy <service_name> [port] [--upgrade]\n"
-               "       berthpanel __cleanup [--install] [--quiet]\n";
+               "       berthpanel __cleanup [--install] [--quiet]\n"
+               "       berthpanel __serve-static <root> [--listen "
+               "127.0.0.1:<port>]\n";
 }
 
 int deploy_command(const std::string_view service,
@@ -309,6 +312,50 @@ int cleanup_command(const bool install, const bool quiet) {
   return report.value().failed.empty() ? 0 : 1;
 }
 
+// `berthpanel __serve-static <root> [--listen 127.0.0.1:<port>]` — the
+// static server of plan 5.1. The bind policy lives in berth/serve.cpp (only
+// 127.0.0.1 / ::1 / localhost; a wildcard is an Err before a socket exists),
+// and SIGINT/SIGTERM flip the cancel flag the accept loop polls, so the
+// process dies without leaving a socket behind.
+int serve_static_command(const std::string_view root_arg,
+                         const std::string_view listen_arg) {
+  std::string address = "127.0.0.1";
+  std::uint16_t port = 0;
+  if (!listen_arg.empty()) {
+    const berth::Result<std::pair<std::string, std::uint16_t>> parsed =
+        berth::parse_listen_arg(listen_arg);
+    if (parsed.is_err())
+      return fail(parsed.error().ctx());
+    address = parsed.value().first;
+    port = parsed.value().second;
+  }
+  const berth::Result<berth::RequestHandler> handler =
+      berth::make_static_handler(std::filesystem::path(root_arg));
+  if (handler.is_err())
+    return fail(handler.error().ctx());
+
+  std::atomic<bool> cancel_flag{false};
+  const berth::Result<void> signalling =
+      berth::install_exit_signalling(&cancel_flag);
+  if (signalling.is_err())
+    return fail(signalling.error().ctx());
+
+  berth::ServerConfig config;
+  config.listen_address = address;
+  config.port = port;
+  const std::string host = address == "::1" ? "[::1]" : address;
+  const berth::Result<void> ran = berth::run_http_server(
+      config, handler.value(), &cancel_flag,
+      [&host](const std::uint16_t bound) {
+        std::cout << "listening on http://" << host << ":" << bound << "\n"
+                  << std::flush;
+      });
+  if (ran.is_err())
+    return fail(ran.error().ctx());
+  std::cout << "stopped\n";
+  return 0;
+}
+
 // `berthpanel __recipe-draft <github_url> [ref] [--apply] [--force]` — the
 // CLI front end of the wizard. The FLOW lives in berth/wizard.cpp: the panel
 // runs the same prepare/store pair, and two copies of a clone+detect flow
@@ -440,6 +487,19 @@ int run(const std::span<const char* const> args) {
     if (first == "__cleanup") {
       return cleanup_command(contains_flag(args, "--install"),
                              contains_flag(args, "--quiet"));
+    }
+    if (first == "__serve-static" && args.size() >= 2) {
+      std::string_view listen;
+      for (std::size_t i = 2; i < args.size(); ++i) {
+        const std::string_view arg(args[i]);
+        if (arg == "--listen" && i + 1 < args.size()) {
+          listen = args[i + 1];
+          ++i;
+        } else if (arg.rfind("--listen=", 0) == 0) {
+          listen = arg.substr(9);
+        }
+      }
+      return serve_static_command(args[1], listen);
     }
     // Test hook for the SIGKILL flock scenario (stage 4.3); not a user
     // command, documented in berth/lock.h.
