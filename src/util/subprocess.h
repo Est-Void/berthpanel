@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -36,6 +37,11 @@ struct RunLimits {
   // "KEY=VALUE" entries overriding or extending the inherited environment.
   // Used for GIT_ASKPASS (dev.md §6.3); never for tokens in argv.
   const std::vector<std::string>* extra_env = nullptr;
+  // The child's working directory. Empty means "inherit ours", which is right
+  // for most commands and WRONG for anything that reads a project tree: a
+  // `go mod download` run in the panel's own directory finds no go.mod and says
+  // "no modules specified", which looks like the user's repo is broken.
+  const std::filesystem::path* cwd = nullptr;
 };
 
 [[nodiscard]] Result<RunOutput> run(const std::vector<std::string>& argv,

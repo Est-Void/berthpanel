@@ -18,6 +18,22 @@
 
 namespace tui {
 
+// Where the My Services cursor belongs after `rows` was replaced by a refresh.
+//
+// The cursor is a SLOT in the table, and a refresh changes the slots: dropping
+// the selected service, or inserting one above it, silently re-points the
+// highlight — and the highlight is what the next key press (u, K, s) acts on.
+// A session in this project did exactly that: a confirm dialog named
+// berthpanel-memos while the highlight had already moved to berthpanel-ascii-live,
+// so the screen offered to delete a service the user was no longer looking at.
+//
+// So the cursor follows the SERVICE it was on. Only a service that is gone from
+// the list moves it, and then only as far as the old index still reaches.
+[[nodiscard]] std::size_t cursor_after_rows_refresh(
+    std::size_t cursor, const std::vector<berth::ServiceRow>& old_rows,
+    const std::vector<berth::ServiceRow>& new_rows);
+
+
 // The table: name, state, port, short commit. Fixed columns, one header.
 [[nodiscard]] std::vector<std::string> services_table_lines(
     const std::vector<berth::ServiceRow>& rows);

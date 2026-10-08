@@ -68,6 +68,7 @@ class FakeOps final : public DeployOps {
   bool fail_running = false;
   bool fail_register = false;
   bool fail_stop = false;
+  std::filesystem::path last_prefetch_dir;
 
   Result<void> fetch_source(const Recipe& recipe,
                             const std::filesystem::path& work_dir,
@@ -82,10 +83,16 @@ class FakeOps final : public DeployOps {
       return berth::Error("fake fetch failure");
     return {};
   }
-  Result<void> prefetch(const Recipe& recipe, const berth::Paths& paths,
+  Result<void> prefetch(const Recipe& recipe,
+                        const std::filesystem::path& work_dir,
+                        const berth::Paths& paths,
                         const DeployOptions& options) override {
     static_cast<void>(recipe);
     static_cast<void>(paths);
+    // The checkout must be handed to the prefetch, not a directory of the
+    // caller's choosing: a fake that ignores the argument would let the real
+    // "go mod download in the wrong directory" bug straight through.
+    last_prefetch_dir = work_dir;
     static_cast<void>(options);
     calls.push_back("prefetch");
     return {};
@@ -303,6 +310,32 @@ berth::JournalEntry stale_entry(const berth::Paths& p,
   entry.stage = stage;
   entry.started_at_unix = 1;
   return entry;
+}
+
+// A unit that reports active and then leaves it is CRASH-LOOPING, and
+// `Type=simple` calls a unit active the moment it has spawned the process. The
+// deploy that reported success on a wrong start_cmd is the §11 failure reached
+// through a different door, so the verdict is its own tested function.
+TEST(settle_accepts_only_a_unit_that_stays_active) {
+  CHECK(berth::settle_active("berthpanel-x", {"active", "active", "active"})
+            .is_ok());
+  // The reported case: up, then gone (Restart=on-failure auto-restart).
+  const auto left = berth::settle_active(
+      "berthpanel-x", {"active", "active", "activating"});
+  CHECK(left.is_err());
+  CHECK(left.error().ctx().find("left 'active'") != std::string::npos);
+  CHECK(left.error().ctx().find("activating") != std::string::npos);
+  // The error must name the usual cause, or the user goes to the unit logs for
+  // a flag typo that the detector warned about on the screen.
+  CHECK(left.error().ctx().find("start_cmd") != std::string::npos);
+  // A unit that failed outright is the same verdict with a different state.
+  CHECK(berth::settle_active("berthpanel-x", {"failed"}).is_err());
+  CHECK(berth::settle_active("berthpanel-x", {"active", "failed"}).is_err());
+  // No observations at all is NOT evidence of serving: vacuous truth would let
+  // a settle window that never polled claim a success.
+  const auto none = berth::settle_active("berthpanel-x", {});
+  CHECK(none.is_err());
+  CHECK(none.error().ctx().find("never confirmed") != std::string::npos);
 }
 
 }  // namespace

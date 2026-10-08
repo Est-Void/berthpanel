@@ -54,6 +54,42 @@ berth::Recipe sample_recipe() {
   return r;
 }
 
+// The My Services cursor is a SLOT in a table a refresh can change under it.
+// The failure this pins down: the highlight had already moved to
+// berthpanel-ascii-live while the dialog still named berthpanel-memos, so the
+// screen asked to delete a service nobody was looking at.
+TEST(services_cursor_follows_its_service_across_a_refresh) {
+  const auto row = [](const std::string& name) {
+    berth::ServiceRow made;
+    made.service_name = name;
+    made.state = berth::ServiceState::kActive;
+    return made;
+  };
+  const berth::ServiceRow ascii = row("berthpanel-ascii-live");
+  const berth::ServiceRow memos = row("berthpanel-memos");
+  const berth::ServiceRow other = row("berthpanel-other");
+  const std::vector<berth::ServiceRow> before{ascii, memos};
+
+  // Unrelated change: the cursor stays on the service it was on.
+  const std::vector<berth::ServiceRow> after{memos, ascii, other};
+  CHECK(tui::cursor_after_rows_refresh(1, before, after) == 0);
+  CHECK(tui::cursor_after_rows_refresh(0, before, after) == 1);
+
+  // The selected service was uninstalled: the index moves only as far as it
+  // still reaches, otherwise it starts over.
+  const std::vector<berth::ServiceRow> only_ascii{ascii};
+  CHECK(tui::cursor_after_rows_refresh(1, before, only_ascii) == 0);
+
+  // Nothing left at all: 0, not an out-of-range index the table would then
+  // draw past its own end.
+  CHECK(tui::cursor_after_rows_refresh(1, before, {}) == 0);
+  CHECK(tui::cursor_after_rows_refresh(0, {}, {}) == 0);
+
+  // An index that was already past the end (a cursor frozen by an open dialog)
+  // is repaired, not trusted.
+  CHECK(tui::cursor_after_rows_refresh(7, before, only_ascii) == 0);
+}
+
 }  // namespace
 
 // --- chrome ---------------------------------------------------------------

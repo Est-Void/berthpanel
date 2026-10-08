@@ -874,8 +874,16 @@ void refresh_services(const std::shared_ptr<Panel>& panel,
           state.services_status = rows.error().ctx();
           return;
         }
+        const bool dialog_open =
+            state.confirming_uninstall || state.confirming_kill;
+        state.services_cursor =
+            cursor_after_rows_refresh(state.services_cursor, state.rows,
+                                      rows.value());
         state.rows = std::move(rows).value();
-        if (state.services_cursor >= state.rows.size()) {
+        // While a confirm dialog is up it owns the screen: the cursor is frozen
+        // so the highlight cannot walk off the service the dialog is naming.
+        // An index left stale by that freeze is repaired on the next refresh.
+        if (dialog_open && state.services_cursor >= state.rows.size()) {
           state.services_cursor = 0;
         }
         if (state.services_status.rfind("querying", 0) == 0) {

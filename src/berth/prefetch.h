@@ -12,6 +12,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -22,9 +23,14 @@ namespace berth {
 [[nodiscard]] Result<void> validate_prefetch_step(
     const std::vector<std::string>& argv);
 
+// `work_dir` is the checkout the steps READ: every download-only command is a
+// PROJECT command (`go mod download`, `pip download -r requirements.txt`), and
+// run without a working directory they run in whatever directory the caller
+// happens to be in — where there is no manifest, and they fail with a message
+// about the user's project that is really about ours.
 [[nodiscard]] Result<std::size_t> run_prefetch(
     const std::vector<std::vector<std::string>>& steps,
-    std::atomic<bool>* cancel,
+    const std::filesystem::path& work_dir, std::atomic<bool>* cancel,
     std::chrono::milliseconds per_step_timeout =
         std::chrono::milliseconds(600000));
 

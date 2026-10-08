@@ -48,7 +48,11 @@ class DeployOps {
                                     const std::filesystem::path& work_dir,
                                     const Paths& paths,
                                     const DeployOptions& options) = 0;
-  virtual Result<void> prefetch(const Recipe& recipe, const Paths& paths,
+  // `work_dir` is the checkout: prefetch steps read the project's manifests,
+  // so they MUST run there and not in whatever directory the caller lives.
+  virtual Result<void> prefetch(const Recipe& recipe,
+                                const std::filesystem::path& work_dir,
+                                const Paths& paths,
                                 const DeployOptions& options) = 0;
   virtual Result<void> build(const Recipe& recipe,
                              const std::filesystem::path& work_dir,
@@ -78,7 +82,9 @@ class RealDeployOps final : public DeployOps {
                             const std::filesystem::path& work_dir,
                             const Paths& paths,
                             const DeployOptions& options) override;
-  Result<void> prefetch(const Recipe& recipe, const Paths& paths,
+  Result<void> prefetch(const Recipe& recipe,
+                        const std::filesystem::path& work_dir,
+                        const Paths& paths,
                         const DeployOptions& options) override;
   Result<void> build(const Recipe& recipe,
                      const std::filesystem::path& work_dir, std::uint16_t port,
@@ -101,6 +107,25 @@ class RealDeployOps final : public DeployOps {
 [[nodiscard]] Result<std::string> wait_for_active_unit(
     const std::string& service_name, std::chrono::milliseconds budget,
     std::atomic<bool>* cancel);
+
+// How long a unit must STAY active before a deploy may call it a success, and
+// the window size the settle loop uses. Short by design: this is not a
+// health check, it is the gap between "the process was spawned" and "the
+// process is still there", which is exactly where a wrong start_cmd dies.
+inline constexpr std::chrono::milliseconds kSettleWindow{3000};
+
+// The settle verdict, as a PURE function so it can be tested offline: the
+// states `systemctl is-active` answered AFTER the unit first reported active,
+// in order. Ok() only when every one of them is "active".
+//
+// Why this exists: `Type=simple` means systemd calls a unit "active" the moment
+// it has SPAWNED the process. A service whose start_cmd is wrong therefore
+// passes an is-active check and dies a second later, looping on
+// Restart=on-failure forever. The deploy reported success on a unit that was
+// crash-looping — the exact §11 failure ("`enable --now` returns 0 even for a
+// unit that dies a moment later"), reached through a different door.
+[[nodiscard]] Result<std::string> settle_active(
+    const std::string& service_name, const std::vector<std::string>& states);
 
 // `forced_port` of 0 means "ask the recipe, then pick a free port".
 [[nodiscard]] Result<DeployOutcome> run_deploy(const Paths& paths,

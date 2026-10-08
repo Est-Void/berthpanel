@@ -343,6 +343,12 @@ class AppComponent final : public ftxui::ComponentBase {
 
 void AppComponent::move_cursor(const int delta) {
   std::lock_guard lock(panel_->mutex);
+  // A confirm dialog is about a NAMED service ("uninstall berthpanel-memos?").
+  // Moving the highlight underneath it makes the screen offer a service the
+  // user is no longer looking at, so the dialog freezes the cursor.
+  if (panel_->confirming_uninstall || panel_->confirming_kill) {
+    return;
+  }
   std::size_t* cursor = nullptr;
   std::size_t count = 0;
   switch (tabs()[panel_->tab].tab) {

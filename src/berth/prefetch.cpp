@@ -60,7 +60,7 @@ Result<void> validate_prefetch_step(const std::vector<std::string>& argv) {
 
 Result<std::size_t> run_prefetch(
     const std::vector<std::vector<std::string>>& steps,
-    std::atomic<bool>* cancel,
+    const std::filesystem::path& work_dir, std::atomic<bool>* cancel,
     const std::chrono::milliseconds per_step_timeout) {
   std::size_t done = 0;
   for (const std::vector<std::string>& step : steps) {
@@ -81,6 +81,8 @@ Result<std::size_t> run_prefetch(
     RunLimits limits;
     limits.timeout = per_step_timeout;
     limits.cancel = cancel;
+    // The checkout, so a manifest-reading step reads the USER's manifest.
+    limits.cwd = &work_dir;
     Result<RunOutput> out = run(argv, limits);
     if (out.is_err())
       return std::move(out).error();

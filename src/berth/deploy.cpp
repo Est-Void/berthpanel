@@ -13,6 +13,7 @@
 #include "../core/state.h"
 #include "../util/fs.h"
 #include "../util/sleep.h"
+#include "../util/strutil.h"
 #include "../util/subprocess.h"
 #include "../util/which.h"
 #include "cancel.h"
@@ -109,17 +110,68 @@ Result<void> RealDeployOps::fetch_source(const Recipe& recipe,
                                        .allowed = true});
   if (logged.is_err())
     return logged.error();
+  // A pinned clone cannot land on top of an existing checkout, and the
+  // refusal that follows ("destination exists and is not empty") says nothing
+  // about WHY there is something there — so the two cases are told apart here,
+  // before the clone runs and while we still know what the service is.
+  const Result<std::optional<ServiceRecord>> registered =
+      registry_get(paths, recipe.service_name);
+  if (registered.is_err()) {
+    return with_context(std::move(registered).error(),
+                        "deploy: checking whether " + recipe.service_name +
+                            " is already deployed");
+  }
+  std::error_code ec;
+  const bool occupied =
+      std::filesystem::exists(work_dir, ec) &&
+      !std::filesystem::is_empty(work_dir, ec);
+  if (occupied) {
+    if (registered.value().has_value()) {
+      // A LIVE service's checkout: replacing the tree under a running service
+      // is not a repair, it is a surprise. Refuse, and say what to do instead.
+      return Error(
+          "deploy: the checkout for " + recipe.service_name + " is already in " +
+          work_dir.string() +
+          " and a pinned clone will not overwrite it. That service IS "
+          "registered, so this is a repair rather than a first deploy: its unit "
+          "is already serving. To rebuild it, move the work dir aside yourself "
+          "(it holds your data) — berthpanel will not delete the tree a "
+          "registered service runs from.");
+    }
+    // NOT registered ⇒ leftover from an interrupted deploy, which §6.7 already
+    // treats as sweepable. Remove it here, and SAY so in deploy.log: a silent
+    // rm of a work dir is exactly what this project refuses to do.
+    const Result<std::uintmax_t> removed = remove_tree(work_dir);
+    if (removed.is_err()) {
+      return with_context(std::move(removed).error(),
+                          "deploy: clearing " + work_dir.string() +
+                              " (leftover from an interrupted deploy)");
+    }
+    const Result<void> noted = deploylog_append(
+        paths, "deploy: cleared " + work_dir.string() + " (" +
+                   std::to_string(removed.value()) +
+                   " entries) left by an interrupted deploy of " +
+                   recipe.service_name + " — it was not registered");
+    static_cast<void>(noted);
+    const Result<void> ready = ensure_dir(work_dir);
+    if (ready.is_err()) {
+      return std::move(ready).error();
+    }
+  }
   return clone_pinned_github(recipe.owner_repo(), recipe.commit, work_dir,
                              options.token, std::chrono::milliseconds(600000),
                              options.cancel);
 }
 
-Result<void> RealDeployOps::prefetch(const Recipe& recipe, const Paths& paths,
+Result<void> RealDeployOps::prefetch(const Recipe& recipe,
+                                     const std::filesystem::path& work_dir,
+                                     const Paths& paths,
                                      const DeployOptions& options) {
   static_cast<void>(paths);
   if (recipe.prefetch_steps.empty())
     return {};
-  Result<std::size_t> ran = run_prefetch(recipe.prefetch_steps, options.cancel);
+  Result<std::size_t> ran =
+      run_prefetch(recipe.prefetch_steps, work_dir, options.cancel);
   if (ran.is_err())
     return std::move(ran).error();
   return {};
@@ -198,12 +250,67 @@ Result<void> RealDeployOps::start_service(const std::string& service_name) {
   return systemctl_enable_now(service_name);
 }
 
+namespace {
+
+// Errors raised inside this file already start with "deploy: ", and the call
+// sites below add it again to say which step failed. "deploy: deploy: ..." in
+// the panel's error line is noise on a message the user has to act on.
+std::string step_error(const std::string& step, std::string ctx) {
+  if (ctx.rfind("deploy: ", 0) == 0) {
+    return ctx;
+  }
+  return "deploy: " + step + ": " + std::move(ctx);
+}
+
+}  // namespace
+
 Result<void> RealDeployOps::await_running(const std::string& service_name,
                                           std::atomic<bool>* cancel) {
   Result<std::string> active = wait_for_active_unit(
       service_name, std::chrono::milliseconds(8000), cancel);
-  if (active.is_err())
+  if (active.is_err()) {
     return std::move(active).error();
+  }
+  // "active" only means the process was SPAWNED (Type=simple). A service whose
+  // start_cmd is wrong passes that check and dies a second later, looping on
+  // Restart=on-failure — and the deploy would have reported success. So it has
+  // to STAY active to be called a deploy.
+  const Result<std::string> systemctl = resolve_executable("systemctl");
+  if (systemctl.is_err()) {
+    return std::move(systemctl).error();
+  }
+  std::vector<std::string> observed;
+  const auto settle_until = std::chrono::steady_clock::now() + kSettleWindow;
+  while (std::chrono::steady_clock::now() < settle_until) {
+    if (cancel != nullptr && cancel->load(std::memory_order_relaxed)) {
+      return Error("deploy: cancelled while waiting for " + service_name);
+    }
+    RunLimits limits;
+    limits.timeout = std::chrono::milliseconds(5000);
+    Result<RunOutput> out =
+        run({systemctl.value(), "--user", "is-active", service_name + ".service"},
+            limits);
+    std::string state = "unknown";
+    if (out.is_ok()) {
+      state = berth::trim(out.value().out);
+      if (state.empty()) {
+        state = "unknown";
+      }
+    } else {
+      state = out.error().ctx();
+    }
+    observed.push_back(state);
+    if (state != "active") {
+      // No point waiting out the rest of the window on a unit that already
+      // left: the verdict is already decided.
+      break;
+    }
+    interruptible_sleep(std::chrono::milliseconds(250));
+  }
+  Result<std::string> settled = settle_active(service_name, observed);
+  if (settled.is_err()) {
+    return std::move(settled).error();
+  }
   return {};
 }
 
@@ -243,6 +350,30 @@ Result<std::string> wait_for_active_unit(const std::string& service_name,
   return Error("deploy: " + service_name + " did not reach 'active' within " +
                std::to_string(budget.count()) + "ms (last state: " + last +
                ")");
+}
+
+Result<std::string> settle_active(const std::string& service_name,
+                                  const std::vector<std::string>& states) {
+  if (states.empty()) {
+    // Vacuous truth is not evidence: a settle window that never got an answer
+    // has confirmed nothing, and must not report a service as up.
+    return Error("deploy: " + service_name +
+                 " was never confirmed active after starting — no answer from "
+                 "systemctl during the settle window");
+  }
+  for (const std::string& state : states) {
+    if (state != "active") {
+      // The most common cause by far is a start_cmd the app does not
+      // understand — the detector's is an ASSUMPTION and says so — so the
+      // error says that instead of leaving the user to read unit logs.
+      return Error("deploy: " + service_name +
+                   " came up and then left 'active' (state: " + state +
+                   ") — it is not serving. A start_cmd the app does not "
+                   "understand is the usual cause; the recipe file is the "
+                   "recipe to edit.");
+    }
+  }
+  return std::string("active");
 }
 
 Result<void> RealDeployOps::register_service(const ServiceRecord& record,
@@ -604,7 +735,7 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
       std::to_string(port));
   Result<void> fetched = ops.fetch_source(recipe, work_dir, paths, options);
   if (fetched.is_err()) {
-    return Error("deploy: " + std::move(fetched).error().ctx() +
+    return Error(step_error("fetch", std::move(fetched).error().ctx()) +
                  " (journal entry kept for cleanup)");
   }
 
@@ -613,7 +744,7 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
   // engine's, never a second sink the panel owns), so they are written here
   // rather than synthesized from the return value.
   log("build " + recipe.service_name + " port " + std::to_string(port));
-  Result<void> prefetched = ops.prefetch(recipe, paths, options);
+  Result<void> prefetched = ops.prefetch(recipe, work_dir, paths, options);
   if (prefetched.is_err()) {
     return Error("deploy: prefetch failed: " +
                  std::move(prefetched).error().ctx());
@@ -643,7 +774,7 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
   // a failure must never read as a success).
   Result<void> running = ops.await_running(recipe.service_name, options.cancel);
   if (running.is_err()) {
-    return Error("deploy: " + std::move(running).error().ctx() +
+    return Error(step_error("start", std::move(running).error().ctx()) +
                  " (journal entry kept for cleanup)");
   }
 

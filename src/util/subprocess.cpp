@@ -54,7 +54,12 @@ class SpawnActions {
 
   [[nodiscard]] posix_spawn_file_actions_t* get() { return &actions_; }
 
-  [[nodiscard]] Result<void> wire(const int out_fd, const int err_fd);
+  // `cwd` is applied INSIDE wire() on purpose: the list is init'd here, and
+  // posix_spawn_file_actions_init() discards anything added before it — a
+  // chdir added by the caller first is silently lost, which is exactly the kind
+  // of bug that looks like the child ignored the argument.
+  [[nodiscard]] Result<void> wire(const int out_fd, const int err_fd,
+                                 const std::filesystem::path* cwd);
 
  private:
   posix_spawn_file_actions_t actions_{};
@@ -156,7 +161,19 @@ Result<void> add_dup2(posix_spawn_file_actions_t* actions, const int from,
   return {};
 }
 
-Result<void> SpawnActions::wire(const int out_fd, const int err_fd) {
+// chdir BEFORE the dup2s: posix_spawn applies the file actions in order, and
+// the pipe ends must be in place before the child starts talking.
+Result<void> add_chdir(posix_spawn_file_actions_t* actions,
+                      const std::filesystem::path& cwd) {
+  if (::posix_spawn_file_actions_addchdir_np(actions, cwd.c_str()) != 0) {
+    return Error("subprocess: chdir into " + cwd.string() + " failed: " +
+                 errno_text(errno));
+  }
+  return {};
+}
+
+Result<void> SpawnActions::wire(const int out_fd, const int err_fd,
+                               const std::filesystem::path* cwd) {
   if (posix_spawn_file_actions_init(&actions_) != 0) {
     return Error("subprocess: spawn actions init: " + errno_text(errno));
   }
@@ -164,6 +181,18 @@ Result<void> SpawnActions::wire(const int out_fd, const int err_fd) {
   if (posix_spawn_file_actions_addopen(&actions_, STDIN_FILENO, "/dev/null",
                                        O_RDONLY, 0) != 0) {
     return Error("subprocess: spawn stdin open: " + errno_text(errno));
+  }
+  if (cwd != nullptr && !cwd->empty()) {
+    // A missing directory is the caller's mistake and must be named BEFORE the
+    // child runs, not surfaced as whatever the child happened to print.
+    std::error_code ec;
+    if (!std::filesystem::is_directory(*cwd, ec)) {
+      return Error("subprocess: working directory " + cwd->string() +
+                   " is not a directory: " + ec.message());
+    }
+    const Result<void> chdir = add_chdir(&actions_, *cwd);
+    if (chdir.is_err())
+      return chdir;
   }
   const Result<void> out = add_dup2(&actions_, out_fd, STDOUT_FILENO);
   if (out.is_err())
@@ -369,7 +398,7 @@ Result<RunOutput> run(const std::vector<std::string>& argv,
 
   SpawnActions actions;
   const Result<void> wired =
-      actions.wire(pipes.out_write.get(), pipes.err_write.get());
+      actions.wire(pipes.out_write.get(), pipes.err_write.get(), limits.cwd);
   if (wired.is_err())
     return std::move(wired).error();
 

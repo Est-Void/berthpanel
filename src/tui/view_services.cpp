@@ -119,4 +119,23 @@ std::vector<std::string> services_key_hints() {
   };
 }
 
+std::size_t cursor_after_rows_refresh(
+    const std::size_t cursor, const std::vector<berth::ServiceRow>& old_rows,
+    const std::vector<berth::ServiceRow>& new_rows) {
+  if (new_rows.empty()) {
+    return 0;
+  }
+  if (cursor < old_rows.size()) {
+    const std::string& anchor = old_rows[cursor].service_name;
+    for (std::size_t i = 0; i < new_rows.size(); ++i) {
+      if (new_rows[i].service_name == anchor) {
+        return i;
+      }
+    }
+  }
+  // The selected service is gone (uninstalled, or the registry no longer lists
+  // it): keep the index if it still points somewhere, else start over.
+  return cursor < new_rows.size() ? cursor : 0;
+}
+
 }  // namespace tui
