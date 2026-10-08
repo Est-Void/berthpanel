@@ -118,6 +118,32 @@ std::string pax_path_entry(const std::string& long_name,
          padded(next_content);
 }
 
+TEST(rawfetch_tree_rows_with_wrong_types_do_not_throw) {
+  // A present-but-wrong-typed field used to reach value()/get<T>(), which
+  // throws nlohmann::type_error; only parse_error is caught, so the parser
+  // aborted the process on hostile input instead of failing as a Result.
+  const auto bad_path =
+      parse_tree_response(R"({"tree":[{"path":123,"type":"blob"}]})");
+  CHECK(bad_path.is_ok());
+  CHECK(bad_path.value().empty());  // row skipped
+
+  const auto bad_type =
+      parse_tree_response(R"({"tree":[{"path":"a","type":7}]})");
+  CHECK(bad_type.is_ok());
+  CHECK(bad_type.value().empty());
+
+  // A wrong-typed optional field is ignored, the file is kept.
+  const auto bad_size = parse_tree_response(
+      R"({"tree":[{"path":"a","type":"blob","size":"big"}]})");
+  CHECK(bad_size.is_ok());
+  CHECK(bad_size.value().size() == 1);
+  CHECK(bad_size.value()[0].size == 0);
+
+  // A wrong-typed REQUIRED flag is a loud error, not a crash and not a silent
+  // "not truncated".
+  CHECK(parse_tree_response(R"({"truncated":"yes","tree":[]})").is_err());
+}
+
 }  // namespace
 
 TEST(rawfetch_safe_paths) {

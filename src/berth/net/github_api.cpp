@@ -85,6 +85,14 @@ Result<std::vector<TreeFile>> parse_tree_response(const std::string_view body) {
   if (!doc.is_object() || !doc.contains("tree") || !doc["tree"].is_array()) {
     return Error("trees api: no tree array");
   }
+  // Every present field is TYPE-CHECKED before it is read: nlohmann's
+  // value()/get<T>() throw type_error on a wrong-typed present field, and
+  // only parse_error is caught below, so a hostile tree row (e.g.
+  // "path":123) would otherwise abort the process instead of failing as a
+  // Result (§6.10).
+  if (doc.contains("truncated") && !doc["truncated"].is_boolean()) {
+    return Error("trees api: 'truncated' is not a boolean");
+  }
   if (doc.value("truncated", false)) {
     return Error(
         "trees api: listing truncated by GitHub; refusing incomplete data");
@@ -92,15 +100,19 @@ Result<std::vector<TreeFile>> parse_tree_response(const std::string_view body) {
 
   std::vector<TreeFile> out;
   for (const nlohmann::json& item : doc["tree"]) {
-    // trees/commits are not files, and a row without a path is not ours.
+    // trees/commits are not files, and a row without a string path is not
+    // ours.
     if (!item.is_object() || !item.contains("path") ||
-        item.value("type", "") != "blob") {
+        !item["path"].is_string() || !item.contains("type") ||
+        !item["type"].is_string() || item["type"].get<std::string>() != "blob") {
       continue;
     }
     TreeFile file;
     file.path = item["path"].get<std::string>();
-    file.sha = item.value("sha", std::string());
-    file.size = item.value("size", std::uint64_t{0});
+    if (item.contains("sha") && item["sha"].is_string())
+      file.sha = item["sha"].get<std::string>();
+    if (item.contains("size") && item["size"].is_number_unsigned())
+      file.size = item["size"].get<std::uint64_t>();
     out.push_back(std::move(file));
   }
   return out;
