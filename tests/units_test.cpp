@@ -135,8 +135,11 @@ TEST(units_read_write_paths_are_one_directive_each) {
     ++count;
   }
   CHECK(count == 2);
-  // Path directives use systemd-escape --path semantics, not quotes.
-  CHECK(unit.value().find("ReadWritePaths=/home/u/My Apps/data") !=
+  // ReadWritePaths= is a LIST directive, so the space must be
+  // backslash-escaped: unquoted, systemd splits at the space and ignores the
+  // tail ("path is not absolute, ignoring: Apps/data"), leaving the work dir
+  // unwritable (dev.md §11).
+  CHECK(unit.value().find("ReadWritePaths=/home/u/My\\ Apps/data") !=
         std::string::npos);
 }
 

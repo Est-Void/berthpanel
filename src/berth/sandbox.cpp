@@ -62,7 +62,10 @@ std::vector<std::string> sandbox_argv_body(const SandboxSpec& spec) {
       std::abort();
     }
     argv.push_back("--working-directory=" + raw.value());
-    argv.push_back("--property=ReadWritePaths=" + raw.value());
+    // The property value is a LIST: escape the path so a work dir with a
+    // space is not split into two nonexistent ones.
+    argv.push_back("--property=ReadWritePaths=" +
+                   escape_path_list_value(raw.value()));
   }
   for (const std::string& entry : spec.env_extra) {
     argv.push_back("--setenv=" + entry);

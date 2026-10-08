@@ -138,6 +138,24 @@ Result<std::string> raw_systemd_path(const std::filesystem::path& path) {
   return value;
 }
 
+std::string escape_path_list_value(const std::string_view value) {
+  std::string out;
+  out.reserve(value.size());
+  for (const char c : value) {
+    if (c == '\\' || c == ' ' || c == '\t') {
+      out += '\\';
+      out += c;
+      continue;
+    }
+    if (c == '%') {
+      out += "%%";
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
 Result<std::string> render_exec_start(const std::string_view binary,
                                       const std::vector<std::string>& args) {
   Result<std::string> head = quote_exec_word(binary);
@@ -230,9 +248,11 @@ void append_hardening_section(std::string* out, const UnitSpec& spec) {
     *out += "\n";
   }
   // One directive per path — a space-joined list would become two
-  // nonexistent paths and the namespace would fail to set up (§11).
+  // nonexistent paths and the namespace would fail to set up (§11). And the
+  // path itself is escaped, because ReadWritePaths= IS a list: a work dir
+  // with a space would otherwise be split at that space and the tail dropped.
   for (const std::filesystem::path& path : spec.read_write_paths) {
-    *out += "ReadWritePaths=" + path.string() + "\n";
+    *out += "ReadWritePaths=" + escape_path_list_value(path.string()) + "\n";
   }
   *out += "\n";
 }

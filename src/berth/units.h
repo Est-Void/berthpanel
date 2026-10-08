@@ -65,15 +65,25 @@ struct UnitSpec {
 // (Environment=K=V, Environment=).
 [[nodiscard]] Result<std::string> quote_unit_value(std::string_view value);
 
-// Path directives (WorkingDirectory=, ReadWritePaths=, EnvironmentFile=)
-// take the RAW path: systemd parses the rest of the line verbatim, so
-// quotes would become part of the path (verified against a live user
-// manager: "WorkingDirectory=/tmp/with space" starts fine). Spaces are
-// therefore safe; quoting is not. ExecStart is the opposite case and is
-// quoted per argument. Getting either one wrong is the same class of bug
-// as the whitespace-splitting one (dev.md §11).
+// Path directives that take a single path (WorkingDirectory=) take the RAW
+// path: systemd parses the rest of the line verbatim, so quotes would become
+// part of the path (verified against a live user manager:
+// "WorkingDirectory=/tmp/with space" starts fine). Spaces are therefore safe
+// there; quoting is not. ExecStart is the opposite case and is quoted per
+// argument. Getting either one wrong is the same class of bug as the
+// whitespace-splitting one (dev.md §11).
 [[nodiscard]] Result<std::string> raw_systemd_path(
     const std::filesystem::path& path);
+
+// Escapes a path for a LIST-valued directive (ReadWritePaths= in the unit and
+// in `systemd-run --property=`). Those split their value on unquoted
+// whitespace, so a path with a space must be backslash-escaped or it becomes
+// two nonexistent paths and the tail is silently ignored — the exact §11 trap
+// ("InaccessiblePaths= ... turns one path into two nonexistent ones").
+// Verified: `systemd-analyze verify` on an unquoted ReadWritePaths with a
+// space reports "path is not absolute, ignoring: Apps/data". Backslash and '%'
+// are escaped too ('%' is a unit-file specifier and must be doubled).
+[[nodiscard]] std::string escape_path_list_value(std::string_view value);
 
 // Joins argv into an ExecStart= value with per-argument quoting.
 [[nodiscard]] Result<std::string> render_exec_start(
