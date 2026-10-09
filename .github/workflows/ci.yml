@@ -1,6 +1,11 @@
-# Minimal CI (docs/plan.md stage 2.6): build + test suite only. The full
-# release pipeline (signature verify, reproducibility check, musl container)
-# lands in stage 8.5. Network tests are opt-in by design and never run here.
+# ci — build, test, and the release gates (docs/plan.md stage 8.5; dev.md §3, §10).
+#
+# This pipeline NEVER signs: the signing key is not in CI and never will be.
+# CI only verifies a signature the maintainer produced, and reproduces the
+# committed checksums. Network tests are opt-in by design and never run here.
+#
+# The container digest is not repeated here: `make musl` uses the Makefile's
+# pinned `CONTAINER`.
 
 name: ci
 
@@ -21,3 +26,82 @@ jobs:
         run: make -j2 release
       - name: Test
         run: make test
+
+  reproducibility:
+    # Same toolchain, two clean builds, byte-identical (dev.md §3).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build release twice and require an identical sha256
+        run: make repro
+
+  release-gate:
+    # A v* tag is a promise: it must carry a signed SHA256SUMS committed with
+    # it. A tag without the signature FAILS — there is no fallback (dev.md §10).
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require a committed signature and a trusted public key
+        run: |
+          set -eu
+          if [ ! -f release/SHA256SUMS ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} has no committed release/SHA256SUMS"
+            exit 1
+          fi
+          if [ ! -f release/SHA256SUMS.minisig ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} has no release/SHA256SUMS.minisig; refusing an unsigned release"
+            exit 1
+          fi
+          if [ ! -f docs/release.pub ]; then
+            echo "::error::docs/release.pub is missing; cannot verify the signature"
+            exit 1
+          fi
+      - name: Fetch the pinned static minisign
+        run: |
+          set -eu
+          curl --fail --silent --show-error --location \
+            --output /tmp/minisign.tgz \
+            https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz
+          echo "9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73  /tmp/minisign.tgz" \
+            | sha256sum --check --strict
+          tar -xzf /tmp/minisign.tgz -C /tmp minisign-linux/x86_64/minisign
+      - name: Verify the committed signature against docs/release.pub
+        run: |
+          /tmp/minisign-linux/x86_64/minisign -V \
+            -p docs/release.pub \
+            -m release/SHA256SUMS \
+            -x release/SHA256SUMS.minisig
+
+  musl-reproducibility:
+    # Reproduce the shipped static artifact in the digest-pinned container and
+    # assert CI's checksums equal the committed ones. A mismatch is toolchain
+    # or container drift, and the release fails (dev.md §3). Skipped until a
+    # release has committed SHA256SUMS.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build in the pinned container and compare with the committed sums
+        run: |
+          set -eu
+          if [ ! -f release/SHA256SUMS ]; then
+            echo "no committed release/SHA256SUMS yet; nothing to compare (pre-release)"
+            exit 0
+          fi
+          make musl
+          want="$(awk '$2 == "berthpanel" { print $1 }' release/SHA256SUMS)"
+          got="$(sha256sum build/musl/berthpanel | cut -d' ' -f1)"
+          echo "committed: ${want}"
+          echo "ci:        ${got}"
+          if [ -z "${want}" ]; then
+            echo "::error::no berthpanel line in release/SHA256SUMS"
+            exit 1
+          fi
+          if [ "${want}" != "${got}" ]; then
+            echo "::error::CI build does not match the committed checksums (toolchain or container drift)"
+            exit 1
+          fi

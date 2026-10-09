@@ -14,8 +14,10 @@ WARNFLAGS ?= -Wall -Wextra -Wpedantic -Werror \
 OPTFLAGS  ?= -O0 -g
 PREFIX    ?= /usr/local
 DESTDIR   ?=
-# Pinned by DIGEST, never by tag (dev.md §3). Bump it in this Makefile and
-# .github/workflows/ci.yml in one commit that says so.
+# Pinned by DIGEST, never by tag (dev.md §3). This Makefile is the single
+# source of the digest; .github/workflows/ci.yml builds through `make musl`
+# and inherits it, so there is nothing to keep in sync. A floating tag in a
+# supply-chain-sensitive build is the whole attack.
 CONTAINER ?= ghcr.io/archlinux/archlinux@sha256:67f575e6ae9319883231be5e32468bb88d4afcfab281b5ac014bd03f0571f3bc
 
 BUILD     := build

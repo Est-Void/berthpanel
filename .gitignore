@@ -1,4 +1,7 @@
 docs/*
+# The one doc that IS tracked: the pinned public release key CI verifies
+# against (dev.md §10). Everything else under docs/ is local-only.
+!docs/release.pub
 build/
 
 # release staging (stage 8.3): only the checksums and the curated notes are
