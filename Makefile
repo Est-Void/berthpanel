@@ -284,16 +284,21 @@ TEST_VENDOR_OBJ := $(addprefix $(TEST_DIR)/obj/,$(patsubst third_party/%.c,%.o,$
 TEST_TRUST_OBJ := $(TEST_DIR)/obj/trust_store.o
 TEST_OBJ := $(TEST_CASE_OBJ) $(TEST_LIB_OBJ)
 
-# Sanitizer flags for the test objects. Empty for `make test`; `make asan-test`
+# Sanitizer flags for the test objects. Empty for `make test`; `make asan`
 # re-runs this makefile with SANITIZE set and a separate TEST_DIR, so the test
 # binary is instrumented exactly like the `asan` binary. Without this the
 # sanitizers covered only build/asan/berthpanel and every test-path leak or UB
 # was invisible (dev.md §6.10 names ASan/UBSan as THE gate).
 SANITIZE ?=
+# Leak detection is NOT left implicit: detect_leaks=1 is set explicitly so a
+# green suite cannot mean "the leak detector was compiled out". UBSan halts on
+# the first error so a report is not buried under later output.
+ASAN_ENV ?=
+ASAN_TEST_ENV := ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
 
 .PHONY: test
 test: $(TEST_BIN)
-	$(TEST_BIN)
+	$(ASAN_ENV) $(TEST_BIN)
 
 $(TEST_CASE_OBJ): $(TEST_DIR)/obj/%.o: tests/%.cpp $(VERSION_H) | $(TEST_DIR)/obj
 	@mkdir -p $(@D)
@@ -325,7 +330,7 @@ $(TEST_DIR)/obj $(TEST_DIR):
 # SANITIZE without it would leave half-instrumented objects behind).
 .PHONY: asan-test
 asan-test:
-	$(MAKE) test TEST_DIR=$(BUILD)/asan-test SANITIZE="$(ASAN_FLAGS)"
+	$(MAKE) test TEST_DIR=$(BUILD)/asan-test SANITIZE="$(ASAN_FLAGS)" ASAN_ENV="$(ASAN_TEST_ENV)"
 
 asan: asan-test
 
