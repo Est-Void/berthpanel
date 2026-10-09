@@ -26,6 +26,7 @@
 #include "berth/lock.h"
 #include "berth/net/egress.h"
 #include "berth/net/github_api.h"
+#include "berth/proxy.h"
 #include "berth/recipes.h"
 #include "berth/sandbox.h"
 #include "berth/serve.h"
@@ -109,6 +110,8 @@ void print_usage() {
                "[--force]\n"
                "       berthpanel __deploy <service_name> [port] [--upgrade] "
                "[--json]\n"
+               "       berthpanel proxy add <service> <domain> | proxy list | "
+               "proxy remove <domain>\n"
                "       berthpanel __cleanup [--install] [--quiet]\n"
                "       berthpanel __serve-static <root> [--listen "
                "127.0.0.1:<port>]\n"
@@ -234,6 +237,74 @@ int services_command(const bool json) {
               << "\n";
   }
   return 0;
+}
+
+// `berthpanel proxy add <service> <domain> | list | remove <domain>` — the
+// managed Caddy front door (plan 5B.2). The engine lives in berth/proxy.cpp;
+// this only parses and renders. add/remove BLOCK (download + systemctl), so
+// they never run under the TUI.
+int proxy_command(const std::span<const char* const>& args) {
+  if (args.size() < 2) {
+    std::cerr << "usage: berthpanel proxy add <service> <domain>\n"
+                 "       berthpanel proxy list\n"
+                 "       berthpanel proxy remove <domain>\n";
+    return 2;
+  }
+  const berth::Result<berth::Paths> paths = berth::paths_from_env();
+  if (paths.is_err())
+    return fail(paths.error().ctx());
+  const std::string_view sub(args[1]);
+
+  if (sub == "list") {
+    const berth::Result<std::vector<berth::ProxyRoute>> routes =
+        berth::proxy_routes_load(paths.value());
+    if (routes.is_err())
+      return fail(routes.error().ctx());
+    if (routes.value().empty()) {
+      std::cout << "no proxy routes\n";
+      return 0;
+    }
+    for (const berth::ProxyRoute& route : routes.value()) {
+      std::cout << "  " << route.domain << " -> " << route.service_name
+                << " 127.0.0.1:" << route.port << "\n";
+    }
+    return 0;
+  }
+
+  if (sub == "add" && args.size() == 4) {
+    std::atomic<bool> cancel_flag{false};
+    const berth::Result<void> signalling =
+        berth::install_exit_signalling(&cancel_flag);
+    if (signalling.is_err())
+      return fail(signalling.error().ctx());
+    const berth::Result<void> added =
+        berth::proxy_add(paths.value(), args[2], args[3], &cancel_flag);
+    if (added.is_err())
+      return fail(added.error().ctx());
+    std::cout << "routed " << berth::normalize_proxy_domain(args[3]) << " -> "
+              << args[2] << "\n";
+    return 0;
+  }
+
+  if (sub == "remove" && args.size() == 3) {
+    std::atomic<bool> cancel_flag{false};
+    const berth::Result<void> signalling =
+        berth::install_exit_signalling(&cancel_flag);
+    if (signalling.is_err())
+      return fail(signalling.error().ctx());
+    const berth::Result<bool> removed =
+        berth::proxy_remove(paths.value(), args[2], &cancel_flag);
+    if (removed.is_err())
+      return fail(removed.error().ctx());
+    std::cout << (removed.value() ? "removed " : "no route for ")
+              << berth::normalize_proxy_domain(args[2]) << "\n";
+    return removed.value() ? 0 : 1;
+  }
+
+  std::cerr << "usage: berthpanel proxy add <service> <domain>\n"
+               "       berthpanel proxy list\n"
+               "       berthpanel proxy remove <domain>\n";
+  return 2;
 }
 
 int verify_sandbox_command() {
@@ -553,6 +624,8 @@ int run(const std::span<const char* const> args) {
   {
     // One-shot subcommands must be the first argument.
     const std::string_view first(args[0]);
+    if (first == "proxy")
+      return proxy_command(args);
     if (first == "__egress-probe")
       return egress_probe();
     if (first == "__catalog") {
