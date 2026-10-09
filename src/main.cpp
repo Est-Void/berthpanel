@@ -30,6 +30,7 @@
 #include "berth/proxy.h"
 #include "berth/recipes.h"
 #include "berth/sandbox.h"
+#include "berth/selftest.h"
 #include "berth/serve.h"
 #include "berth/status.h"
 #include "berth/toolcheck.h"
@@ -100,7 +101,7 @@ void print_usage() {
   std::cerr << "usage: berthpanel                       # the panel (needs a "
                "terminal)\n"
                "       berthpanel [--version] [--show-endpoints] "
-               "[--verify-sandbox]\n"
+               "[--verify-sandbox] [--selftest]\n"
                "       berthpanel __egress-probe | __catalog [--json] | "
                "__services [--json]\n"
                "       berthpanel __recipe-list [--json] | "
@@ -372,6 +373,35 @@ int verify_sandbox_command() {
     return fail(audit.error().ctx());
   std::cout << berth::render_sandbox_audit(audit.value());
   return audit.value().full_grade() ? 0 : 1;
+}
+
+// `berthpanel --selftest` — the live E2E of plan 7.1 (see berth/selftest.h).
+// It runs against the real systemd user manager with a uniquely named,
+// loopback-only unit and removes everything it created; it makes no network
+// request and touches no registry/journal entry.
+int selftest_command() {
+  const berth::Result<berth::Paths> paths = berth::paths_from_env();
+  if (paths.is_err())
+    return fail(paths.error().ctx());
+
+  char self[4096];
+  const ssize_t n = ::readlink("/proc/self/exe", self, sizeof(self) - 1);
+  if (n <= 0)
+    return fail("--selftest: cannot resolve /proc/self/exe");
+  self[n] = '\0';
+
+  std::atomic<bool> cancel_flag{false};
+  const berth::Result<void> signalling =
+      berth::install_exit_signalling(&cancel_flag);
+  if (signalling.is_err())
+    return fail(signalling.error().ctx());
+
+  const berth::Result<berth::SelftestReport> report = berth::run_selftest(
+      paths.value(), std::filesystem::path(self), &cancel_flag);
+  if (report.is_err())
+    return fail(report.error().ctx());
+  std::cout << berth::render_selftest_report(report.value());
+  return report.value().ok() ? 0 : 1;
 }
 
 int recipe_list_command(const bool json) {
@@ -795,6 +825,8 @@ int run(const std::span<const char* const> args) {
       return show_endpoints();
     if (a == "--verify-sandbox")
       return verify_sandbox_command();
+    if (a == "--selftest")
+      return selftest_command();
   }
   print_usage();
   return 2;

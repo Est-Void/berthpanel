@@ -71,6 +71,7 @@ LIB_SRC := \
 	src/berth/prefetch.cpp \
  	src/berth/sandbox.cpp \
  	src/berth/cancel.cpp \
+ 	src/berth/selftest.cpp \
  	src/berth/recipes.cpp \
  	src/berth/userrecipes.cpp \
  	src/berth/detect.cpp \
@@ -154,6 +155,7 @@ TEST_SRC := \
 	tests/preflight_test.cpp \
 	tests/prefetch_test.cpp \
 	tests/sandbox_test.cpp \
+	tests/selftest_test.cpp \
 	tests/recipes_test.cpp \
  	tests/catalog_test.cpp \
  	tests/userrecipes_test.cpp \
