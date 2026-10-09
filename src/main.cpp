@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "analyzer/ports.h"
+#include "berth/backup.h"
 #include "berth/cancel.h"
 #include "berth/catalog.h"
 #include "berth/deploy.h"
@@ -116,7 +117,9 @@ void print_usage() {
                "       berthpanel __serve-static <root> [--listen "
                "127.0.0.1:<port>]\n"
                "       berthpanel __serve-status [--listen "
-               "127.0.0.1:<port>]\n";
+               "127.0.0.1:<port>]\n"
+               "       berthpanel backup <service> [<archive>] | "
+               "restore <service> <archive> [--force]\n";
 }
 
 int deploy_command(const std::string_view service,
@@ -305,6 +308,62 @@ int proxy_command(const std::span<const char* const>& args) {
                "       berthpanel proxy list\n"
                "       berthpanel proxy remove <domain>\n";
   return 2;
+}
+
+// `berthpanel backup <service> [<archive>]` — data dir + secrets into one
+// 0600 ustar archive (plan 5B.4). The service must be stopped.
+int backup_command(const std::string_view service,
+                   const std::string_view archive_arg) {
+  const berth::Result<berth::Paths> paths = berth::paths_from_env();
+  if (paths.is_err())
+    return fail(paths.error().ctx());
+  const std::filesystem::path output =
+      archive_arg.empty() ? berth::default_backup_path(paths.value(), service)
+                          : std::filesystem::path(archive_arg);
+
+  std::atomic<bool> cancel_flag{false};
+  const berth::Result<void> signalling =
+      berth::install_exit_signalling(&cancel_flag);
+  if (signalling.is_err())
+    return fail(signalling.error().ctx());
+
+  const berth::Result<berth::BackupReport> report =
+      berth::backup_service(paths.value(), service, output, &cancel_flag);
+  if (report.is_err())
+    return fail(report.error().ctx());
+  std::cout << "backed up " << service << " -> " << output.string() << "\n"
+            << "  files: " << report.value().files
+            << "  dirs: " << report.value().directories
+            << "  bytes: " << report.value().bytes
+            << (report.value().had_secrets ? "  (includes secrets)" : "")
+            << "\n";
+  return 0;
+}
+
+// `berthpanel restore <service> <archive> [--force]` — the inverse. The
+// service must be stopped; an existing data dir needs --force.
+int restore_command(const std::string_view service,
+                    const std::string_view archive_arg, const bool force) {
+  const berth::Result<berth::Paths> paths = berth::paths_from_env();
+  if (paths.is_err())
+    return fail(paths.error().ctx());
+
+  std::atomic<bool> cancel_flag{false};
+  const berth::Result<void> signalling =
+      berth::install_exit_signalling(&cancel_flag);
+  if (signalling.is_err())
+    return fail(signalling.error().ctx());
+
+  const berth::Result<berth::RestoreReport> report = berth::restore_service(
+      paths.value(), service, std::filesystem::path(archive_arg), force,
+      &cancel_flag);
+  if (report.is_err())
+    return fail(report.error().ctx());
+  std::cout << "restored " << service << " from " << archive_arg << "\n"
+            << "  data: " << (report.value().restored_data ? "yes" : "no")
+            << "  secrets: " << (report.value().restored_secrets ? "yes" : "no")
+            << "  files: " << report.value().files << "\n";
+  return 0;
 }
 
 int verify_sandbox_command() {
@@ -626,6 +685,17 @@ int run(const std::span<const char* const> args) {
     const std::string_view first(args[0]);
     if (first == "proxy")
       return proxy_command(args);
+    if (first == "backup" && args.size() >= 2 && args.size() <= 3) {
+      return backup_command(args[1], args.size() == 3 ? args[2] : "");
+    }
+    if (first == "restore" && args.size() >= 3) {
+      bool force = false;
+      for (std::size_t i = 3; i < args.size(); ++i) {
+        if (std::string_view(args[i]) == "--force")
+          force = true;
+      }
+      return restore_command(args[1], args[2], force);
+    }
     if (first == "__egress-probe")
       return egress_probe();
     if (first == "__catalog") {
