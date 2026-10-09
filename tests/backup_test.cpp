@@ -238,6 +238,26 @@ TEST(backup_refuses_a_bad_output_path_without_partial_file) {
   CHECK(!std::filesystem::exists(output));
 }
 
+TEST(backup_restore_secrets_only_archive) {
+  const TempDir tmp;
+  const berth::Paths p = backup_paths(tmp.path());
+  const std::string service = "berthpanel-secret-only";
+  CHECK(berth::write_secrets(p, service, {{"K", "v"}}).is_ok());
+
+  const std::filesystem::path archive = tmp.path() / "s.tar";
+  CHECK(berth::backup_to_archive(p, service, archive, nullptr).is_ok());
+  CHECK(berth::remove_tree(p.secrets_dir).is_ok());
+
+  const auto bytes = berth::read_file(archive);
+  CHECK(bytes.is_ok());
+  const auto restored =
+      berth::restore_from_archive(p, service, bytes.value(), false);
+  CHECK(restored.is_ok());
+  CHECK(!restored.value().restored_data);  // no data/ in the archive
+  CHECK(restored.value().restored_secrets);
+  CHECK(std::filesystem::exists(p.secrets_dir / (service + ".env")));
+}
+
 TEST(backup_default_path_is_deterministic) {
   const TempDir tmp;
   const berth::Paths p = backup_paths(tmp.path());

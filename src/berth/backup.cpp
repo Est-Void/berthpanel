@@ -349,10 +349,18 @@ Result<BackupReport> backup_to_archive(const Paths& paths,
       paths.secrets_dir / (std::string(service) + ".env");
 
   std::error_code ec;
-  const bool has_data = std::filesystem::is_directory(data_dir, ec);
+  bool has_data = std::filesystem::is_directory(data_dir, ec);
+  if (ec == std::errc::no_such_file_or_directory) {
+    ec.clear();
+    has_data = false;
+  }
   if (ec)
     return Error("backup: stat " + data_dir.string() + ": " + ec.message());
-  const bool has_secrets = std::filesystem::is_regular_file(secrets, ec);
+  bool has_secrets = std::filesystem::is_regular_file(secrets, ec);
+  if (ec == std::errc::no_such_file_or_directory) {
+    ec.clear();
+    has_secrets = false;
+  }
   if (ec)
     return Error("backup: stat " + secrets.string() + ": " + ec.message());
   if (!has_data && !has_secrets) {
@@ -471,13 +479,22 @@ Result<RestoreReport> restore_from_archive(const Paths& paths,
   std::error_code ec;
   const std::filesystem::path source_data = staging / "data";
   const std::filesystem::path target = paths.services_dir / service;
-  if (std::filesystem::is_directory(source_data, ec)) {
+  bool has_data = std::filesystem::is_directory(source_data, ec);
+  if (ec == std::errc::no_such_file_or_directory) {
+    ec.clear();
+    has_data = false;
+  }
+  if (ec)
+    return Error("restore: stat " + source_data.string() + ": " + ec.message());
+  if (has_data) {
+    bool target_exists = std::filesystem::exists(target, ec);
+    if (ec == std::errc::no_such_file_or_directory) {
+      ec.clear();
+      target_exists = false;
+    }
     if (ec)
-      return Error("restore: stat " + source_data.string() + ": " +
-                   ec.message());
-    if (std::filesystem::exists(target, ec)) {
-      if (ec)
-        return Error("restore: stat " + target.string() + ": " + ec.message());
+      return Error("restore: stat " + target.string() + ": " + ec.message());
+    if (target_exists) {
       if (!force) {
         return Error("restore: '" + std::string(service) +
                      "' already has data at " + target.string() +
@@ -496,10 +513,15 @@ Result<RestoreReport> restore_from_archive(const Paths& paths,
   }
 
   const std::filesystem::path source_secrets = staging / "secrets.env";
-  if (std::filesystem::is_regular_file(source_secrets, ec)) {
-    if (ec)
-      return Error("restore: stat " + source_secrets.string() + ": " +
-                   ec.message());
+  bool has_secrets = std::filesystem::is_regular_file(source_secrets, ec);
+  if (ec == std::errc::no_such_file_or_directory) {
+    ec.clear();
+    has_secrets = false;
+  }
+  if (ec)
+    return Error("restore: stat " + source_secrets.string() + ": " +
+                 ec.message());
+  if (has_secrets) {
     const Result<std::string> bytes = read_file(source_secrets);
     if (bytes.is_err())
       return std::move(bytes).error();
