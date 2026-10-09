@@ -179,6 +179,7 @@ TEST_SRC := \
 	tests/proxy_test.cpp \
 	tests/backup_test.cpp \
 	tests/musl_test.cpp \
+	tests/release_test.cpp \
 	tests/layering_test.cpp
 
 INCLUDES := -Iinclude -Isrc -I$(BUILD)/generated -isystem third_party -isystem third_party/mbedtls/include -isystem third_party/ftxui/include -isystem third_party/ftxui/src
