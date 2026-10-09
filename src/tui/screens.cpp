@@ -2,6 +2,9 @@
 
 #include "screens.h"
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <cstdio>
 #include <filesystem>
 #include <optional>
@@ -82,28 +85,27 @@ void follow_deploy_log(const std::shared_ptr<Panel>& panel,
                        const std::shared_ptr<TailGate>& gate) {
   const std::shared_ptr<Panel> keep_alive = panel;
   std::thread tail([keep_alive, log_path, gate]() {
-    // Where this deploy's lines begin. If the log already exists we start at
-    // its current end — this screen shows THIS deploy, not the history of every
-    // deploy that ever ran. If it does not exist yet it is created by the
-    // engine's first append, and the start offset is 0: exactly the beginning
-    // of this deploy's own lines.
-    std::size_t start_offset = 0;
-    std::FILE* file = std::fopen(log_path.c_str(), "r");
-    if (file != nullptr && std::fseek(file, 0, SEEK_END) == 0) {
-      const long end = std::ftell(file);
-      start_offset = end > 0 ? static_cast<std::size_t>(end) : 0;
+    // If the log already exists, start at its current end — this screen shows
+    // THIS deploy, not every deploy that ever ran. A missing log is created by
+    // the engine's first append and is reopened from the start below. A POSIX
+    // fd, not a stdio stream: read() after EOF sees later appends, while a
+    // FILE* would keep its EOF flag set and freeze the tail.
+    int fd = ::open(log_path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd >= 0 && ::lseek(fd, 0, SEEK_END) < 0) {
+      ::close(fd);
+      fd = -1;
     }
 
     std::string partial;  // a line split across two reads stays one line
     std::vector<std::string> fresh;
-    const auto read_new = [&file, &partial, &fresh]() {
-      if (file == nullptr) {
+    const auto read_new = [&fd, &partial, &fresh]() {
+      if (fd < 0) {
         return;
       }
       char buffer[8192];
-      std::size_t got = 0;
-      while ((got = std::fread(buffer, 1, sizeof buffer, file)) > 0) {
-        partial.append(buffer, got);
+      ssize_t got = 0;
+      while ((got = ::read(fd, buffer, sizeof buffer)) > 0) {
+        partial.append(buffer, static_cast<std::size_t>(got));
         std::size_t newline = 0;
         while ((newline = partial.find('\n')) != std::string::npos) {
           fresh.push_back(partial.substr(0, newline));
@@ -127,29 +129,21 @@ void follow_deploy_log(const std::shared_ptr<Panel>& panel,
       // after this reader starts. A missing file is not "no progress to show",
       // it is "the first line has not been written yet" — so keep trying
       // instead of giving up and losing the whole stage ladder (§11).
-      if (file == nullptr) {
-        file = std::fopen(log_path.c_str(), "r");
-        if (file != nullptr) {
-          static_cast<void>(
-              std::fseek(file, static_cast<long>(start_offset), SEEK_SET));
-        }
+      if (fd < 0) {
+        fd = ::open(log_path.c_str(), O_RDONLY | O_CLOEXEC);
       }
       read_new();
       flush();
       std::this_thread::sleep_for(kDeployTailPoll);
     }
     // One last pass: the engine wrote the done/failed lines while we slept.
-    if (file == nullptr) {
-      file = std::fopen(log_path.c_str(), "r");
-      if (file != nullptr) {
-        static_cast<void>(
-            std::fseek(file, static_cast<long>(start_offset), SEEK_SET));
-      }
+    if (fd < 0) {
+      fd = ::open(log_path.c_str(), O_RDONLY | O_CLOEXEC);
     }
-    if (file != nullptr) {
+    if (fd >= 0) {
       read_new();
       flush();
-      std::fclose(file);
+      ::close(fd);
     }
     gate->drained.store(true, std::memory_order_release);
   });
@@ -685,8 +679,9 @@ void start_draft(const std::shared_ptr<Panel>& panel,
           return;
         }
         state.draft_error.clear();
-        state.draft = std::move(prepared).value().draft;
-        state.draft_clash = std::move(prepared).value().clash;
+        DraftPrepared value = std::move(prepared).value();
+        state.draft = std::move(value.draft);
+        state.draft_clash = std::move(value.clash);
         state.draft_ready = true;
         state.draft_status = "review it, then d to store and deploy";
       });
