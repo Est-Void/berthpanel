@@ -185,12 +185,18 @@ DEPFLAGS := -MMD -MP
 # Reproducible release (dev.md §3): fixed epoch, no absolute build paths in
 # the binary, stable random seed, deterministic build-id. The release script
 # exports the real SOURCE_DATE_EPOCH; the default keeps bare `make release`
-# stable too.
+# stable too. Split compile/link so `-frandom-seed` lands where GCC uses it
+# (compile) and the linker flags land at link, each exactly once.
+#
+#   -Wl,--build-id=sha1  deterministic id; never let the linker default to a
+#                        random one.
+#   -Wl,-s               strip (dev.md §3: `make release` is "optimised,
+#                        stripped"); deterministic, and keeps the sha1 note.
 export SOURCE_DATE_EPOCH ?= 0
-REPROFLAGS := -ffile-prefix-map=$(CURDIR)=. \
-              -fdebug-prefix-map=$(CURDIR)=. \
-              -frandom-seed=berthpanel \
-              -Wl,--build-id=sha1
+REPRO_CFLAGS := -ffile-prefix-map=$(CURDIR)=. \
+                -fdebug-prefix-map=$(CURDIR)=. \
+                -frandom-seed=berthpanel
+REPRO_LDFLAGS := $(REPRO_CFLAGS) -Wl,--build-id=sha1 -Wl,-s
 
 # --- generated version header (dev.md §3: version comes from git, and there
 # is no __DATE__/__TIME__ anywhere). Rewritten only when the value changes,
@@ -228,6 +234,7 @@ $(1)_GOBJ  := $$($(1)_DIR)/obj/trust_store.o
 $(1)_BIN   := $$($(1)_DIR)/berthpanel
 $(1)_FLAGS := $(2)
 $(1)_VFLAGS := $(3)
+$(1)_LDFLAGS := $(4)
 
 .PHONY: $(1)
 $(1): $$($(1)_BIN)
@@ -257,7 +264,7 @@ $$($(1)_GOBJ): $$($(1)_DIR)/obj/%.o: $(GEN_TRUST_CPP) | $$($(1)_DIR)/obj
 	$$(CXX) $(INCLUDES) $(CXXSTD) $(WARNFLAGS) $$($(1)_FLAGS) $(DEPFLAGS) -c $$< -o $$@
 
 $$($(1)_BIN): $$($(1)_OBJ) $$($(1)_VOBJ) $$($(1)_VCXXOBJ) $$($(1)_GOBJ) | $$($(1)_DIR)
-	$$(CXX) $$($(1)_FLAGS) $(REPROFLAGS) $$(filter %.o,$$^) $(LDLIBS) -o $$@
+	$$(CXX) $$($(1)_FLAGS) $$($(1)_LDFLAGS) $$(filter %.o,$$^) $(LDLIBS) -o $$@
 
 $$($(1)_DIR)/obj $$($(1)_DIR):
 	mkdir -p $$@
@@ -267,9 +274,9 @@ endef
 
 ASAN_FLAGS := -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer
 
-$(eval $(call mode_template,debug,$(OPTFLAGS),-O2))
-$(eval $(call mode_template,release,-O2 -DNDEBUG $(REPROFLAGS),-O2))
-$(eval $(call mode_template,asan,$(OPTFLAGS) $(ASAN_FLAGS),-O2 $(ASAN_FLAGS)))
+$(eval $(call mode_template,debug,$(OPTFLAGS),-O2,))
+$(eval $(call mode_template,release,-O2 -DNDEBUG $(REPRO_CFLAGS),-O2,$(REPRO_LDFLAGS)))
+$(eval $(call mode_template,asan,$(OPTFLAGS) $(ASAN_FLAGS),-O2 $(ASAN_FLAGS),))
 
 .PHONY: all
 all: debug
@@ -384,6 +391,15 @@ FORMAT_FILES := $(SRC) $(LIB_SRC) $(TEST_SRC)
 .PHONY: format
 format:
 	clang-format -i $(FORMAT_FILES)
+
+# --- repro: local reproducibility check (dev.md §3, stage 8.1) ---
+# Builds the release artifact twice from clean and requires byte-identical
+# output, then asserts no absolute build-dir path leaked in. `make check`
+# stays read-only; this target only writes under build/.
+
+.PHONY: repro
+repro:
+	scripts/repro-check.sh
 
 # --- clean ---
 
