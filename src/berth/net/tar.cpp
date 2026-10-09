@@ -460,10 +460,10 @@ Result<std::vector<TarEntry>> tar_list(const std::string_view bytes) {
   out.reserve(parsed.value().size());
   for (const RawEntry& e : parsed.value()) {
     TarEntry entry;
-    entry.name = std::move(e.name);
+    entry.name = e.name;
     entry.size = e.size;
     entry.typeflag = e.typeflag;
-    entry.link_target = std::move(e.link_target);
+    entry.link_target = e.link_target;
     entry.mode = e.mode;
     entry.data_offset = e.data_offset;
     out.push_back(std::move(entry));

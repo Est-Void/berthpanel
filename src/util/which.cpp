@@ -26,7 +26,9 @@ Result<std::string> resolve_executable(const std::string& name) {
   for (const std::string& dir : split(*path, ":")) {
     if (dir.empty())
       continue;
-    const std::string candidate = dir + "/" + name;
+    std::string candidate = dir;
+    candidate += '/';
+    candidate += name;
     struct stat st{};
     if (::stat(candidate.c_str(), &st) != 0)
       continue;

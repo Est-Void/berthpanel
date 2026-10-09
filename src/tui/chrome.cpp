@@ -22,8 +22,6 @@ constexpr std::array<TabSpec, kTabCount> kTabs{{
 
 // The brand mark. Centre column 2 on all three lines — asserted by the test,
 // because a shift is invisible in review and obvious on screen.
-const std::vector<std::string> kSignLines{"  o", " -+-", "\\_|_/"};
-
 constexpr std::array<FooterHint, 3> kFooterHints{{
     {"\xe2\x86\x91\xe2\x86\x93", "select", "cyan"},  // ↑↓
     {"Enter", "choose", "magenta"},
@@ -47,7 +45,10 @@ std::size_t tab_index(const Tab tab) {
 }
 
 const std::vector<std::string>& sign_lines() {
-  return kSignLines;
+  // A function-local static: the allocation runs on first use, so a failure is
+  // a catchable exception rather than a throwing global initializer.
+  static const std::vector<std::string> lines{"  o", " -+-", "\\_|_/"};
+  return lines;
 }
 
 std::span<const FooterHint> footer_hints() {

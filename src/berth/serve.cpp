@@ -28,7 +28,7 @@ namespace {
 constexpr std::size_t kRecvChunk = 2048;
 // A static reply is held in memory; a larger file is refused rather than
 // risking an unbounded allocation. Static assets are small by design.
-constexpr std::uintmax_t kMaxFileBytes = 64u * 1024 * 1024;
+constexpr std::uintmax_t kMaxFileBytes = std::uintmax_t{64} * 1024 * 1024;
 // Overflow guard while parsing Content-Length; anything above the max body
 // bound is a 413, so this only has to be comfortably larger than that.
 constexpr unsigned long long kContentLengthParseCap = 1ull << 40;
@@ -487,7 +487,7 @@ Result<void> run_http_server(
   if (::listen(listener.get(), 16) != 0)
     return Error("serve: listen: " + errno_text(errno));
 
-  std::uint16_t bound_port = config.port;
+  std::uint16_t bound_port;
   if (v6) {
     sockaddr_in6 actual{};
     socklen_t length = sizeof(actual);

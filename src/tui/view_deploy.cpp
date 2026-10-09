@@ -246,9 +246,8 @@ DraftField next_draft_field(const DraftField field) {
     case DraftField::kRef:
       return DraftField::kPort;
     case DraftField::kPort:
+    case DraftField::kNone:  // entering insert mode starts at the url
       return DraftField::kUrl;
-    case DraftField::kNone:
-      return DraftField::kUrl;  // entering insert mode starts at the url
     case DraftField::kUrl:
       return DraftField::kRef;
   }

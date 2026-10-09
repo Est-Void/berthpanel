@@ -143,15 +143,21 @@ class [[nodiscard]] Result<void> {
 
 template <typename T>
 [[nodiscard]] Result<T> with_context(Result<T> r, std::string context) {
-  if (r.is_err())
-    std::move(r).error().add_context(std::move(context));
+  if (r.is_err()) {
+    Error error = std::move(r).error();
+    error.add_context(std::move(context));
+    return error;
+  }
   return r;
 }
 
 [[nodiscard]] inline Result<void> with_context(Result<void> r,
                                                std::string context) {
-  if (r.is_err())
-    std::move(r).error().add_context(std::move(context));
+  if (r.is_err()) {
+    Error error = std::move(r).error();
+    error.add_context(std::move(context));
+    return error;
+  }
   return r;
 }
 

@@ -43,7 +43,11 @@ Result<void> parse_status_line(const std::string_view line, HttpReply* reply) {
   const std::optional<std::string_view> code = status_code_of(line);
   if (!code.has_value())
     return Error("parse_http_head: bad status line");
-  const int status = ::atoi(std::string(code.value()).c_str());
+  // status_code_of guarantees exactly three ASCII digits, so this cannot
+  // wrap (unlike atoi, which silently reads overflow as a different status).
+  const std::string_view digits = code.value();
+  const int status =
+      (digits[0] - '0') * 100 + (digits[1] - '0') * 10 + (digits[2] - '0');
   if (status < 100 || status > 599) {
     return Error("parse_http_head: status out of range");
   }

@@ -35,9 +35,10 @@ namespace berth {
 
 // A request head this long is refused with 413 before it is buffered
 // without limit.
-inline constexpr std::size_t kMaxRequestHeadBytes = 8 * 1024;
+inline constexpr std::size_t kMaxRequestHeadBytes = std::size_t{8} * 1024;
 // A GET/HEAD body is unusual; anything above this is refused with 413.
-inline constexpr std::size_t kMaxRequestBodyBytes = 1u * 1024 * 1024;
+inline constexpr std::size_t kMaxRequestBodyBytes =
+    std::size_t{1} * 1024 * 1024;
 // One client, from connect to close. Slowloris is bounded by this.
 inline constexpr std::chrono::milliseconds kClientTimeout{5000};
 

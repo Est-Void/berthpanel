@@ -33,7 +33,7 @@ Result<std::string> read_small(const std::filesystem::path& path) {
     return std::move(body).error();
   // A stack marker file larger than this is not a config, it is an
   // accident (or a trap). Refuse rather than burn memory on it.
-  if (body.value().size() > 1024 * 1024) {
+  if (body.value().size() > std::size_t{1024} * 1024) {
     return Error("detect: " + path.string() + " is larger than 1 MiB");
   }
   return body;

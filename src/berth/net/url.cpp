@@ -152,8 +152,7 @@ Result<HttpUrl> parse_http_url(const std::string_view url) {
   if (path.empty())
     path = "/";
 
-  return HttpUrl{std::move(scheme), std::move(host).value(),
-                 std::move(port).value(), std::move(path)};
+  return HttpUrl{scheme, host.value(), port.value(), std::move(path)};
 }
 
 std::string join_redirect(const std::string_view current_url,

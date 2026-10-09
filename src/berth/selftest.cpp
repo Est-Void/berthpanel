@@ -443,7 +443,6 @@ Result<SelftestReport> run_selftest(const Paths& paths,
     }
     if (!interrupted) {
       step("loopback GET serves the marker file", served, served ? "" : detail);
-      failed = !served;
     }
   }
 

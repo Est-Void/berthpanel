@@ -24,7 +24,7 @@ Result<std::string> gunzip(const std::string_view compressed,
     return Error("gzip: inflateInit2 failed: " + std::to_string(init));
 
   std::string out;
-  std::vector<char> chunk(64 * 1024);
+  std::vector<char> chunk(std::size_t{64} * 1024);
   int status = Z_OK;
   while (true) {
     stream.next_out = reinterpret_cast<Bytef*>(chunk.data());

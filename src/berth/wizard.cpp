@@ -22,9 +22,9 @@ namespace {
 
 // The one progress sink, or nothing at all: `progress` is empty for a caller
 // that does not render progress.
-void say(const DraftProgress& progress, std::string line) {
+void say(const DraftProgress& progress, const std::string& line) {
   if (progress) {
-    progress(std::move(line));
+    progress(line);
   }
 }
 
@@ -124,8 +124,9 @@ Result<DraftResult> prepare_draft(const Paths& paths,
   }
 
   DraftResult result;
-  result.draft = std::move(draft).value().recipe;
-  result.warnings = std::move(draft).value().warnings;
+  RecipeDraft prepared = std::move(draft).value();
+  result.draft = std::move(prepared.recipe);
+  result.warnings = std::move(prepared.warnings);
   result.owner_repo = owner_repo.value();
   result.commit = commit;
   result.tools = std::move(tools).value();

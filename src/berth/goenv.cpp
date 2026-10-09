@@ -238,7 +238,7 @@ Result<void> seed_module(
     // The verified bytes are already in `reply`; the staging copy has no
     // further use and must not accumulate (one per module per deploy).
     static_cast<void>(remove_tree(staging));
-    *want.body = std::move(reply.value().body);
+    *want.body = std::move(reply).value().body;
   }
   Result<std::filesystem::path> dir =
       write_module_cache_entry(module_cache, module, version, files);

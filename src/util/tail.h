@@ -39,7 +39,7 @@ struct Tail {
 
 // The most bytes ever read from the end of a file. 64 KiB holds a few thousand
 // short log lines; a deploy's tail is short lines.
-inline constexpr std::size_t kTailWindowBytes = 64 * 1024;
+inline constexpr std::size_t kTailWindowBytes = std::size_t{64} * 1024;
 
 // Splits on '\n' and drops a trailing empty field, so "a\nb\n" is two lines and
 // "a\nb" is two lines. A line's own '\r' is left alone: the panel shows the

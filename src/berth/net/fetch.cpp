@@ -29,7 +29,7 @@ namespace {
   std::vector<std::string> addresses;
   addresses.reserve(resolved.value().size());
   for (const ResolvedIp& ip : resolved.value()) {
-    addresses.push_back(std::move(ip.ip));
+    addresses.push_back(ip.ip);
   }
   return addresses;
 }

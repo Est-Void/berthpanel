@@ -32,7 +32,7 @@ struct RunOutput {
 
 struct RunLimits {
   std::chrono::milliseconds timeout{};  // mandatory; must be positive.
-  std::size_t max_capture = 1024 * 1024;
+  std::size_t max_capture = std::size_t{1024} * 1024;
   std::atomic<bool>* cancel = nullptr;  // polled; SIGKILL + Err when set.
   // "KEY=VALUE" entries overriding or extending the inherited environment.
   // Used for GIT_ASKPASS (dev.md §6.3); never for tokens in argv.

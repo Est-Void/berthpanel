@@ -281,7 +281,11 @@ Result<void> write_archive(const std::filesystem::path& output,
       const std::string why = errno_text(errno);
       fd.close_now();
       ::unlink(tmp.c_str());
-      return Error("backup: fsync " + tmp + ": " + why);
+      std::string message = "backup: fsync ";
+      message += tmp;
+      message += ": ";
+      message += why;
+      return Error(std::move(message));
     }
     fd.close_now();
     std::error_code rename_ec;

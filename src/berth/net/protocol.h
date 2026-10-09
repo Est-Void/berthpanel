@@ -20,9 +20,13 @@
 namespace berth {
 
 inline constexpr int kMaxRedirectHops = 5;
-inline constexpr std::size_t kMaxBodyBytes = 64ull * 1024 * 1024;
-inline constexpr std::size_t kMaxHeadBytes = 64 * 1024;
+inline constexpr std::size_t kMaxBodyBytes = std::size_t{64} * 1024 * 1024;
+inline constexpr std::size_t kMaxHeadBytes = std::size_t{64} * 1024;
 
+// The analyzer's clang-analyzer-core.uninitialized.Assign false-positives on
+// the implicit move through Result's std::variant; every field below has a
+// default initializer, so there is nothing to initialize.
+// NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Assign)
 struct HttpReply {
   int status = 0;
   std::vector<std::pair<std::string, std::string>> headers;  // names lowercased

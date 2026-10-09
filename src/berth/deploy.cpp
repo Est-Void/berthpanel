@@ -366,11 +366,15 @@ Result<std::string> settle_active(const std::string& service_name,
       // The most common cause by far is a start_cmd the app does not
       // understand — the detector's is an ASSUMPTION and says so — so the
       // error says that instead of leaving the user to read unit logs.
-      return Error("deploy: " + service_name +
-                   " came up and then left 'active' (state: " + state +
-                   ") — it is not serving. A start_cmd the app does not "
-                   "understand is the usual cause; the recipe file is the "
-                   "recipe to edit.");
+      std::string message = "deploy: ";
+      message += service_name;
+      message += " came up and then left 'active' (state: ";
+      message += state;
+      message +=
+          ") — it is not serving. A start_cmd the app does not "
+          "understand is the usual cause; the recipe file is the "
+          "recipe to edit.";
+      return Error(std::move(message));
     }
   }
   return std::string("active");
@@ -808,7 +812,7 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
     // Logged as a stage of its own: this is the failure the panel must never
     // render as a success — the unit is live and unregistered (§11).
     log("REGISTRY WRITE FAILED " + recipe.service_name + ": " +
-        std::move(registered).error().ctx());
+        registered.error().ctx());
     return Error("deploy: REGISTRY WRITE FAILED: " + registered.error().ctx() +
                  " — the unit is live but NOT registered; rerun the deploy");
   }
