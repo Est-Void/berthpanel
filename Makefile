@@ -1,7 +1,7 @@
 # berthpanel — local-first deploy panel for curated self-hosted apps.
 # Hand-written build, no CMake/Meson (docs/dev.md §3).
 #
-# Targets: make / debug, release, asan, test, check, format, clean.
+# Targets: make / debug, release, repro, test, check, asan, musl, format, clean.
 # Overridable: CXX CXXSTD WARNFLAGS OPTFLAGS PREFIX DESTDIR CONTAINER CLANG_TIDY.
 
 CXX       ?= g++
@@ -14,7 +14,9 @@ WARNFLAGS ?= -Wall -Wextra -Wpedantic -Werror \
 OPTFLAGS  ?= -O0 -g
 PREFIX    ?= /usr/local
 DESTDIR   ?=
-CONTAINER ?= ghcr.io/archlinux/archlinux@sha256:DIGEST_PINNED_IN_STAGE_8.2
+# Pinned by DIGEST, never by tag (dev.md §3). Bump it in this Makefile and
+# .github/workflows/ci.yml in one commit that says so.
+CONTAINER ?= ghcr.io/archlinux/archlinux@sha256:67f575e6ae9319883231be5e32468bb88d4afcfab281b5ac014bd03f0571f3bc
 
 BUILD     := build
 VERSION_H := $(BUILD)/generated/version.h
@@ -176,6 +178,7 @@ TEST_SRC := \
 	tests/status_test.cpp \
 	tests/proxy_test.cpp \
 	tests/backup_test.cpp \
+	tests/musl_test.cpp \
 	tests/layering_test.cpp
 
 INCLUDES := -Iinclude -Isrc -I$(BUILD)/generated -isystem third_party -isystem third_party/mbedtls/include -isystem third_party/ftxui/include -isystem third_party/ftxui/src
@@ -340,6 +343,26 @@ asan-test:
 	$(MAKE) test TEST_DIR=$(BUILD)/asan-test SANITIZE="$(ASAN_FLAGS)" ASAN_ENV="$(ASAN_TEST_ENV)"
 
 asan: asan-test
+
+# --- musl: reproducible static release in the pinned Arch container (dev.md
+# §3, stage 8.2). CONTAINER is pinned by DIGEST near the top of this file;
+# a floating tag in a supply-chain-sensitive build is exactly the attack
+# (dev.md §11).
+#
+# Overridable: CONTAINER (must keep the @sha256: pin), CONTAINER_RUNTIME,
+# MUSL_OUT, MUSL_CC, MUSL_CXX, MUSL_PACKAGES. See scripts/musl-build.sh.
+
+CONTAINER_RUNTIME ?=
+
+.PHONY: musl
+musl:
+	CONTAINER="$(CONTAINER)" \
+	CONTAINER_RUNTIME="$(CONTAINER_RUNTIME)" \
+	MUSL_OUT="$(CURDIR)/$(BUILD)/musl" \
+	MUSL_CC="$(MUSL_CC)" \
+	MUSL_CXX="$(MUSL_CXX)" \
+	MUSL_PACKAGES="$(MUSL_PACKAGES)" \
+	scripts/musl-build.sh
 
 # --- check: read-only gate (clang-tidy + tests). Formatting is `make format`
 # (dev.md §3, §12.7). Nothing here rewrites the tree: the only generated file
