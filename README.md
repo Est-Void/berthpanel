@@ -76,7 +76,7 @@ limits stated plainly.
 - **Reproducible, signed releases.** The release artifact is byte-identical
   between a local build and CI (`make repro` / the CI gate), and the release's
   `SHA256SUMS` is signed with minisign. The signing key is never in CI; CI only
-  verifies.
+  verifies. Every release carries its Corresponding Source (GPL-3.0).
 - **No telemetry.** Nothing is reported anywhere. `net.log` is local, and it is
   the whole story of what the panel asked for.
 
@@ -162,5 +162,7 @@ bound to loopback as the recipes always do.
 
 ## License
 
-GPL-3.0. See [`LICENSE`](LICENSE). The distribution model is under
-consideration (dev.md §12.5); nothing is released until it is settled.
+GPL-3.0 (see [`LICENSE`](LICENSE)). Every release offers its **Corresponding
+Source**: a `berthpanel-<version>-src.tar.gz` built from the tagged git tree
+ships alongside the binary, and its checksum is covered by the same signed
+`SHA256SUMS`.

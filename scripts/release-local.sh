@@ -9,16 +9,23 @@
 #   --sign    sign release/SHA256SUMS with minisign (interactive passphrase;
 #             it is never stored, never in argv)
 #   --version override the version (default: git describe --tags --always)
+#   --no-source  do not write the Corresponding Source tarball (iterate only)
 #
 # The signed release/SHA256SUMS(.minisig) are committed together with the tag;
 # the built artifacts themselves are attached to the GitHub release, not
 # committed. The signing key is read from ~/.config/berthpanel and never
 # leaves the machine.
 #
+# Every release carries the Corresponding Source (GPL-3.0, dev.md §12.5): a
+# source tarball built from the git tree, not a build artifact. `git archive`
+# is deterministic and `release/` is excluded, so the tarball is identical
+# whether it is generated at the source commit or the checksums commit.
+#
 # Overridable seams (used by the tests, and for re-checksumming a built file):
 #   RELEASE_DIR       staging directory (default <repo>/release)
 #   RELEASE_ARTIFACT  skip the build and use this prebuilt binary
 #   RELEASE_MAKE      build tool (default: make)
+#   RELEASE_REF       git ref the source tarball is built from (default HEAD)
 #   MINISIGN          minisign binary (default: minisign)
 #   BERTHPANEL_RELEASE_KEY_DIR  where release.key lives
 
@@ -29,11 +36,13 @@ repo_root="$(CDPATH= cd -- "${script_dir}/.." && pwd)"
 
 fast=0
 sign=0
+no_source=0
 version=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --fast) fast=1 ;;
     --sign) sign=1 ;;
+    --no-source) no_source=1 ;;
     --version)
       shift
       [ "$#" -gt 0 ] || { echo "release: --version needs a value" >&2; exit 2; }
@@ -87,12 +96,32 @@ if [ -f "${repo_root}/install.sh" ]; then
   cp -f "${repo_root}/install.sh" "${release_dir}/install.sh"
 fi
 
+# Corresponding Source (GPL-3.0, dev.md §12.5): the tagged source tree, not a
+# build artifact. `git archive` is deterministic; `release/` is excluded so
+# the tarball does not contain its own checksums and is identical at the
+# source commit and the checksums commit.
+src_name=""
+if [ "${no_source}" -eq 0 ]; then
+  src_name="berthpanel-${version}-src.tar.gz"
+  echo "release: writing Corresponding Source ${src_name}"
+  git -C "${repo_root}" archive --format=tar \
+    --prefix="berthpanel-${version}/" "${RELEASE_REF:-HEAD}" ':(exclude)release' \
+    | gzip -n > "${release_dir}/${src_name}" || {
+    echo "release: could not build the source tarball (need a git tree)" >&2
+    exit 1
+  }
+  [ -s "${release_dir}/${src_name}" ] || {
+    echo "release: the source tarball is empty" >&2
+    exit 1
+  }
+fi
+
 # Deterministic, sorted checksum list. Files are named relative to the release
 # dir, so `sha256sum -c SHA256SUMS` works from inside it.
 (
   cd "${release_dir}"
   : > SHA256SUMS
-  for name in berthpanel install.sh; do
+  for name in berthpanel install.sh ${src_name}; do
     if [ -f "${name}" ]; then
       sha256sum "${name}" >> SHA256SUMS
     fi

@@ -198,8 +198,41 @@ TEST(release_local_stages_deterministic_checksums) {
   const std::string sums = read_file(release_dir / "SHA256SUMS");
   const std::string expected = berth::sha256_hex(bytes) + "  berthpanel";
   CHECK(sums.find(expected) != std::string::npos);
+  // The Corresponding Source tarball is staged and covered by the checksums.
+  const std::string src_name = "berthpanel-v9.9.9-src.tar.gz";
+  CHECK(fs::exists(release_dir / src_name));
+  CHECK(sums.find(src_name) != std::string::npos);
+  const std::string src = read_file(release_dir / src_name);
+  CHECK(src.size() > 2);
+  CHECK(static_cast<unsigned char>(src[0]) == 0x1f);
+  CHECK(static_cast<unsigned char>(src[1]) == 0x8b);  // gzip magic
   // install.sh is included only when the tracked installer is present.
   CHECK(!fs::exists(release_dir / "SHA256SUMS.minisig"));
+}
+
+TEST(release_local_can_skip_the_source_tarball) {
+  const fs::path root = repo_root();
+  CHECK(!root.empty());
+
+  const TempDir tmp;
+  const fs::path artifact = tmp.path() / "prebuilt";
+  const fs::path release_dir = tmp.path() / "release";
+  write_text(artifact, "BINARY-CONTENT");
+
+  const std::vector<std::string> env{
+      "RELEASE_ARTIFACT=" + artifact.string(),
+      "RELEASE_DIR=" + release_dir.string(),
+      "PATH=/usr/bin:/bin",
+  };
+  const berth::Result<berth::RunOutput> result =
+      run_cmd({root / "scripts" / "release-local.sh", "--fast", "--no-source",
+               "--version", "v9.9.9"},
+              env);
+  CHECK(result.is_ok());
+  CHECK(result.value().exit_code == 0);
+  CHECK(!fs::exists(release_dir / "berthpanel-v9.9.9-src.tar.gz"));
+  CHECK(read_file(release_dir / "SHA256SUMS").find("src.tar.gz") ==
+        std::string::npos);
 }
 
 TEST(release_local_signs_only_when_asked) {
