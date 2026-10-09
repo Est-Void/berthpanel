@@ -1,16 +1,166 @@
 # berthpanel
-Local-first deploy panel for curated self-hosted apps — plus bring-your-own: paste any GitHub repo, get a draft recipe, edit it, deploy. Every deploy gets a sandboxed build and a hardened systemd user unit on an assigned port. No root, allowlisted egress, net.log transparency, and journaled cleanup of interrupted deploys.
+
+Local-first deploy panel for curated self-hosted apps — plus bring-your-own:
+paste any GitHub repo, get a draft recipe, edit it, deploy. Every deploy gets a
+sandboxed build and a hardened systemd user unit on an assigned port. No root,
+allowlisted egress, `net.log` transparency, and journaled cleanup of
+interrupted deploys.
+
+## What it does
+
+- **Catalog or your own repo.** Pick a curated app, or paste a GitHub URL and
+  let the wizard resolve the pin, clone, detect the stack and draft a recipe
+  you review before anything is stored.
+- **Sandboxed builds.** Builds run under `systemd-run --user` with a
+  blast-radius-reducing sandbox — never as a trusted step (see
+  [Trust model](#trust-model)).
+- **Hardened user units.** Each service becomes a `berthpanel-<name>` systemd
+  **user** unit on an assigned port, with `memory_max`/`tasks_max`.
+- **Honest egress.** Every outbound request passes a compile-time host
+  allowlist and is appended to `net.log`. There is no telemetry.
+- **No daemon, no root.** One static binary. Nothing needs Docker, and nothing
+  needs `sudo` at runtime.
+
+## Paste a URL, get a unit running
+
+<!--
+Record a short demo and drop it here (see assets/README.md), then uncomment:
+
+![paste a GitHub URL, watch the deploy stages, get a running unit](assets/demo.gif)
+-->
+
+Paste a GitHub URL → the wizard resolves the commit, detects the build, and
+shows a draft → confirm → the panel clones, builds in the sandbox, writes the
+unit and registers the service. The stages stream from `deploy.log`.
+
+## How it compares
+
+| | berthpanel | Umbrel | CasaOS | Coolify | YunoHost |
+|---|---|---|---|---|---|
+| Needs a Docker daemon | **No** | Yes | Yes | Yes | No |
+| Allowlisted egress + `net.log` | **Yes** | No | No | No | No |
+| Isolation per app | systemd **user** unit + sandbox | container | container | container | nginx + system units |
+| Ships as | one static binary | appliance OS | shell install | shell install | ISO / script |
+| Root at runtime | **No** | via daemon | via daemon | via daemon | root services |
+| Documented min. RAM | see [note](#a-note-on-memory) | project docs | project docs | 2 GB ([docs](https://coolify.io/docs/get-started/installation)) | project docs |
+
+The comparison is about architecture, not features. Docker-based panels
+(Umbrel, CasaOS, Coolify) are excellent for a beefier box and a large app
+catalog; berthpanel trades catalog breadth and multi-container stacks for a
+footprint that fits a **1 GB VPS**, no root, and a request log you can actually
+read.
+
+### A note on memory
+
+berthpanel's panel is a single static binary of about 5.3 MiB and runs **no
+daemon**; its services are systemd user units. A Docker-based panel additionally
+runs the Docker daemon and one container per app — Coolify, for instance,
+documents a **2 GB RAM** minimum
+([coolify.io/docs](https://coolify.io/docs/get-started/installation)). The other
+projects in the table do not publish a single comparable figure here, so none is
+quoted; check their own docs. Numbers are only listed when they come from the
+project's own documentation.
+
+## Trust model
+
+Read this as what it is: a set of concrete, checkable properties, with the
+limits stated plainly.
+
+- **Allowlisted egress.** Every outbound request is checked against a
+  compile-time host allowlist (`kAllowedEndpoints`), per hop, with no redirect
+  following, and appended to `net.log`. See the exact list with
+  `berthpanel --show-endpoints`.
+- **The sandbox is a blast-radius reducer, not a trust boundary.** Builds run
+  as *your* user. The sandbox narrows what a hostile build can reach; it does
+  not make it safe. Say it, mean it.
+- **Reproducible, signed releases.** The release artifact is byte-identical
+  between a local build and CI (`make repro` / the CI gate), and the release's
+  `SHA256SUMS` is signed with minisign. The signing key is never in CI; CI only
+  verifies.
+- **No telemetry.** Nothing is reported anywhere. `net.log` is local, and it is
+  the whole story of what the panel asked for.
+
+Trusted release public key:
+
+```
+<!-- FINGERPRINT: run scripts/keygen-release.sh, commit docs/release.pub, and
+     paste the printed fingerprint here (blocked on the license decision,
+     dev.md §12.5). -->
+fingerprint: <pending first release>
+```
+
+## Platform: Linux + systemd `--user`
+
+This is a deliberate boundary, not an unfinished port. berthpanel's entire
+no-root model is systemd **user** units; on a host without a user systemd
+manager there is no honest way to keep the promise, so it does not pretend to.
+
+- **Supported:** Linux with systemd and a user session.
+- **Non-goal:** macOS, Windows, and NAS appliances whose "systemd" is a vendor
+  shell or an appliance UI. They are not a TODO list.
+- **Web from your phone:** `berthpanel __serve-status --listen 127.0.0.1:0`
+  serves a read-only loopback page; front it with Tailscale for remote access.
+  A full web UI is a different product.
+
+## Install
+
+`install.sh` is the single installer **and** uninstaller. It is verify-first
+and fails closed: it checks the release's `SHA256SUMS` against a minisign
+signature before installing anything, and verifies every artifact's checksum.
+It never runs `sudo` and never installs a system package. `--allow-checksum-only`
+is the explicit opt-out of the signature step.
+
+```sh
+# Verify first, then run — never pipe an unverified script straight to sh.
+minisign -Vm SHA256SUMS -p release.pub
+sha256sum --check --strict SHA256SUMS
+sh install.sh --source . --pub release.pub
+```
+
+Uninstall is the same script: it stops and removes only `berthpanel-`-prefixed
+user units and the binary, and leaves your data under
+`~/.local/share/berthpanel` alone.
+
+```sh
+sh install.sh --uninstall
+```
+
+## Where it fits
+
+A tiny VPS — the 1 GB box where Docker panels do not live — or a home server
+you would rather not hand to a daemon. If you want a big app catalog and
+multi-container stacks, a Docker-based panel is the better tool; berthpanel is
+for the small, honest, no-root end of the range.
 
 ## Ports, TLS and the no-root model
 
-berthpanel runs unprivileged: the panel, every deploy and every managed unit are systemd **user** units. That has one honest consequence — a user process cannot bind ports below 1024 on a default host, so terminating TLS on 80/443 needs one of:
+berthpanel runs unprivileged: the panel, every deploy and every managed unit are
+systemd **user** units. That has one honest consequence — a user process cannot
+bind ports below 1024 on a default host, so terminating TLS on 80/443 needs one
+of:
 
-- a one-time host setup by you: `sudo sysctl -w net.ipv4.ip_unprivileged_port_start=0` (persist it under `/etc/sysctl.d/`). berthpanel never sets this for you, and it lowers the port floor for every unprivileged process on the host, not only for berthpanel — hence the explicit opt-in; or
-- keeping the reverse proxy on a high port and forwarding 80/443 to it from a root-owned system proxy or your router.
+- a one-time host setup by you: `sudo sysctl -w net.ipv4.ip_unprivileged_port_start=0`
+  (persist it under `/etc/sysctl.d/`). berthpanel never sets this for you, and it
+  lowers the port floor for every unprivileged process on the host, not only for
+  berthpanel — hence the explicit opt-in; or
+- keeping the reverse proxy on a high port and forwarding 80/443 to it from a
+  root-owned system proxy or your router.
 
-There is no mode that is both no-root and able to bind 80/443 without one of those. The panel does not pretend otherwise.
+There is no mode that is both no-root and able to bind 80/443 without one of
+those. The panel does not pretend otherwise.
 
 ## Reach a service only over your tailnet
 
-If you do not want to expose a service publicly at all, keep it on loopback and let Tailscale carry it: `tailscale serve --bg http://127.0.0.1:<port>` fronts the service on your node's MagicDNS name over your WireGuard mesh, with a Tailscale-issued certificate and no inbound port, no public DNS and no ACME challenge. Only devices in your tailnet (per its ACLs) can reach it. berthpanel never invokes Tailscale, never talks to it and adds it to no allowlist — it is a third-party control plane you opt into, and the panel only keeps the service bound to loopback as the recipes always do.
+If you do not want to expose a service publicly at all, keep it on loopback and
+let Tailscale carry it: `tailscale serve --bg http://127.0.0.1:<port>` fronts
+the service on your node's MagicDNS name over your WireGuard mesh, with a
+Tailscale-issued certificate and no inbound port, no public DNS and no ACME
+challenge. Only devices in your tailnet (per its ACLs) can reach it. berthpanel
+never invokes Tailscale, never talks to it and adds it to no allowlist — it is a
+third-party control plane you opt into, and the panel only keeps the service
+bound to loopback as the recipes always do.
 
+## License
+
+GPL-3.0. See [`LICENSE`](LICENSE). The distribution model is under
+consideration (dev.md §12.5); nothing is released until it is settled.
