@@ -1,9 +1,11 @@
-# nfpm config for the .deb and .rpm (dev.md §10, stage 8.7).
+# nfpm config for the .deb and .rpm (dev.md §10, §12.5).
 #
-# BLOCKED — see packaging/README.md; finalization waits on §12.5 (stage 8.6).
+# License is settled: GPL-3.0. The Corresponding Source tarball is packaged
+# alongside the binary (/usr/share/berthpanel), so the package is compliant.
 #
 # Build the static artifact first, then package it:
 #   make musl
+#   scripts/release-local.sh            # stages release/ incl. the src tarball
 #   BERTHPANEL_VERSION=vX.Y.Z nfpm package -f packaging/nfpm.yaml -p deb
 #   BERTHPANEL_VERSION=vX.Y.Z nfpm package -f packaging/nfpm.yaml -p rpm
 #
@@ -31,5 +33,9 @@ contents:
       mode: 0755
   - src: LICENSE
     dst: /usr/share/licenses/berthpanel/LICENSE
+    file_info:
+      mode: 0644
+  - src: release/berthpanel-${BERTHPANEL_VERSION}-src.tar.gz
+    dst: /usr/share/berthpanel/berthpanel-${BERTHPANEL_VERSION}-src.tar.gz
     file_info:
       mode: 0644

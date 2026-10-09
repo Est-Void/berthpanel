@@ -1,25 +1,26 @@
-# Packaging (stage 8.7) — prepared, blocked on the license decision
+# Packaging (stage 8.7)
 
 `install.sh` is and stays the **primary** install path (dev.md §10). These
 files are the distribution-native alternatives:
 
 - `PKGBUILD` — the AUR package (builds from source, installs to `/usr/bin`);
-- `nfpm.yaml` — `.deb` and `.rpm`, built from the static `make musl` artifact.
+- `nfpm.yaml` — `.deb` and `.rpm`, built from the static `make musl` artifact,
+  and carrying the Corresponding Source tarball (`/usr/share/berthpanel`).
 
-## Blocker
+## License
 
-Both are **drafts and must not be published** until §12.5 is resolved (stage
-8.6). The repository is GPL-3.0, so distributing a binary without offering the
-Corresponding Source is not allowed. The proposal under consideration — stay
-GPL-3.0 and ship a source tarball in each release — makes these packages legal;
-until the maintainer confirms it, packaging stops here.
+Settled (dev.md §12.5): **GPL-3.0 with the Corresponding Source offered in
+every release.** `scripts/release-local.sh` writes the source tarball
+(`release/berthpanel-<tag>-src.tar.gz`, the tagged git tree) and signs its
+checksum together with the binary's. The AUR package builds from source, so it
+is compliant as-is; the deb/rpm ship the source tarball inside the package.
 
-## To finalize once §12.5 is settled
+## Release steps
 
 1. `scripts/keygen-release.sh`; commit `docs/release.pub`.
 2. Cut a version, write `release/notes/vX.Y.Z.md`.
 3. `scripts/release-local.sh --sign`; commit `release/SHA256SUMS*` with the tag.
-4. In `PKGBUILD`, set `pkgver` and the `sha256sums` of the release source
-   tarball, then drop the `BLOCKED` note.
-5. `make musl && BERTHPANEL_VERSION=vX.Y.Z nfpm package -f packaging/nfpm.yaml -p deb`
+4. In `PKGBUILD`, set `pkgver` and `sha256sums` from the release source tarball.
+5. `make musl && scripts/release-local.sh` then
+   `BERTHPANEL_VERSION=vX.Y.Z nfpm package -f packaging/nfpm.yaml -p deb`
    (and `-p rpm`).

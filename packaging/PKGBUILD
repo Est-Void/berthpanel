@@ -1,15 +1,13 @@
 # Maintainer: berthpanel <maintainer@example.invalid>
 #
-# BLOCKED — DO NOT UPLOAD (dev.md §12.5, stage 8.6).
+# Distribution-native alternative to install.sh (dev.md §10, §12.5). License is
+# settled: GPL-3.0, and the source this package builds from IS the
+# Corresponding Source, so the package is compliant as-is.
 #
-# The license/distribution decision is not resolved: the repository is GPL-3.0,
-# so every binary release must offer the Corresponding Source. Until that is
-# settled (proposal: ship the source tarball in each release), this package is
-# a draft. To finalize: set pkgver to the release tag, pin sha256sums from the
-# release source tarball, drop the BLOCKED note, then `makepkg`.
-#
-# install.sh stays the primary path (dev.md §10); this is the distribution-
-# native alternative.
+# Before the first upload: set pkgver to the release tag and fill sha256sums
+# from the release source tarball (`scripts/release-local.sh` writes
+# `release/berthpanel-<tag>-src.tar.gz`; use its GitHub archive equivalent),
+# then `makepkg`.
 
 pkgname=berthpanel
 pkgver=0.0.0
@@ -25,7 +23,7 @@ makedepends=('gcc' 'make' 'zlib')
 # The release build is already stripped with a deterministic build-id (dev.md §3).
 options=('!strip')
 source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/v${pkgver}.tar.gz")
-sha256sums=('SKIP')  # TODO(8.6): pin the release source tarball's sha256
+sha256sums=('SKIP')  # pin from the release source tarball before upload
 
 build() {
   cd "${srcdir}/${pkgname}-${pkgver}"
