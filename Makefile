@@ -1,8 +1,8 @@
 # berthpanel — local-first deploy panel for curated self-hosted apps.
 # Hand-written build, no CMake/Meson (docs/dev.md §3).
 #
-# Targets: make / debug, release, asan, test, format, clean.
-# Overridable: CXX CXXSTD WARNFLAGS OPTFLAGS PREFIX DESTDIR CONTAINER.
+# Targets: make / debug, release, asan, test, check, format, clean.
+# Overridable: CXX CXXSTD WARNFLAGS OPTFLAGS PREFIX DESTDIR CONTAINER CLANG_TIDY.
 
 CXX       ?= g++
 CC        ?= cc
@@ -333,6 +333,49 @@ asan-test:
 	$(MAKE) test TEST_DIR=$(BUILD)/asan-test SANITIZE="$(ASAN_FLAGS)" ASAN_ENV="$(ASAN_TEST_ENV)"
 
 asan: asan-test
+
+# --- check: read-only gate (clang-tidy + tests). Formatting is `make format`
+# (dev.md §3, §12.7). Nothing here rewrites the tree: the only generated file
+# is build/compile_commands.json, under build/ and gitignored. A missing
+# clang-tidy is a loud failure, never a silent pass (§11).
+
+CLANG_TIDY ?= clang-tidy
+COMPILE_DB := $(BUILD)/compile_commands.json
+
+# Bug-oriented categories only, so the gate stays signal, not noise. The
+# exclusions are checks whose style advice is noise here or is already owned by
+# -Werror; every remaining finding was fixed, not silenced:
+#   bugprone-easily-swappable-parameters (every all-`(int,int)` callback),
+#   bugprone-exception-escape          (fights the Result-return style),
+#   bugprone-narrowing-conversions     (-Wconversion owns this),
+#   bugprone-signed-bitwise            (byte/flag work: `c & 0x0F` is int-promoted),
+#   bugprone-unchecked-optional-access (optional is checked before .value()),
+#   bugprone-unused-return-value       ([[nodiscard]] on Result does this),
+#   performance-enum-size              (micro; the enums are API types),
+#   performance-no-automatic-move      (deliberate `const` locals; copy != bug),
+#   performance-unnecessary-copy-init  (intentional lifetime/`shared_ptr` keeps),
+#   performance-unnecessary-value-param (FTXUI/`std::function` are by-value APIs),
+#   performance-prefer-single-char-overloads, performance-faster-string-find
+#                                       (micro `+= "\n"` style),
+#   clang-analyzer-optin.performance.Padding (struct layout hint, not a bug).
+TIDY_CHECKS := -*,bugprone-*,-bugprone-easily-swappable-parameters,-bugprone-exception-escape,-bugprone-narrowing-conversions,-bugprone-signed-bitwise,-bugprone-unchecked-optional-access,-bugprone-unused-return-value,performance-*,-performance-enum-size,-performance-no-automatic-move,-performance-unnecessary-copy-initialization,-performance-unnecessary-value-param,-performance-prefer-single-char-overloads,-performance-faster-string-find,clang-analyzer-*,-clang-analyzer-optin.performance.Padding,modernize-use-nullptr,modernize-use-override,modernize-use-bool-literals,modernize-make-unique
+
+TIDY_FILES := $(SRC) $(LIB_SRC)
+
+.PHONY: compile-db
+compile-db: $(COMPILE_DB)
+
+$(COMPILE_DB): $(VERSION_H) $(GEN_TRUST_CPP) Makefile scripts/gen-compile-db.py
+	@mkdir -p $(@D)
+	python3 scripts/gen-compile-db.py --cxx "$(CXX)" --cwd "$(CURDIR)" --flags "$(INCLUDES) $(CXXSTD) $(WARNFLAGS) $(OPTFLAGS)" --out $@ $(SRC) $(LIB_SRC)
+
+.PHONY: check
+check:
+	@command -v $(CLANG_TIDY) >/dev/null 2>&1 || { echo >&2 "berthpanel: make check: clang-tidy not found on PATH; refusing a silent pass (dev.md §11)"; exit 1; }
+	@command -v python3 >/dev/null 2>&1 || { echo >&2 "berthpanel: make check: python3 is required to generate compile_commands.json"; exit 1; }
+	$(MAKE) $(COMPILE_DB)
+	$(CLANG_TIDY) -p $(BUILD) --quiet --warnings-as-errors='*' --checks='$(TIDY_CHECKS)' $(TIDY_FILES)
+	$(MAKE) test
 
 # --- format: clang-format rewrites; deliberately NOT a CI gate (dev.md §12.7) ---
 
