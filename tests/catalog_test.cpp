@@ -89,5 +89,8 @@ TEST(catalog_content_hosts_are_allowlisted) {
 
 TEST(catalog_lookup_by_service_name) {
   CHECK(berth::builtin_recipe("berthpanel-memos").is_ok());
+  CHECK(berth::builtin_recipe("berthpanel-filebrowser").is_ok());
+  CHECK(berth::builtin_recipe("berthpanel-gitea").is_ok());
+  CHECK(berth::builtin_recipe("berthpanel-uptime-kuma").is_ok());
   CHECK(berth::builtin_recipe("berthpanel-nope").is_err());
 }

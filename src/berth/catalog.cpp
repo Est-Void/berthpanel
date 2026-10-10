@@ -44,10 +44,98 @@ Recipe memos_recipe() {
   return r;
 }
 
+// Filebrowser 2.63.23 ships prebuilt Go release tarballs with published
+// checksums, so the host needs no compiler: a pinned tarball verified with
+// SHA-256 through toolbox, keyed to the tag's own commit (§6.6).
+Recipe filebrowser_recipe() {
+  Recipe r;
+  r.owner = "filebrowser";
+  r.name = "filebrowser";
+  r.commit = "e8a388f840173580116f2743813d03b22286e44e";
+  r.language = "prebuilt";
+  r.service_name = force_unit_prefix("filebrowser");
+  r.display_name = "Filebrowser";
+  r.description = "Self-hosted file management web UI";
+  r.prebuilt = PrebuiltBinary{
+      .url =
+          "https://github.com/filebrowser/filebrowser/releases/download/"
+          "v2.63.23/linux-amd64-filebrowser.tar.gz",
+      .sha256 =
+          "b14db2bb8033caa3f80205eb6578b2ed0744ebd9e716b790bc4a9703ce909e88",
+      .member = "filebrowser"};
+  r.binary_name = "filebrowser";
+  // Filebrowser already defaults to loopback, but the bind is spelled out;
+  // its own default database would otherwise land in the install dir.
+  r.start_cmd =
+      "{self} --address 127.0.0.1 --port {port} --database {project}/"
+      "filebrowser.db --root {project}/files";
+  r.health_path = "/";
+  r.port = 0;
+  r.tools = {};
+  r.res = ResourceLimits{.memory_max = "256M", .tasks_max = 300};
+  return r;
+}
+
+// Gitea 28.1.0 publishes no prebuilt binary tarball (only raw/xz assets), so
+// it is a source build: pnpm builds the vite frontend, go generate embeds the
+// assets, and go build emits the sqlite-backed server.
+Recipe gitea_recipe() {
+  Recipe r;
+  r.owner = "go-gitea";
+  r.name = "gitea";
+  r.commit = "4ebd5e319b6a9e629bfd7a04292a6fe85b08dee9";
+  r.language = "go";
+  r.service_name = force_unit_prefix("gitea");
+  r.display_name = "Gitea";
+  r.description = "Self-hosted Git hosting service";
+  r.prefetch_steps = {{"pnpm", "install", "--ignore-scripts"}};
+  r.build_steps = {{"pnpm", "install", "--frozen-lockfile"},
+                   {"pnpm", "exec", "vite", "build"},
+                   {"go", "generate", "-tags", "bindata", "./..."},
+                   {"go", "build", "-tags", "bindata", "-trimpath", "-ldflags",
+                    "-s -w", "-o", "gitea", "."}};
+  r.binary_name = "gitea";
+  // Gitea takes its bind address from GITEA__server__HTTP_ADDR; the default is
+  // the wildcard, so env supplies loopback explicitly and --port carries the
+  // chosen port.
+  r.start_cmd =
+      "env GITEA__server__HTTP_ADDR=127.0.0.1 {self} web --port {port}";
+  r.health_path = "/";
+  r.port = 0;
+  r.tools = {"go", "pnpm"};
+  r.res = ResourceLimits{.memory_max = "1024M", .tasks_max = 512};
+  return r;
+}
+
+// Uptime Kuma 2.5.6 ships only a frontend dist asset (no server binary), so
+// it is a source build under bun and starts from its server entry point.
+Recipe uptime_kuma_recipe() {
+  Recipe r;
+  r.owner = "louislam";
+  r.name = "uptime-kuma";
+  r.commit = "7ca4a3debd76443d8452da95d4040200a1479af4";
+  r.language = "node";
+  r.service_name = force_unit_prefix("uptime-kuma");
+  r.display_name = "Uptime Kuma";
+  r.description = "Self-hosted uptime monitoring";
+  r.prefetch_steps = {{"bun", "install", "--ignore-scripts"}};
+  r.build_steps = {{"bun", "install"}, {"bun", "run", "build"}};
+  r.binary_name = "server/server.js";
+  // server.js reads --host/--port; without --host it binds the wildcard, so
+  // the loopback address is explicit.
+  r.start_cmd = "bun {project}/server/server.js --host 127.0.0.1 --port {port}";
+  r.health_path = "/";
+  r.port = 0;
+  r.tools = {"bun"};
+  r.res = ResourceLimits{.memory_max = "768M", .tasks_max = 512};
+  return r;
+}
+
 }  // namespace
 
 Result<std::vector<Recipe>> builtin_catalog() {
-  std::vector<Recipe> catalog = {memos_recipe()};
+  std::vector<Recipe> catalog = {memos_recipe(), filebrowser_recipe(),
+                                 gitea_recipe(), uptime_kuma_recipe()};
   for (const Recipe& recipe : catalog) {
     const Result<void> valid = validate_recipe(recipe);
     if (valid.is_err())
