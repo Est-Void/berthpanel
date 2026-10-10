@@ -94,3 +94,26 @@ TEST(catalog_lookup_by_service_name) {
   CHECK(berth::builtin_recipe("berthpanel-uptime-kuma").is_ok());
   CHECK(berth::builtin_recipe("berthpanel-nope").is_err());
 }
+
+TEST(catalog_gitea_is_a_raw_prebuilt_asset) {
+  const auto gitea = berth::builtin_recipe("berthpanel-gitea");
+  CHECK(gitea.is_ok());
+  CHECK(gitea.value().language == "prebuilt");
+  CHECK(gitea.value().prebuilt.has_value());
+  CHECK(gitea.value().prebuilt->archive == berth::ToolArchive::kRaw);
+  CHECK(gitea.value().prebuilt->member == "gitea");
+  CHECK(gitea.value().tools.empty());  // no compiler is required
+  CHECK(gitea.value().build_steps.empty());
+}
+
+TEST(catalog_uptime_kuma_uses_the_flags_its_parser_honours) {
+  const auto kuma = berth::builtin_recipe("berthpanel-uptime-kuma");
+  CHECK(kuma.is_ok());
+  // server/config.js uses args-parser@1.3.0, which only understands
+  // --flag=value; the space form would leave hostname=true and bind the
+  // wildcard. Guard the exact spelling that is actually effective.
+  CHECK(kuma.value().start_cmd.find("--host=127.0.0.1") != std::string::npos);
+  CHECK(kuma.value().start_cmd.find("--port={port}") != std::string::npos);
+  CHECK(kuma.value().start_cmd.find("--host 127.0.0.1") == std::string::npos);
+  CHECK(kuma.value().language == "node");
+}

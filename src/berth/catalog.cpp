@@ -76,33 +76,37 @@ Recipe filebrowser_recipe() {
   return r;
 }
 
-// Gitea 28.1.0 publishes no prebuilt binary tarball (only raw/xz assets), so
-// it is a source build: pnpm builds the vite frontend, go generate embeds the
-// assets, and go build emits the sqlite-backed server.
+// Gitea 28.1.0 publishes a raw linux-amd64 binary asset (alongside the .xz
+// and source archives), so the host needs no Go/pnpm/vite at all: the asset
+// itself is pinned by SHA-256 and installed through toolbox. A raw asset is
+// the file, so `member` is the destination file name. The commit is the tag's
+// own peeled SHA, cross-checked against git ls-remote (§6.6).
 Recipe gitea_recipe() {
   Recipe r;
   r.owner = "go-gitea";
   r.name = "gitea";
   r.commit = "4ebd5e319b6a9e629bfd7a04292a6fe85b08dee9";
-  r.language = "go";
+  r.language = "prebuilt";
   r.service_name = force_unit_prefix("gitea");
   r.display_name = "Gitea";
   r.description = "Self-hosted Git hosting service";
-  r.prefetch_steps = {{"pnpm", "install", "--ignore-scripts"}};
-  r.build_steps = {{"pnpm", "install", "--frozen-lockfile"},
-                   {"pnpm", "exec", "vite", "build"},
-                   {"go", "generate", "-tags", "bindata", "./..."},
-                   {"go", "build", "-tags", "bindata", "-trimpath", "-ldflags",
-                    "-s -w", "-o", "gitea", "."}};
+  r.prebuilt = PrebuiltBinary{
+      .url =
+          "https://github.com/go-gitea/gitea/releases/download/v28.1.0/"
+          "gitea-28.1.0-linux-amd64",
+      .sha256 =
+          "ea93cfa4a300564ac457d3903469fea49ec5a4da37d0cebaa435f8e329ea64d0",
+      .member = "gitea",
+      .archive = ToolArchive::kRaw};
   r.binary_name = "gitea";
   // Gitea takes its bind address from GITEA__server__HTTP_ADDR; the default is
   // the wildcard, so env supplies loopback explicitly and --port carries the
-  // chosen port.
+  // chosen port. resolve_start_argv absolutizes the `env` prefix.
   r.start_cmd =
       "env GITEA__server__HTTP_ADDR=127.0.0.1 {self} web --port {port}";
   r.health_path = "/";
   r.port = 0;
-  r.tools = {"go", "pnpm"};
+  r.tools = {};
   r.res = ResourceLimits{.memory_max = "1024M", .tasks_max = 512};
   return r;
 }
@@ -114,6 +118,7 @@ Recipe uptime_kuma_recipe() {
   r.owner = "louislam";
   r.name = "uptime-kuma";
   r.commit = "7ca4a3debd76443d8452da95d4040200a1479af4";
+  // bun is a JS runtime; "node" is the supported language token for it.
   r.language = "node";
   r.service_name = force_unit_prefix("uptime-kuma");
   r.display_name = "Uptime Kuma";
@@ -121,9 +126,11 @@ Recipe uptime_kuma_recipe() {
   r.prefetch_steps = {{"bun", "install", "--ignore-scripts"}};
   r.build_steps = {{"bun", "install"}, {"bun", "run", "build"}};
   r.binary_name = "server/server.js";
-  // server.js reads --host/--port; without --host it binds the wildcard, so
-  // the loopback address is explicit.
-  r.start_cmd = "bun {project}/server/server.js --host 127.0.0.1 --port {port}";
+  // server/config.js parses argv with args-parser@1.3.0, which only honours
+  // --flag=value: `--host 127.0.0.1` silently leaves hostname=true and binds
+  // the wildcard. The equals form is the spelling that actually takes effect;
+  // bun itself is absolutized by resolve_start_argv.
+  r.start_cmd = "bun {project}/server/server.js --host=127.0.0.1 --port={port}";
   r.health_path = "/";
   r.port = 0;
   r.tools = {"bun"};
