@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "../analyzer/ports.h"
 #include "../core/deploylog.h"
 #include "../core/names.h"
 #include "../core/netlog.h"
@@ -475,6 +476,43 @@ Result<void> RealDeployOps::await_running(const std::string& service_name,
   return {};
 }
 
+Result<void> RealDeployOps::verify_listening(const std::string& service_name,
+                                             const std::uint16_t port,
+                                             const Paths& paths,
+                                             std::atomic<bool>* cancel) {
+  const auto deadline = std::chrono::steady_clock::now() + kListenWindow;
+  while (true) {
+    if (cancel != nullptr && cancel->load(std::memory_order_relaxed)) {
+      return Error("deploy: cancelled while checking that " + service_name +
+                   " is listening on port " + std::to_string(port));
+    }
+    // /proc/net only — the same dumb, unattributed reader System Scan uses
+    // (§7): no /proc/<pid> walk, no socket-inode guess at who owns the port.
+    Result<PortReport> report = listening_ports(paths);
+    if (report.is_err()) {
+      // A probe that cannot run is not evidence of absence (§11). Warn loudly
+      // so the failure mode is visible, then let an otherwise-active deploy
+      // proceed rather than fail on the checker itself.
+      const Result<void> warned = deploylog_append(
+          paths, "WARNING: could not verify that " + service_name +
+                     " is listening on port " + std::to_string(port) + " (" +
+                     report.error().ctx() +
+                     ") — deploy continues without the check");
+      static_cast<void>(warned);
+      return {};
+    }
+    Result<void> verdict =
+        verify_loopback_listener(report.value(), port, service_name);
+    if (verdict.is_ok()) {
+      return {};
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      return verdict;  // the last successful probe's verdict, loud
+    }
+    interruptible_sleep(std::chrono::milliseconds(250));
+  }
+}
+
 Result<std::string> wait_for_active_unit(const std::string& service_name,
                                          const std::chrono::milliseconds budget,
                                          std::atomic<bool>* cancel) {
@@ -548,6 +586,82 @@ Result<std::string> settle_active(const std::string& service_name,
     }
   }
   return std::string("active");
+}
+
+namespace {
+
+// The observed listeners as a bounded "address:port" list. Bounded because a
+// busy host would otherwise push the actual diagnosis out of the error line.
+std::string render_observed_listeners(const std::vector<ListeningPort>& ports) {
+  if (ports.empty()) {
+    return "(none)";
+  }
+  constexpr std::size_t kMaxListed = 12;
+  std::string out;
+  for (std::size_t i = 0; i < ports.size() && i < kMaxListed; ++i) {
+    if (!out.empty()) {
+      out += ", ";
+    }
+    out += ports[i].address;
+    out += ':';
+    out += std::to_string(ports[i].port);
+  }
+  if (ports.size() > kMaxListed) {
+    out += ", ... (+" + std::to_string(ports.size() - kMaxListed) + " more)";
+  }
+  return out;
+}
+
+}  // namespace
+
+Result<void> verify_loopback_listener(const PortReport& report,
+                                      const std::uint16_t expected_port,
+                                      const std::string& service_name) {
+  bool listening_on_port = false;
+  bool wildcard_only = true;
+  for (const ListeningPort& port : report.ports) {
+    if (port.port != expected_port) {
+      continue;
+    }
+    if (port.loopback) {
+      return {};  // a loopback listener on the recorded port is the success
+    }
+    listening_on_port = true;
+    if (!port.wildcard) {
+      wildcard_only = false;  // a specific non-loopback bind, not the wildcard
+    }
+  }
+  const std::string observed = render_observed_listeners(report.ports);
+  if (!listening_on_port) {
+    // The §11 silent wrong answer: the unit is active, so `enable --now` and
+    // the settle window both said success, but the port the registry is about
+    // to record belongs to nobody. The fixed-port recipe whose app hardcodes a
+    // different port is the concrete case; name it.
+    return Error(
+        "deploy: " + service_name +
+        " is active but nothing is listening on port " +
+        std::to_string(expected_port) +
+        " (the port this deploy recorded), so it is not serving. observed "
+        "listeners: " +
+        observed +
+        ". a fixed-port recipe whose app binds a different port must set "
+        "`port` to match, or start_cmd must pass the app's real port "
+        "flag/placeholder ({port}); fix it with 'berthpanel __recipe-edit " +
+        service_name + " --start-cmd ...' or 'E' in the panel.");
+  }
+  // A listener on the port exists but none of it is loopback: binding beyond
+  // 127.0.0.1/::1 is the exposure the loopback-only invariant forbids.
+  const std::string where = wildcard_only
+                                ? "only on a wildcard address (0.0.0.0/::)"
+                                : "on a non-loopback address";
+  return Error(
+      "deploy: " + service_name + " is listening on port " +
+      std::to_string(expected_port) + " but " + where +
+      ", so it is exposed beyond the host — that is the exposure the "
+      "loopback-only invariant forbids. observed listeners: " +
+      observed +
+      ". bind the app to 127.0.0.1 (the recipe's bind or the app's host flag) "
+      "and redeploy.");
 }
 
 Result<void> RealDeployOps::register_service(const ServiceRecord& record,
@@ -991,6 +1105,18 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
       ops.await_running(recipe.service_name, paths, options.cancel);
   if (running.is_err()) {
     return Error(step_error("start", std::move(running).error().ctx()) +
+                 " (journal entry kept for cleanup)");
+  }
+  // `await_running` proves the unit STAYED active; it does not prove the app
+  // serves the port this deploy recorded. A fixed-port recipe whose app binds
+  // somewhere else would deploy "successfully" against a port nothing listens
+  // on (§11), so a live loopback listener is required before success. Same
+  // failure semantics as the other start failures: loud, journal kept, not
+  // registered.
+  Result<void> listening =
+      ops.verify_listening(recipe.service_name, port, paths, options.cancel);
+  if (listening.is_err()) {
+    return Error(step_error("start", std::move(listening).error().ctx()) +
                  " (journal entry kept for cleanup)");
   }
 

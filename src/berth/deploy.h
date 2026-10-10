@@ -82,6 +82,16 @@ class DeployOps {
   virtual Result<void> await_running(const std::string& service_name,
                                      const Paths& paths,
                                      std::atomic<bool>* cancel) = 0;
+  // Confirms the settled unit is actually LISTENING on `port` and on loopback.
+  // `await_running` only proves the unit stayed active; it says nothing about
+  // where the app binds, so a fixed-port recipe whose app binds a different
+  // port (or wildcard, or nothing) would otherwise deploy "successfully"
+  // against a port nothing serves (§11 silent wrong answer). The real
+  // implementation polls the dumb /proc/net reader for a short bounded window;
+  // a probe that cannot run is a WARNING in deploy.log, never a failed deploy.
+  virtual Result<void> verify_listening(const std::string& service_name,
+                                        std::uint16_t port, const Paths& paths,
+                                        std::atomic<bool>* cancel) = 0;
   virtual Result<void> register_service(const ServiceRecord& record,
                                         const Paths& paths) = 0;
   // Stops one unit by stem (WITHOUT .service) on behalf of reconciliation.
@@ -110,6 +120,9 @@ class RealDeployOps final : public DeployOps {
   Result<void> start_service(const std::string& service_name) override;
   Result<void> await_running(const std::string& service_name, const Paths& paths,
                              std::atomic<bool>* cancel) override;
+  Result<void> verify_listening(const std::string& service_name,
+                                std::uint16_t port, const Paths& paths,
+                                std::atomic<bool>* cancel) override;
   Result<void> register_service(const ServiceRecord& record,
                                 const Paths& paths) override;
   Result<bool> stop_unit(const std::string& unit_stem,
@@ -128,6 +141,29 @@ class RealDeployOps final : public DeployOps {
 // health check, it is the gap between "the process was spawned" and "the
 // process is still there", which is exactly where a wrong start_cmd dies.
 inline constexpr std::chrono::milliseconds kSettleWindow{3000};
+
+// How long verify_listening polls /proc/net for the expected loopback listener
+// before failing. The app may bind a moment after systemd says "active", so a
+// single read is not evidence; this is still bounded and honours cancel.
+inline constexpr std::chrono::milliseconds kListenWindow{3000};
+
+// The observed listeners come from analyzer's PortReport, forward-declared so
+// this engine header does not drag analyzer/ports.h into every translation
+// unit: only RealDeployOps reads /proc/net (System Scan's dumb reader, §7).
+struct PortReport;
+
+// The listen verdict, as a PURE function so it is tested without /proc: given
+// the ports currently listening and the port this deploy recorded, Ok only when
+// a listener on `expected_port` is on loopback. Otherwise:
+//   * nothing listens on the port ⇒ Err naming the expected port, the observed
+//     listeners and the fixed-port/start_cmd remedy — the §11 silent wrong
+//     answer this check exists for;
+//   * a listener on the port is wildcard-only (0.0.0.0/::) ⇒ Err: that is the
+//     exposure the loopback invariant forbids, and the message says so.
+// The observed address:port list in the error is bounded.
+[[nodiscard]] Result<void> verify_loopback_listener(
+    const PortReport& report, std::uint16_t expected_port,
+    const std::string& service_name);
 
 // The settle verdict, as a PURE function so it can be tested offline: the
 // states `systemctl is-active` answered AFTER the unit first reported active,

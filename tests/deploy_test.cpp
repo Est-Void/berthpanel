@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "analyzer/ports.h"
 #include "berth/journal.h"
 #include "berth/lock.h"
 #include "berth/recipes.h"
@@ -70,6 +71,7 @@ class FakeOps final : public DeployOps {
   bool fail_unit = false;
   bool fail_start = false;
   bool fail_running = false;
+  bool fail_listening = false;
   bool fail_register = false;
   bool fail_stop = false;
   std::filesystem::path last_prefetch_dir;
@@ -145,6 +147,20 @@ class FakeOps final : public DeployOps {
       return berth::Error("unit never became active");
     return {};
   }
+  // The real probe reads /proc/net; the fake returns a controlled verdict so
+  // run_deploy stays testable without touching real /proc (dev.md §9).
+  Result<void> verify_listening(const std::string& service_name,
+                                std::uint16_t port, const berth::Paths& paths,
+                                std::atomic<bool>* cancel) override {
+    static_cast<void>(service_name);
+    static_cast<void>(port);
+    static_cast<void>(paths);
+    static_cast<void>(cancel);
+    calls.push_back("listening");
+    if (fail_listening)
+      return berth::Error("fake not listening on the recorded port");
+    return {};
+  }
   Result<void> register_service(const ServiceRecord& record,
                                 const berth::Paths& paths) override {
     calls.push_back("register");
@@ -185,8 +201,9 @@ TEST(deploy_happy_path_runs_steps_in_order_and_registers) {
   DeployOptions options;
   const auto outcome = run_deploy(p, prebuilt_recipe(), 0, ops, options);
   CHECK(outcome.is_ok());
-  const std::vector<std::string> expected = {
-      "fetch", "prefetch", "build", "unit", "start", "await", "register"};
+  const std::vector<std::string> expected = {"fetch",     "prefetch", "build",
+                                             "unit",      "start",    "await",
+                                             "listening", "register"};
   CHECK(ops.calls == expected);
   CHECK(outcome.value().port > 0);
 
@@ -260,6 +277,27 @@ TEST(deploy_unit_that_never_comes_up_is_not_a_success) {
   CHECK(outcome.error().ctx().find("never became active") != std::string::npos);
   CHECK(!called(ops, "register"));
   CHECK(berth::journal_load(p).value().size() == 1);
+}
+
+TEST(deploy_active_but_not_listening_on_the_recorded_port_is_not_a_success) {
+  // The fixed-port app that binds somewhere else: the unit stays up, so the
+  // settle window is happy, but the registry is about to record a port nobody
+  // serves. That is the §11 silent wrong answer the listen check exists for.
+  const TempDir tmp;
+  const berth::Paths p = test_paths(tmp.path());
+  FakeOps ops;
+  ops.fail_listening = true;
+  DeployOptions options;
+  const auto outcome = run_deploy(p, prebuilt_recipe(), 18090, ops, options);
+  CHECK(outcome.is_err());
+  CHECK(outcome.error().ctx().find("fake not listening") != std::string::npos);
+  CHECK(called(ops, "await"));
+  CHECK(called(ops, "listening"));
+  CHECK(!called(ops, "register"));
+  const auto journal = berth::journal_load(p);
+  CHECK(journal.is_ok());
+  CHECK(journal.value().size() == 1);
+  CHECK(journal.value().front().stage == "registering");
 }
 
 TEST(deploy_start_failure_is_reported_and_keeps_journal) {
@@ -412,6 +450,98 @@ TEST(journal_tail_is_bounded_by_lines_and_bytes) {
   CHECK(berth::bound_journal_tail(many, 3, 1024) == "line7\nline8\nline9");
 }
 
+// --- listen verdict: pure decision over a PortReport (no /proc) -----------
+
+berth::ListeningPort listening_at(const std::string& address,
+                                  const std::uint16_t port) {
+  berth::ListeningPort p;
+  p.address = address;
+  p.port = port;
+  p.ipv6 = address.find(':') != std::string::npos;
+  p.loopback = address == "::1" || address.rfind("127.", 0) == 0;
+  p.wildcard = address == "0.0.0.0" || address == "::";
+  return p;
+}
+
+berth::PortReport report_with(std::vector<berth::ListeningPort> ports) {
+  berth::PortReport report;
+  report.ports = std::move(ports);
+  return report;
+}
+
+TEST(listen_verdict_accepts_the_loopback_listener_on_the_recorded_port) {
+  const berth::PortReport report =
+      report_with({listening_at("127.0.0.1", 8090)});
+  CHECK(berth::verify_loopback_listener(report, 8090, "berthpanel-x").is_ok());
+}
+
+TEST(listen_verdict_counts_ipv6_loopback_as_loopback) {
+  // ::1 is loopback too: the app bound loopback over IPv6.
+  const berth::PortReport report = report_with({listening_at("::1", 8090)});
+  CHECK(berth::verify_loopback_listener(report, 8090, "berthpanel-x").is_ok());
+}
+
+TEST(listen_verdict_rejects_a_missing_port_and_names_the_remedy) {
+  // The concrete bug: the app hardcodes 8090 while recipe.port is 8080. The
+  // verdict must name both and point at `port`/start_cmd, or the user cannot
+  // connect the deploy success to the observed mismatch.
+  const berth::PortReport report =
+      report_with({listening_at("127.0.0.1", 8080)});
+  const auto verdict =
+      berth::verify_loopback_listener(report, 8090, "berthpanel-x");
+  CHECK(verdict.is_err());
+  const std::string message = verdict.error().ctx();
+  CHECK(message.find("8090") != std::string::npos);  // expected port
+  CHECK(message.find("8080") != std::string::npos);  // observed listener
+  CHECK(message.find("nothing is listening") != std::string::npos);
+  CHECK(message.find("start_cmd") != std::string::npos);
+  CHECK(message.find("`port`") != std::string::npos);
+}
+
+TEST(listen_verdict_rejects_a_wildcard_only_bind_as_exposure) {
+  // 0.0.0.0 on the recorded port is the exposure the loopback invariant
+  // forbids: it must fail loudly and say so.
+  const berth::PortReport report = report_with({listening_at("0.0.0.0", 8090)});
+  const auto verdict =
+      berth::verify_loopback_listener(report, 8090, "berthpanel-x");
+  CHECK(verdict.is_err());
+  const std::string message = verdict.error().ctx();
+  CHECK(message.find("wildcard") != std::string::npos);
+  CHECK(message.find("exposure") != std::string::npos);
+  CHECK(message.find("8090") != std::string::npos);
+}
+
+TEST(listen_verdict_rejects_a_nonloopback_specific_bind) {
+  const berth::PortReport report =
+      report_with({listening_at("192.168.1.5", 8090)});
+  const auto verdict =
+      berth::verify_loopback_listener(report, 8090, "berthpanel-x");
+  CHECK(verdict.is_err());
+  CHECK(verdict.error().ctx().find("exposed") != std::string::npos);
+}
+
+TEST(listen_verdict_rejects_an_empty_or_observably_absent_report) {
+  // An empty report is "observably absent", never a silent pass.
+  const berth::PortReport empty;
+  const auto verdict =
+      berth::verify_loopback_listener(empty, 8090, "berthpanel-x");
+  CHECK(verdict.is_err());
+  CHECK(verdict.error().ctx().find("8090") != std::string::npos);
+  CHECK(verdict.error().ctx().find("(none)") != std::string::npos);
+
+  // A listener on a DIFFERENT port is not the recorded port either.
+  const berth::PortReport other = report_with({listening_at("0.0.0.0", 9999)});
+  CHECK(berth::verify_loopback_listener(other, 8090, "berthpanel-x").is_err());
+}
+
+TEST(listen_verdict_accepts_a_loopback_listener_among_other_ports) {
+  const berth::PortReport report = report_with({
+      listening_at("0.0.0.0", 9999),
+      listening_at("127.0.0.1", 8090),
+  });
+  CHECK(berth::verify_loopback_listener(report, 8090, "berthpanel-x").is_ok());
+}
+
 }  // namespace
 
 TEST(deploy_sweeps_stale_journal_entries_before_starting) {
@@ -443,6 +573,7 @@ TEST(deploy_sweeps_stale_journal_entries_before_starting) {
       "unit",
       "start",
       "await",
+      "listening",
       "register"};
   CHECK(ops.calls == expected);
   CHECK(!std::filesystem::exists(p.services_dir / "berthpanel-old"));
