@@ -28,6 +28,7 @@
 #include "berth/net/egress.h"
 #include "berth/net/github_api.h"
 #include "berth/proxy.h"
+#include "berth/recipe_edit.h"
 #include "berth/recipes.h"
 #include "berth/sandbox.h"
 #include "berth/selftest.h"
@@ -108,6 +109,10 @@ void print_usage() {
                "__recipe-add <file.json> "
                "[--force] | "
                "__recipe-remove <service>\n"
+               "       berthpanel __recipe-edit <service> [--start-cmd <tmpl>] "
+               "[--port <n>] [--memory <512M>]\n"
+               "              [--tasks <n>] [--health <path>] "
+               "[--name <display>] [--description <text>]\n"
                "       berthpanel __recipe-draft <github_url> [ref] [--apply] "
                "[--force]\n"
                "       berthpanel __deploy <service_name> [port] [--upgrade] "
@@ -464,6 +469,34 @@ int recipe_remove_command(const std::string_view service) {
   return 0;
 }
 
+// `berthpanel __recipe-edit <service> [--start-cmd <tmpl>] [--port <n>] ...`
+// — fix an EXISTING user recipe without hand-editing its JSON (dev.md §8).
+// Non-interactive and scriptable; it validates through the ONE validator,
+// stores through the ONE writer, and reports the diff, but never deploys.
+int recipe_edit_command(const std::string_view service,
+                        const std::span<const char* const>& args) {
+  const std::vector<std::string> tokens(args.begin(), args.end());
+  const berth::Result<berth::RecipeEdits> edits =
+      berth::parse_recipe_edit_args(tokens);
+  if (edits.is_err())
+    return fail(edits.error().ctx());
+
+  const berth::Result<berth::Paths> paths = berth::paths_from_env();
+  if (paths.is_err())
+    return fail(paths.error().ctx());
+
+  const berth::Result<berth::RecipeEditResult> updated =
+      berth::user_recipe_update(paths.value(), service, edits.value());
+  if (updated.is_err())
+    return fail(updated.error().ctx());
+
+  std::cout << "updated " << updated.value().after.service_name << "\n"
+            << berth::render_recipe_edit_diff(updated.value().before,
+                                              updated.value().after)
+            << "  stored: " << updated.value().stored_path.string() << "\n";
+  return 0;
+}
+
 int cleanup_command(const bool install, const bool quiet) {
   const berth::Result<berth::Paths> paths = berth::paths_from_env();
   if (paths.is_err())
@@ -746,6 +779,8 @@ int run(const std::span<const char* const> args) {
       return recipe_add_command(args[1], true);
     if (first == "__recipe-remove" && args.size() == 2)
       return recipe_remove_command(args[1]);
+    if (first == "__recipe-edit" && args.size() >= 2)
+      return recipe_edit_command(args[1], args.subspan(2));
     if (first == "__recipe-draft" && args.size() >= 2) {
       std::string_view ref;
       bool apply = false;
