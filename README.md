@@ -1,14 +1,39 @@
-# berthpanel
+<div align="center">
+  <img
+    src="./assets/BerchPanel.png"
+    width="900"
+    alt="Berthpanel"
+  />
+</div>
 
-Local-first, no-root deploy panel: paste a public GitHub URL, review the draft
-recipe it detects, fix anything it guessed wrong, and deploy to a hardened
-systemd **user** unit. Every deploy gets a sandboxed build and an assigned
-loopback port. No root, no daemon, allowlisted egress, `net.log` transparency,
-and journaled cleanup of interrupted deploys.
+<div align="center">
+  <p>
+    Paste a public GitHub URL, review the draft recipe it detects, fix
+    anything it guessed wrong, and deploy to a hardened systemd <b>user</b>
+    unit. Every deploy gets a sandboxed build and an assigned loopback port.
+    No root, no daemon, allowlisted egress, <code>net.log</code> transparency,
+    and journaled cleanup of interrupted deploys.
+  </p>
+  <p>
+    <b>Status: alpha.</b> See <a href="#known-limitations-alpha">Known limitations</a> —
+    in particular, the source must be a public <code>github.com</code> repository,
+    toolchains are not auto-provisioned, and a detected <code>start_cmd</code> must be verified.
+  </p>
+  <p>
+    <img src="https://img.shields.io/badge/License-GPL--3.0-blue?style=for-the-badge" alt="License: GPL-3.0" />
+    <img src="https://img.shields.io/badge/C++-20-00599C?style=for-the-badge&logo=cplusplus&logoColor=white" alt="C++20" />
+    <img src="https://img.shields.io/badge/Platform-Linux_%2B_systemd_--user-0d1117?style=for-the-badge&logo=linux&logoColor=white" alt="Linux + systemd user" />
+    <img src="https://img.shields.io/badge/Root-not_required-58A6FF?style=for-the-badge" alt="No root" />
+  </p>
+</div>
 
-> **Status: alpha.** See [Known limitations](#known-limitations-alpha) — in
-> particular, the source must be a public `github.com` repository, toolchains
-> are not auto-provisioned, and a detected `start_cmd` must be verified.
+<div align="center">
+  <img
+    src="assets/divider.svg"
+    width="900"
+    alt="Art Deco divider"
+  />
+</div>
 
 ## What it does
 
@@ -29,18 +54,35 @@ and journaled cleanup of interrupted deploys.
 - **No daemon, no root.** One static binary. Nothing needs Docker, and nothing
   needs `sudo` at runtime.
 
+<div align="center">
+  <img
+    src="assets/divider.svg"
+    width="900"
+    alt="Art Deco divider"
+  />
+</div>
+
 ## Paste a URL, get a unit running
 
-<!--
-Demo: record a short recording with a live user manager and drop it at
-assets/demo.gif (see assets/README.md), then embed it here. No placeholder
-image ships, because a synthetic demo that only looks like a deploy is exactly
-the kind of thing this project avoids.
--->
+<p align="center">
+  <img
+    src="./assets/demo.gif"
+    width="800"
+    alt="Demo: paste a URL, get a unit running"
+  />
+</p>
 
 Paste a GitHub URL → the wizard resolves the commit, detects the build, and
 shows a draft → confirm → the panel clones, builds in the sandbox, writes the
 unit and registers the service. The stages stream from `deploy.log`.
+
+<div align="center">
+  <img
+    src="assets/divider.svg"
+    width="900"
+    alt="Art Deco divider"
+  />
+</div>
 
 ## How it compares
 
@@ -70,6 +112,14 @@ projects in the table do not publish a single comparable figure here, so none is
 quoted; check their own docs. Numbers are only listed when they come from the
 project's own documentation.
 
+<div align="center">
+  <img
+    src="assets/divider.svg"
+    width="900"
+    alt="Art Deco divider"
+  />
+</div>
+
 ## Trust model
 
 Read this as what it is: a set of concrete, checkable properties, with the
@@ -92,11 +142,16 @@ limits stated plainly.
 Trusted release public key:
 
 ```
-<!-- FINGERPRINT: run scripts/keygen-release.sh, commit docs/release.pub, and
-     paste the printed fingerprint here (blocked on the license decision,
-     dev.md §12.5). -->
-fingerprint: <pending first release>
+fingerprint: 136DAF31D72588E4
 ```
+
+<div align="center">
+  <img
+    src="assets/divider.svg"
+    width="900"
+    alt="Art Deco divider"
+  />
+</div>
 
 ## Platform: Linux + systemd `--user`
 
@@ -110,6 +165,14 @@ manager there is no honest way to keep the promise, so it does not pretend to.
 - **Web from your phone:** `berthpanel __serve-status --listen 127.0.0.1:0`
   serves a read-only loopback page; front it with Tailscale for remote access.
   A full web UI is a different product.
+
+<div align="center">
+  <img
+    src="assets/divider.svg"
+    width="900"
+    alt="Art Deco divider"
+  />
+</div>
 
 ## Install
 
@@ -162,6 +225,14 @@ make release    # release build -> build/release/berthpanel
 
 Run `berthpanel --selftest` after installing to confirm your user manager works.
 
+<div align="center">
+  <img
+    src="assets/divider.svg"
+    width="900"
+    alt="Art Deco divider"
+  />
+</div>
+
 ## Known limitations (alpha)
 
 - **`github.com` only.** The source front door accepts an https GitHub URL and
@@ -179,12 +250,28 @@ Run `berthpanel --selftest` after installing to confirm your user manager works.
 - **Uninstall does not purge data.** It stops and unregisters a service but
   leaves its data directory under `~/.local/share/berthpanel` for you to delete.
 
+<div align="center">
+  <img
+    src="assets/divider.svg"
+    width="900"
+    alt="Art Deco divider"
+  />
+</div>
+
 ## Where it fits
 
 A tiny VPS — the 1 GB box where Docker panels do not live — or a home server
 you would rather not hand to a daemon. If you want a big app catalog and
 multi-container stacks, a Docker-based panel is the better tool; berthpanel is
 for the small, honest, no-root end of the range.
+
+<div align="center">
+  <img
+    src="assets/divider.svg"
+    width="900"
+    alt="Art Deco divider"
+  />
+</div>
 
 ## Ports, TLS and the no-root model
 
@@ -203,6 +290,14 @@ of:
 There is no mode that is both no-root and able to bind 80/443 without one of
 those. The panel does not pretend otherwise.
 
+<div align="center">
+  <img
+    src="assets/divider.svg"
+    width="900"
+    alt="Art Deco divider"
+  />
+</div>
+
 ## Reach a service only over your tailnet
 
 If you do not want to expose a service publicly at all, keep it on loopback and
@@ -213,6 +308,14 @@ challenge. Only devices in your tailnet (per its ACLs) can reach it. berthpanel
 never invokes Tailscale, never talks to it and adds it to no allowlist — it is a
 third-party control plane you opt into, and the panel only keeps the service
 bound to loopback as the recipes always do.
+
+<div align="center">
+  <img
+    src="assets/divider.svg"
+    width="900"
+    alt="Art Deco divider"
+  />
+</div>
 
 ## License
 
