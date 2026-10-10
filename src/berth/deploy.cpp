@@ -49,19 +49,21 @@ RecipeLike recipe_view(const Recipe& recipe) {
   return view;
 }
 
-Result<std::vector<std::string>> start_argv(
+}  // namespace
+
+Result<std::vector<std::string>> resolve_start_argv(
     const Recipe& recipe, const std::filesystem::path& work_dir,
     const std::uint16_t port, std::string& binary) {
   const Result<std::vector<std::string>> tokens =
       split_command_template(recipe.start_cmd);
   if (tokens.is_err())
     return std::move(tokens).error();
-  binary = (work_dir / recipe.binary_name).string();
+  const std::string self = (work_dir / recipe.binary_name).string();
   std::vector<std::pair<std::string, std::string>> values;
-  values.emplace_back("bin", binary);
+  values.emplace_back("bin", self);
   values.emplace_back("project", work_dir.string());
   values.emplace_back("port", std::to_string(port));
-  values.emplace_back("self", binary);
+  values.emplace_back("self", self);
   std::vector<std::string> resolved;
   for (const std::string& token : tokens.value()) {
     const Result<std::string> substituted =
@@ -70,12 +72,24 @@ Result<std::vector<std::string>> start_argv(
       return std::move(substituted).error();
     resolved.push_back(std::move(substituted).value());
   }
-  binary = resolved.front();
+  // A non-absolute program (a bare `bun`, or the `env` Gitea uses) must be
+  // resolved HERE: systemd's PATH is not the panel's, so a bare name passes
+  // preflight and the unit then dies at start. {self}/{bin} are absolute and
+  // skip this.
+  std::string& program = resolved.front();
+  if (program.empty() || program.front() != '/') {
+    const Result<std::string> absolute = resolve_executable(program);
+    if (absolute.is_err()) {
+      return with_context(
+          std::move(absolute).error(),
+          "deploy: resolving start interpreter '" + program + "'");
+    }
+    program = absolute.value();
+  }
+  binary = program;
   resolved.erase(resolved.begin());
   return resolved;
 }
-
-}  // namespace
 
 Result<void> RealDeployOps::fetch_source(const Recipe& recipe,
                                          const std::filesystem::path& work_dir,
@@ -224,7 +238,7 @@ Result<std::filesystem::path> RealDeployOps::write_unit_file(
     const std::uint16_t port, const Paths& paths) {
   std::string binary;
   const Result<std::vector<std::string>> args =
-      start_argv(recipe, work_dir, port, binary);
+      resolve_start_argv(recipe, work_dir, port, binary);
   if (args.is_err())
     return std::move(args).error();
 

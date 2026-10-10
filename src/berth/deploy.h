@@ -41,6 +41,16 @@ struct DeployOutcome {
   std::filesystem::path unit_path;
 };
 
+// Splits recipe.start_cmd, substitutes its placeholders, and returns the argv
+// tail while writing the absolute exec path to `binary`. A non-absolute first
+// token (a bare `bun`, or the `env` Gitea uses) is resolved through PATH and is
+// a loud Err when absent: preflight checks the panel's PATH, but systemd's PATH
+// does not include a user's ~/.bun/bin, so an unresolved name starts a unit
+// that dies a second later (§11). {self}/{bin} are already absolute.
+[[nodiscard]] Result<std::vector<std::string>> resolve_start_argv(
+    const Recipe& recipe, const std::filesystem::path& work_dir,
+    std::uint16_t port, std::string& binary);
+
 class DeployOps {
  public:
   virtual ~DeployOps() = default;

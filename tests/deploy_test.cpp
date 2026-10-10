@@ -1,6 +1,10 @@
 #include "berth/deploy.h"
 
+#include <sys/stat.h>
+
 #include <algorithm>
+#include <cstdio>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -158,6 +162,16 @@ class FakeOps final : public DeployOps {
 
 bool called(const FakeOps& ops, const std::string& step) {
   return std::find(ops.calls.begin(), ops.calls.end(), step) != ops.calls.end();
+}
+
+void put_executable(const std::filesystem::path& dir, const std::string& name) {
+  CHECK(berth::ensure_dir(dir).is_ok());
+  const std::filesystem::path file = dir / name;
+  FILE* f = std::fopen(file.c_str(), "w");
+  CHECK(f != nullptr);
+  std::fputs("#!/bin/sh\nexit 0\n", f);
+  std::fclose(f);
+  CHECK(::chmod(file.c_str(), 0755) == 0);
 }
 
 }  // namespace
@@ -619,4 +633,63 @@ TEST(sweep_refuses_to_run_when_the_registry_is_unreadable) {
   CHECK(std::filesystem::exists(p.services_dir / "berthpanel-memos"));
   CHECK(std::filesystem::exists(p.units_dir / "berthpanel-memos.service"));
   CHECK(berth::journal_load(p).value().size() == 1);
+}
+
+// --- start_cmd argv: the exec interpreter must be absolute ----------------
+
+TEST(deploy_resolves_a_bare_start_interpreter_through_path) {
+  const TempDir tmp;
+  put_executable(tmp.path() / "bin", "bun");
+  Recipe r = prebuilt_recipe();
+  r.binary_name = "server/server.js";
+  r.start_cmd = "bun {project}/server/server.js --host=127.0.0.1 --port={port}";
+
+  std::lock_guard lock(berth::env_test_lock());
+  ScopedEnv path("PATH");
+  path.set((tmp.path() / "bin").string());
+
+  std::string binary;
+  const auto argv =
+      berth::resolve_start_argv(r, tmp.path() / "wd", 3001, binary);
+  CHECK(argv.is_ok());
+  // The interpreter becomes its absolute PATH hit; the unit then does not
+  // depend on systemd's PATH (which lacks ~/.bun/bin) to start.
+  CHECK(binary == (tmp.path() / "bin" / "bun").string());
+  CHECK(argv.value().size() == 3);
+  CHECK(argv.value()[0] ==
+        (tmp.path() / "wd" / "server" / "server.js").string());
+  CHECK(argv.value()[1] == "--host=127.0.0.1");
+  CHECK(argv.value()[2] == "--port=3001");
+}
+
+TEST(deploy_fails_loudly_when_the_start_interpreter_is_absent) {
+  const TempDir tmp;
+  Recipe r = prebuilt_recipe();
+  r.binary_name = "server/server.js";
+  r.start_cmd =
+      "definitely-absent-bun {project}/server/server.js --host=127.0.0.1 "
+      "--port {port}";
+
+  std::lock_guard lock(berth::env_test_lock());
+  ScopedEnv path("PATH");
+  path.set(tmp.path().string());  // an empty directory: nothing resolves
+
+  std::string binary;
+  const auto argv = berth::resolve_start_argv(r, tmp.path(), 3001, binary);
+  CHECK(argv.is_err());
+  CHECK(argv.error().ctx().find("definitely-absent-bun") != std::string::npos);
+}
+
+TEST(deploy_keeps_an_absolute_self_without_consulting_path) {
+  const TempDir tmp;
+  const Recipe r = prebuilt_recipe();  // start_cmd uses the absolute {self}
+  std::lock_guard lock(berth::env_test_lock());
+  ScopedEnv path("PATH");
+  path.unset();  // an already-absolute program must not need PATH
+
+  std::string binary;
+  const auto argv = berth::resolve_start_argv(r, tmp.path(), 8234, binary);
+  CHECK(argv.is_ok());
+  CHECK(binary == (tmp.path() / "memos").string());
+  CHECK(argv.value().front() == "--addr");
 }
