@@ -17,6 +17,7 @@
 
 #include <nlohmann/json.hpp>
 #include "../util/result.h"
+#include "toolbox.h"
 
 namespace berth {
 
@@ -35,7 +36,8 @@ struct ContentPin {
 struct PrebuiltBinary {
   std::string url;
   std::string sha256;
-  std::string member;  // file to take out of the tar.gz
+  std::string member;  // member of the tar.gz, or the destination file for kRaw
+  ToolArchive archive = ToolArchive::kTarGz;  // absent JSON field = kTarGz
 };
 
 struct Recipe {

@@ -170,3 +170,46 @@ TEST(recipes_json_round_trip) {
   CHECK(back.value().build_steps[0].front() == "go");
   CHECK(validate_recipe(back.value()).is_ok());
 }
+
+TEST(recipes_prebuilt_archive_defaults_to_targz_and_round_trips_raw) {
+  // An existing user recipe has no archive field and must keep loading as the
+  // tar.gz shape (absent = kTarGz).
+  const nlohmann::json doc = {
+      {"owner", "o"},
+      {"name", "r"},
+      {"commit", "0123456789abcdef0123456789abcdef01234567"},
+      {"language", "prebuilt"},
+      {"service_name", "berthpanel-x"},
+      {"binary_name", "x"},
+      {"start_cmd", "{self} --addr 127.0.0.1 --port {port}"},
+      {"tools", nlohmann::json::array()},
+      {"res", {{"memory_max", "128M"}, {"tasks_max", 50}}},
+      {"prebuilt",
+       {{"url", "https://github.com/o/r/releases/download/v1/x.tar.gz"},
+        {"sha256", std::string(64, 'a')},
+        {"member", "x"}}}};
+  const auto absent = berth::recipe_from_json(doc);
+  CHECK(absent.is_ok());
+  CHECK(absent.value().prebuilt.has_value());
+  CHECK(absent.value().prebuilt->archive == berth::ToolArchive::kTarGz);
+
+  Recipe raw = good();
+  raw.language = "prebuilt";
+  raw.build_steps.clear();
+  raw.tools.clear();
+  raw.prebuilt = berth::PrebuiltBinary{
+      .url = "https://github.com/o/r/releases/download/v1/x-linux-amd64",
+      .sha256 = std::string(64, 'c'),
+      .member = "x",
+      .archive = berth::ToolArchive::kRaw};
+  CHECK(validate_recipe(raw).is_ok());  // a raw asset is a valid pin
+  const nlohmann::json out = berth::recipe_to_json(raw);
+  CHECK(out.at("prebuilt").at("archive") == "raw");
+  const auto back = berth::recipe_from_json(out);
+  CHECK(back.is_ok());
+  CHECK(back.value().prebuilt->archive == berth::ToolArchive::kRaw);
+
+  nlohmann::json bad = out;
+  bad["prebuilt"]["archive"] = "zip";
+  CHECK(berth::recipe_from_json(bad).is_err());
+}

@@ -90,7 +90,8 @@ Result<void> RealDeployOps::fetch_source(const Recipe& recipe,
                           .sha256 = recipe.prebuilt->sha256,
                           .inner_path = recipe.prebuilt->member,
                           .install_dir = work_dir,
-                          .executable = true};
+                          .executable = true,
+                          .archive = recipe.prebuilt->archive};
     const Result<std::filesystem::path> installed =
         install_pinned_tool(tool, paths, options.cancel);
     if (installed.is_err())

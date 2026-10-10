@@ -307,9 +307,23 @@ Result<Recipe> recipe_from_json(const nlohmann::json& doc) {
   }
   if (doc.contains("prebuilt")) {
     const nlohmann::json& prebuilt = doc.at("prebuilt");
-    r.prebuilt = PrebuiltBinary{prebuilt.at("url").get<std::string>(),
-                                prebuilt.at("sha256").get<std::string>(),
-                                prebuilt.at("member").get<std::string>()};
+    ToolArchive archive = ToolArchive::kTarGz;
+    if (prebuilt.contains("archive")) {
+      const std::string value = prebuilt.at("archive").get<std::string>();
+      if (value == "tar.gz") {
+        archive = ToolArchive::kTarGz;
+      } else if (value == "raw") {
+        archive = ToolArchive::kRaw;
+      } else {
+        return Error(
+            "recipe: prebuilt.archive must be 'tar.gz' or 'raw', got '" +
+            value + "'");
+      }
+    }
+    r.prebuilt =
+        PrebuiltBinary{prebuilt.at("url").get<std::string>(),
+                       prebuilt.at("sha256").get<std::string>(),
+                       prebuilt.at("member").get<std::string>(), archive};
   }
   if (doc.contains("res")) {
     r.res.memory_max = doc.at("res").value("memory_max", "");
@@ -350,6 +364,11 @@ nlohmann::json recipe_to_json(const Recipe& recipe) {
     doc["prebuilt"] = {{"url", recipe.prebuilt->url},
                        {"sha256", recipe.prebuilt->sha256},
                        {"member", recipe.prebuilt->member}};
+    // kTarGz is the historical default: omitting it keeps older recipe JSON
+    // byte-identical while kRaw (the Gitea raw-asset shape) is explicit.
+    if (recipe.prebuilt->archive == ToolArchive::kRaw) {
+      doc["prebuilt"]["archive"] = "raw";
+    }
   }
   if (!recipe.plugins.empty()) {
     nlohmann::json pins = nlohmann::json::array();
