@@ -48,10 +48,14 @@ constexpr std::chrono::milliseconds kShutdownJoinBudget{2000};
 // The keys a focused text field owns. Everything TYPEABLE, because the fields
 // are behind an explicit insert mode: with no field focused, q / e / r / c / j
 // / k are the screen's own, and a port that is not a number is refused loudly
-// by parse_port_field rather than by silently dropping keystrokes.
+// by parse_port_field rather than by silently dropping keystrokes. Left/Right
+// and Home/End move the caret inside the field; Up/Down stay global (list/log
+// navigation), so they are deliberately NOT forwarded.
 bool key_goes_to_field(const ftxui::Event& event) {
   return event.is_character() || event == Event::Backspace ||
-         event == Event::Delete;
+         event == Event::Delete || event == Event::ArrowLeft ||
+         event == Event::ArrowRight || event == Event::Home ||
+         event == Event::End;
 }
 
 // The Enter that means "act on what is typed here", per field. The port field
@@ -139,6 +143,9 @@ class AppComponent final : public ftxui::ComponentBase {
   bool OnEvent(Event event) override {
     const std::string key =
         event.is_character() ? std::string(event.character()) : std::string();
+    // Esc arrives as a Special event with an EMPTY character, so a string-keyed
+    // dialog would never see it; name it "\x1b" for every dialog below.
+    const std::string dialog_key = event == Event::Escape ? "\x1b" : key;
 
     // Ctrl-C is ours, not FTXUI's: it cancels what is running and takes the
     // SAME path as q (screen.ForceHandleCtrlC(false) in run_tui). Handled
@@ -166,7 +173,7 @@ class AppComponent final : public ftxui::ComponentBase {
       if (panel_->draft_clash_confirming) {
         draft_confirming = true;
         draft_confirmed =
-            handle_draft_clash_key(*panel_, key) == DraftKey::kConfirmed;
+            handle_draft_clash_key(*panel_, dialog_key) == DraftKey::kConfirmed;
         deploy_after = panel_->draft_pending_deploy;
       }
     }
@@ -188,7 +195,7 @@ class AppComponent final : public ftxui::ComponentBase {
       std::lock_guard lock(panel_->mutex);
       if (panel_->confirming_kill) {
         kill_confirming = true;
-        kill_decision = handle_kill_key(*panel_, key);
+        kill_decision = handle_kill_key(*panel_, dialog_key);
         kill_target = panel_->kill_target.service_name;
       }
     }
@@ -209,7 +216,7 @@ class AppComponent final : public ftxui::ComponentBase {
       std::lock_guard lock(panel_->mutex);
       if (panel_->confirming_uninstall) {
         uninstall_confirming = true;
-        uninstall_decision = handle_uninstall_key(*panel_, key);
+        uninstall_decision = handle_uninstall_key(*panel_, dialog_key);
         uninstall_target = panel_->uninstall_target.service_name;
       }
     }
@@ -232,10 +239,7 @@ class AppComponent final : public ftxui::ComponentBase {
       std::lock_guard lock(panel_->mutex);
       if (panel_->confirming_recipe_remove) {
         remove_confirming = true;
-        // Escape is a Special event, so `key` is empty for it; the gate names
-        // it "\x1b" like the other dialogs do.
-        remove_decision =
-            recipe_remove_key(event == Event::Escape ? "\x1b" : key);
+        remove_decision = recipe_remove_key(dialog_key);
         remove_target = panel_->recipe_remove_target;
         // The dialog DECIDED: close it before the caller acts, so a slow
         // worker cannot leave the question on screen over the outcome.
