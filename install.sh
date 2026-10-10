@@ -9,17 +9,20 @@
 # package — installing git/python/systemd is a human decision (dev.md §10).
 #
 # install.sh is itself signed by the release key, so it can be verified before
-# it is piped to a shell.
+# it is piped to a shell. Piping it straight from the repo's default branch
+# (`curl -fsSL <raw-url>/install.sh | sh`) trusts TLS + GitHub for the SCRIPT
+# itself; the release artifacts it installs are still verified (below).
 #
 # Usage:
-#   install.sh [--prefix DIR] [--source DIR] [--pub FILE] [--allow-checksum-only] [--dry-run]
+#   install.sh [--prefix DIR] [--source DIR] [--pub FILE] [--version V] [--allow-checksum-only] [--dry-run]
 #   install.sh --uninstall [--prefix DIR] [--dry-run]
 #
 # Environment:
 #   BERTHPANEL_MINISIGN      path to a minisign/rsign binary (skips detection)
 #   BERTHPANEL_RELEASE_PUB   trusted public key (default <source>/release.pub)
-#   BERTHPANEL_RELEASE_URL   base URL for a download when artifacts are not
-#                            already present locally
+#   BERTHPANEL_RELEASE_URL   base URL for the release artifacts (default: the
+#                            pinned release below); when artifacts are not
+#                            already present locally they are fetched from it
 
 set -eu
 # pipefail where the shell has it (bash/ksh); dash does not, and that is fine.
@@ -30,6 +33,13 @@ fi
 REPO_SLUG="Est-Void/berthpanel"
 BIN_NAME="berthpanel"
 UNIT_PREFIX="berthpanel-"
+
+# The installer is served from the repo's default branch (the README one-liner);
+# the artifacts it fetches are the ones attached to this exact release. Bump
+# DEFAULT_VERSION together with the tag — never a floating `latest` (dev.md §10).
+DEFAULT_BRANCH="main"
+DEFAULT_VERSION="v0.1.0-alpha"
+DEFAULT_RELEASE_URL="https://github.com/${REPO_SLUG}/releases/download/${DEFAULT_VERSION}"
 
 # Pinned static minisign for the verify-first fallback (dev.md §10). The
 # tarball holds both x86_64 and aarch64; its SHA-256 is the pin — the download
@@ -44,7 +54,29 @@ die() {
 }
 
 usage() {
-  sed -n '2,26p' "$0" 2>/dev/null || echo "berthpanel installer/uninstaller"
+  # Embedded so it works under `curl | sh`, where there is no script file on
+  # disk and `$0` is just the shell name (a `sed ... "$0"` would fail).
+  cat <<EOF
+install.sh — install AND uninstall berthpanel.
+
+Usage:
+  install.sh [--prefix DIR] [--source DIR] [--pub FILE] [--version V]
+             [--allow-checksum-only] [--dry-run]
+  install.sh --uninstall [--prefix DIR] [--dry-run]
+
+One-liner (the script itself is not verified this way; see the README Install
+section for the verify-first alternative):
+  curl -fsSL https://raw.githubusercontent.com/${REPO_SLUG}/${DEFAULT_BRANCH}/install.sh | sh
+
+Verify-first, fail-closed: the release's SHA256SUMS is checked against a
+minisign signature before anything is installed. --allow-checksum-only is the
+explicit opt-out. No sudo, no system packages.
+
+Environment:
+  BERTHPANEL_MINISIGN     minisign/rsign binary (skips detection)
+  BERTHPANEL_RELEASE_PUB  trusted public key (default <source>/release.pub)
+  BERTHPANEL_RELEASE_URL  base URL for release artifacts
+EOF
 }
 
 # --- argument parsing --------------------------------------------------------
@@ -96,7 +128,14 @@ done
 [ -n "$prefix" ] || die "could not determine an install prefix"
 
 if [ -z "$source_dir" ]; then
-  source_dir="$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd || pwd)"
+  # Under `curl | sh` there is no script file: $0 is the shell name, and
+  # dirname on it is meaningless. Only derive a directory when $0 is a real
+  # file; otherwise fall back to the current directory.
+  if [ -f "$0" ]; then
+    source_dir="$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd || pwd)"
+  else
+    source_dir="$(pwd)"
+  fi
 fi
 
 # --- helpers -----------------------------------------------------------------
@@ -106,11 +145,12 @@ fetch_file() {
   out="$2"
   if command -v curl >/dev/null 2>&1; then
     curl --fail --silent --show-error --location --proto '=https' \
-      --output "$out" "$url"
+      --output "$out" "$url" || die "could not download ${url}"
   elif command -v wget >/dev/null 2>&1; then
-    wget --quiet --https-only --output-document="$out" "$url"
+    wget --quiet --https-only --output-document="$out" "$url" ||
+      die "could not download ${url}"
   else
-    die "need curl or wget to download $url"
+    die "need curl or wget to download ${url}"
   fi
 }
 
@@ -233,17 +273,25 @@ uninstall() {
 # --- install -----------------------------------------------------------------
 
 install() {
-  # Resolve artifacts: use local files when present, otherwise fetch from the
-  # release URL. Never a floating `latest` — the URL is version-pinned.
+  # Resolve artifacts: use local files when present, otherwise fetch from a
+  # version-pinned release URL (never a floating `latest`). Precedence for the
+  # base: --version, then BERTHPANEL_RELEASE_URL, then the pinned default.
+  if [ -z "$release_url" ]; then
+    if [ -n "$version" ]; then
+      release_url="https://github.com/${REPO_SLUG}/releases/download/${version}"
+    else
+      release_url="$DEFAULT_RELEASE_URL"
+    fi
+  fi
+  # BERTHPANEL_RELEASE_PUB names the trusted key before we decide what to fetch.
+  if [ -z "$pub_file" ] && [ -n "${BERTHPANEL_RELEASE_PUB:-}" ]; then
+    pub_file="$BERTHPANEL_RELEASE_PUB"
+  fi
+
   work_dir="$source_dir"
   if [ ! -f "$work_dir/${BIN_NAME}" ] || [ ! -f "$work_dir/SHA256SUMS" ]; then
-    [ -n "$release_url" ] || [ -n "$version" ] ||
-      die "no local artifacts and no --version/BERTHPANEL_RELEASE_URL to download"
-    if [ -z "$release_url" ]; then
-      release_url="https://github.com/${REPO_SLUG}/releases/download/${version}"
-    fi
     work_dir="$(mktemp -d)"
-    echo "install: fetching artifacts from ${release_url}"
+    echo "install: no local artifacts in ${source_dir}; fetching from ${release_url}"
     fetch_file "${release_url}/${BIN_NAME}" "$work_dir/${BIN_NAME}"
     fetch_file "${release_url}/SHA256SUMS" "$work_dir/SHA256SUMS"
     if [ "$allow_checksum_only" -eq 0 ]; then
@@ -265,7 +313,7 @@ install() {
     [ -f "$work_dir/SHA256SUMS.minisig" ] ||
       die "no SHA256SUMS.minisig; pass --allow-checksum-only only if you accept the risk"
     if [ -z "$pub_file" ]; then
-      pub_file="${BERTHPANEL_RELEASE_PUB:-$work_dir/release.pub}"
+      pub_file="$work_dir/release.pub"
     fi
     [ -f "$pub_file" ] || die "trusted public key not found at ${pub_file}"
     minisign_bin="$(ensure_minisign)"

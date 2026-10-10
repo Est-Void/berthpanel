@@ -119,12 +119,31 @@ signature before installing anything, and verifies every artifact's checksum.
 It never runs `sudo` and never installs a system package. `--allow-checksum-only`
 is the explicit opt-out of the signature step.
 
+The quick path is a one-liner that runs the installer straight from the repo's
+default branch:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Est-Void/berthpanel/main/install.sh | sh
+```
+
+Be honest about what that trusts: the **script** arrives over TLS from GitHub,
+so piping it to `sh` trusts TLS and GitHub for the script itself — it is not
+independently verified. The release artifacts it then installs **are** verified
+(signed `SHA256SUMS` plus per-artifact checksums), so a compromised mirror or a
+tampered binary is still caught. To verify the script too, download it, check
+its own detached signature, and only then run it. Or do the whole thing by hand:
+
 ```sh
 # Verify first, then run — never pipe an unverified script straight to sh.
 minisign -Vm SHA256SUMS -p release.pub
 sha256sum --check --strict SHA256SUMS
 sh install.sh --source . --pub release.pub
 ```
+
+Useful seams: `--dry-run` resolves and verifies everything but installs nothing;
+`--version V` fetches a specific release; and `BERTHPANEL_RELEASE_URL` points at
+a different artifact base. When no local artifacts are present, the installer
+fetches the pinned release (never a floating `latest`) over HTTPS.
 
 Uninstall is the same script: it stops and removes only `berthpanel-`-prefixed
 user units and the binary, and leaves your data under

@@ -10,7 +10,9 @@
 //   * --allow-checksum-only is the explicit opt-out of the signature step;
 //   * a good signature installs the binary into <prefix>/bin;
 //   * the uninstaller stops/removes only `berthpanel-` units and unit files,
-//     never anything else, and is idempotent.
+//     never anything else, and is idempotent;
+//   * the script is pipe-safe: piped through `sh` with no script file on disk
+//     (`curl | sh` shape) it still prints usage and installs nothing.
 
 #include <sys/stat.h>
 
@@ -187,6 +189,41 @@ TEST(installer_allow_checksum_only_skips_the_signature) {
   CHECK(result.is_ok());
   CHECK(result.value().exit_code == 0);
   CHECK(read_file(prefix / "bin" / "berthpanel") == "BIN");
+}
+
+TEST(installer_pipe_safe_from_stdin) {
+  const fs::path root = repo_root();
+  CHECK(!root.empty());
+
+  const TempDir tmp;
+  const fs::path src = make_source(tmp.path() / "src", "BIN", true);
+  const fs::path prefix = tmp.path() / "prefix";
+  const std::string script = (root / "install.sh").string();
+  // The child's stdin is /dev/null (subprocess.h), so `cat` takes the file as
+  // an argument and the inner `sh -s` reads the script from the pipe: this is
+  // the `curl | sh` shape, where no script file is on the inner shell's disk.
+  const std::vector<std::string> env{"PATH=/usr/bin:/bin"};
+
+  const std::string help_cmd = "cat '" + script + "' | sh -s -- --prefix '" +
+                               prefix.string() + "' --help";
+  const berth::Result<berth::RunOutput> help =
+      run_cmd({"/bin/sh", "-c", help_cmd}, env);
+  CHECK(help.is_ok());
+  CHECK(help.value().exit_code == 0);
+  CHECK(help.value().out.find("Usage:") != std::string::npos);
+  CHECK(!fs::exists(prefix / "bin" / "berthpanel"));
+
+  // Dry run through the pipe still resolves and checksums locally and installs
+  // nothing (and never touches the network).
+  const std::string dry_cmd = "cat '" + script + "' | sh -s -- --source '" +
+                              src.string() + "' --prefix '" + prefix.string() +
+                              "' --allow-checksum-only --dry-run";
+  const berth::Result<berth::RunOutput> dry =
+      run_cmd({"/bin/sh", "-c", dry_cmd}, env);
+  CHECK(dry.is_ok());
+  CHECK(dry.value().exit_code == 0);
+  CHECK(dry.value().out.find("would install") != std::string::npos);
+  CHECK(!fs::exists(prefix / "bin" / "berthpanel"));
 }
 
 TEST(uninstaller_only_touches_the_prefix) {

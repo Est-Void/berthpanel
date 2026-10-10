@@ -96,6 +96,12 @@ if [ -f "${repo_root}/install.sh" ]; then
   cp -f "${repo_root}/install.sh" "${release_dir}/install.sh"
 fi
 
+# The public half of the release key ships as an asset so `install.sh` can
+# fetch a trusted key from the release URL when none is supplied locally.
+if [ -f "${repo_root}/docs/release.pub" ]; then
+  cp -f "${repo_root}/docs/release.pub" "${release_dir}/release.pub"
+fi
+
 # Corresponding Source (GPL-3.0, dev.md §12.5): the tagged source tree, not a
 # build artifact. `git archive` is deterministic; `release/` is excluded so
 # the tarball does not contain its own checksums and is identical at the
@@ -121,7 +127,7 @@ fi
 (
   cd "${release_dir}"
   : > SHA256SUMS
-  for name in berthpanel install.sh ${src_name}; do
+  for name in berthpanel install.sh release.pub ${src_name}; do
     if [ -f "${name}" ]; then
       sha256sum "${name}" >> SHA256SUMS
     fi
