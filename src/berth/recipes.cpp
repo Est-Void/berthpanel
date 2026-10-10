@@ -238,15 +238,26 @@ Result<void> validate_recipe(const Recipe& recipe) {
     return Error("recipe: a built-from-source recipe needs build_steps");
   }
 
-  // §8: every service binds loopback only. The bind target must be
-  // spelled out in the template; a wildcard bind is rejected outright.
+  // §8: every service binds loopback only. The bind target must be stated —
+  // spelled into start_cmd or declared in `bind` — and a wildcard is refused
+  // in either place. There is no silent default: an app whose start_cmd has
+  // no bind flag must DECLARE loopback here.
+  if (recipe.bind == "0.0.0.0") {
+    return Error("recipe: " + recipe.service_name +
+                 " must not bind a wildcard address");
+  }
+  if (!recipe.bind.empty() && recipe.bind != "127.0.0.1") {
+    return Error("recipe: bind must be '127.0.0.1' (loopback) or empty, got '" +
+                 recipe.bind + "'");
+  }
   std::string joined;
   for (const std::string& token : start.value()) {
     joined += token;
     joined += ' ';
   }
   const bool loopback = joined.find("127.0.0.1") != std::string::npos ||
-                        joined.find("localhost") != std::string::npos;
+                        joined.find("localhost") != std::string::npos ||
+                        recipe.bind == "127.0.0.1";
   const bool wildcard = joined.find("0.0.0.0") != std::string::npos ||
                         joined.find("--addr :") != std::string::npos;
   if (!loopback) {
@@ -258,7 +269,9 @@ Result<void> validate_recipe(const Recipe& recipe) {
     return Error("recipe: " + recipe.service_name +
                  " must not bind a wildcard address");
   }
-  if (joined.find("{port}") == std::string::npos) {
+  // {port} is required only when the deploy picks the port (port == 0); a
+  // fixed port is the app's own and needs no placeholder.
+  if (recipe.port == 0 && joined.find("{port}") == std::string::npos) {
     return Error("recipe: start_cmd must carry the {port} placeholder");
   }
 
@@ -278,6 +291,7 @@ Result<Recipe> recipe_from_json(const nlohmann::json& doc) {
   r.description = doc.value("description", "");
   r.binary_name = doc.value("binary_name", "");
   r.start_cmd = doc.value("start_cmd", "");
+  r.bind = doc.value("bind", "");
   r.health_path = doc.value("health_path", "/");
   r.port = doc.value("port", static_cast<std::uint16_t>(0));
   for (const nlohmann::json& tool :
@@ -360,6 +374,11 @@ nlohmann::json recipe_to_json(const Recipe& recipe) {
   doc["pre_build"] = to_json(recipe.pre_build);
   doc["build_steps"] = to_json(recipe.build_steps);
   doc["prefetch_steps"] = to_json(recipe.prefetch_steps);
+  // Only a DECLARED bind is written: an absent field means "start_cmd states
+  // the bind", so existing recipe JSON does not churn.
+  if (!recipe.bind.empty()) {
+    doc["bind"] = recipe.bind;
+  }
   if (recipe.prebuilt.has_value()) {
     doc["prebuilt"] = {{"url", recipe.prebuilt->url},
                        {"sha256", recipe.prebuilt->sha256},

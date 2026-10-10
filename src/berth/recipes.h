@@ -56,6 +56,11 @@ struct Recipe {
   std::string binary_name;  // file the build produces inside the work dir
   std::string
       start_cmd;  // placeholders {bin} {venv} {python} {project} {port} {self}
+  // The author's explicit declaration of the address the app binds ITSELF
+  // when start_cmd carries no bind token. "" = not declared; only
+  // "127.0.0.1" is a valid declaration (the validator refuses anything
+  // else), so loopback is always stated, never a silent default (§8).
+  std::string bind;
   std::string health_path = "/";
   std::uint16_t port = 0;  // 0 = pick a free one at deploy time
   std::vector<std::string> tools;

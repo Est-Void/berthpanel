@@ -59,6 +59,19 @@ TEST(detect_go_module_without_a_module_line_falls_back_to_the_name) {
   CHECK(draft.value().recipe.binary_name == "myapp");
 }
 
+TEST(detect_go_draft_leaves_bind_undeclared_and_still_validates) {
+  // The default Go template spells loopback and {port} into start_cmd, so the
+  // relaxed bind rules leave the draft exactly as valid as before — `bind`
+  // stays "" (the start_cmd is what declares loopback). This is the no-
+  // regression guard for the anti-wildcard invariant.
+  const TempDir tmp;
+  CHECK(berth::atomic_write(tmp.path() / "go.mod", kGoMod).is_ok());
+  const auto draft = berth::detect_recipe(request_for(tmp.path()));
+  CHECK(draft.is_ok());
+  CHECK(draft.value().recipe.bind.empty());
+  CHECK(berth::validate_recipe(draft.value().recipe).is_ok());
+}
+
 TEST(detect_bun_lockfile_picks_bun) {
   const TempDir tmp;
   CHECK(berth::atomic_write(tmp.path() / "package.json",

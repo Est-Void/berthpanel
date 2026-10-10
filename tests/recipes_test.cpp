@@ -83,6 +83,44 @@ TEST(recipes_validator_requires_port_placeholder) {
   CHECK(validate_recipe(r).is_err());
 }
 
+TEST(recipes_validator_accepts_a_declared_loopback_bind) {
+  // A BYO app with NO CLI bind flag: start_cmd is just {self}, so the author
+  // DECLARES loopback with `bind`. Without the declaration it is still an Err
+  // — there is no silent default that re-exposes a service.
+  Recipe r = good();
+  r.start_cmd = "{self}";
+  CHECK(validate_recipe(r).is_err());
+  r.bind = "127.0.0.1";
+  r.port = 46877;  // fixed port: {port} is no longer required
+  CHECK(validate_recipe(r).is_ok());
+}
+
+TEST(recipes_validator_rejects_a_bad_or_wildcard_bind) {
+  Recipe r = good();
+  r.start_cmd = "{self}";
+  r.port = 46877;
+
+  r.bind = "0.0.0.0";
+  const auto wild = validate_recipe(r);
+  CHECK(wild.is_err());
+  CHECK(wild.error().ctx().find("wildcard") != std::string::npos);
+
+  r.bind = "localhost";  // not the one declared loopback value
+  const auto other = validate_recipe(r);
+  CHECK(other.is_err());
+  CHECK(other.error().ctx().find("127.0.0.1") != std::string::npos);
+}
+
+TEST(recipes_validator_port_placeholder_is_optional_with_a_fixed_port) {
+  Recipe r = good();
+  r.start_cmd = "{self}";
+  r.bind = "127.0.0.1";
+  r.port = 0;
+  CHECK(validate_recipe(r).is_err());  // port==0 still needs {port}
+  r.port = 46877;
+  CHECK(validate_recipe(r).is_ok());
+}
+
 TEST(recipes_validator_requires_tools_to_cover_build_steps) {
   Recipe r = good();
   r.tools = {};  // go build but no go declared
@@ -169,6 +207,29 @@ TEST(recipes_json_round_trip) {
   CHECK(back.value().build_steps.size() == 1);
   CHECK(back.value().build_steps[0].front() == "go");
   CHECK(validate_recipe(back.value()).is_ok());
+}
+
+TEST(recipes_json_bind_is_optional_and_round_trips) {
+  // An absent `bind` stays absent: existing recipe JSON must not churn.
+  const Recipe plain = good();
+  CHECK(plain.bind.empty());
+  const nlohmann::json none = berth::recipe_to_json(plain);
+  CHECK(!none.contains("bind"));
+
+  Recipe bound = good();
+  bound.bind = "127.0.0.1";
+  const nlohmann::json doc = berth::recipe_to_json(bound);
+  CHECK(doc.at("bind") == "127.0.0.1");
+  const auto back = berth::recipe_from_json(doc);
+  CHECK(back.is_ok());
+  CHECK(back.value().bind == "127.0.0.1");
+
+  // Absent in the source reads as "" (not declared).
+  nlohmann::json absent = doc;
+  absent.erase("bind");
+  const auto restored = berth::recipe_from_json(absent);
+  CHECK(restored.is_ok());
+  CHECK(restored.value().bind.empty());
 }
 
 TEST(recipes_prebuilt_archive_defaults_to_targz_and_round_trips_raw) {

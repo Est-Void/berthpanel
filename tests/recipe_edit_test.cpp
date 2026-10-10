@@ -87,6 +87,30 @@ TEST(recipe_edit_apply_rejects_a_start_cmd_without_loopback) {
   CHECK(rejected.is_err());
 }
 
+TEST(recipe_edit_apply_sets_a_declared_bind) {
+  // The BYO no-bind-flag case: start_cmd is just {self} and the author
+  // declares loopback; a fixed port drops the {port} requirement.
+  RecipeEdits edits;
+  edits.start_cmd = "{self}";
+  edits.bind = "127.0.0.1";
+  edits.port = 46877;
+  const auto edited = berth::apply_recipe_edits(go_recipe(), edits);
+  CHECK(edited.is_ok());
+  CHECK(edited.value().start_cmd == "{self}");
+  CHECK(edited.value().bind == "127.0.0.1");
+  CHECK(edited.value().port == 46877);
+}
+
+TEST(recipe_edit_apply_rejects_a_wildcard_bind) {
+  RecipeEdits edits;
+  edits.start_cmd = "{self}";
+  edits.bind = "0.0.0.0";
+  edits.port = 46877;
+  const auto edited = berth::apply_recipe_edits(go_recipe(), edits);
+  CHECK(edited.is_err());
+  CHECK(edited.error().ctx().find("wildcard") != std::string::npos);
+}
+
 TEST(recipe_edit_apply_rejects_empty_limits) {
   RecipeEdits no_memory;
   no_memory.memory_max = "";
@@ -176,11 +200,22 @@ TEST(recipe_edit_parse_rejects_bad_input_loudly) {
   CHECK(berth::parse_recipe_edit_args({}).is_err());  // no flags
   CHECK(berth::parse_recipe_edit_args({"--bogus", "x"}).is_err());
   CHECK(berth::parse_recipe_edit_args({"--start-cmd"}).is_err());  // no value
+  CHECK(berth::parse_recipe_edit_args({"--bind"}).is_err());       // no value
   CHECK(berth::parse_recipe_edit_args({"--port", "0"}).is_err());
   CHECK(berth::parse_recipe_edit_args({"--port", "70000"}).is_err());
   CHECK(berth::parse_recipe_edit_args({"--port", "80O"}).is_err());
   CHECK(berth::parse_recipe_edit_args({"--tasks", "0"}).is_err());
   CHECK(berth::parse_recipe_edit_args({"--tasks", "-1"}).is_err());
+}
+
+TEST(recipe_edit_parse_maps_bind) {
+  const auto parsed = berth::parse_recipe_edit_args(
+      {"--start-cmd", "{self}", "--bind", "127.0.0.1", "--port", "46877"});
+  CHECK(parsed.is_ok());
+  CHECK(parsed.value().start_cmd.value() == "{self}");
+  CHECK(parsed.value().bind.has_value());
+  CHECK(parsed.value().bind.value() == "127.0.0.1");
+  CHECK(parsed.value().port.value() == 46877);
 }
 
 TEST(recipe_edit_diff_names_each_changed_field) {

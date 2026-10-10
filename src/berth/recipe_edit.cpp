@@ -40,7 +40,7 @@ Result<std::uint64_t> parse_uint(const std::string& text,
 
 Result<Recipe> apply_recipe_edits(const Recipe& base,
                                   const RecipeEdits& edits) {
-  const bool any = edits.start_cmd.has_value() ||
+  const bool any = edits.start_cmd.has_value() || edits.bind.has_value() ||
                    edits.health_path.has_value() ||
                    edits.display_name.has_value() ||
                    edits.description.has_value() || edits.port.has_value() ||
@@ -51,6 +51,8 @@ Result<Recipe> apply_recipe_edits(const Recipe& base,
   Recipe edited = base;
   if (edits.start_cmd.has_value())
     edited.start_cmd = edits.start_cmd.value();
+  if (edits.bind.has_value())
+    edited.bind = edits.bind.value();
   if (edits.health_path.has_value())
     edited.health_path = edits.health_path.value();
   if (edits.display_name.has_value())
@@ -127,6 +129,11 @@ Result<RecipeEdits> parse_recipe_edit_args(
         return Error("recipe edit: --start-cmd needs a value");
       edits.start_cmd = value;
       any = true;
+    } else if (flag == "--bind") {
+      if (!has_value)
+        return Error("recipe edit: --bind needs an address");
+      edits.bind = value;
+      any = true;
     } else if (flag == "--health") {
       if (!has_value)
         return Error("recipe edit: --health needs a path");
@@ -178,7 +185,7 @@ Result<RecipeEdits> parse_recipe_edit_args(
   if (!any) {
     return Error(
         "recipe edit: at least one edit flag is required (--start-cmd, "
-        "--port, --memory, --tasks, --health, --name, --description)");
+        "--bind, --port, --memory, --tasks, --health, --name, --description)");
   }
   return edits;
 }
@@ -199,6 +206,7 @@ std::string render_recipe_edit_diff(const Recipe& before, const Recipe& after) {
     out += "\n";
   };
   add("start_cmd", before.start_cmd, after.start_cmd);
+  add("bind", before.bind, after.bind);
   add("health_path", before.health_path, after.health_path);
   add("display_name", before.display_name, after.display_name);
   add("description", before.description, after.description);

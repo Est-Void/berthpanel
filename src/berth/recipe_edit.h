@@ -30,6 +30,7 @@ namespace berth {
 // recipe's value untouched; the engine never invents a value.
 struct RecipeEdits {
   std::optional<std::string> start_cmd;
+  std::optional<std::string> bind;
   std::optional<std::string> health_path;
   std::optional<std::string> display_name;
   std::optional<std::string> description;
