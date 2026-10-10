@@ -224,6 +224,7 @@ std::vector<std::string> deploy_key_hints(const bool running) {
   }
   return {"Enter  deploy the selected recipe at the typed port",
           "e  recipe details (pin, tools, build steps, start command)",
+          "E  edit the selected USER recipe (builtin: make an override first)",
           "r  reload the catalog", "↑↓  select a recipe"};
 }
 

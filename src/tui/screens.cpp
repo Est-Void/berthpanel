@@ -16,12 +16,14 @@
 #include <thread>
 
 #include "../berth/deploy.h"
+#include "../berth/recipe_edit.h"
 #include "../berth/service_ops.h"
 #include "../berth/wizard.h"
 #include "../core/netstatus.h"
 #include "../util/result.h"
 #include "../util/strutil.h"
 #include "../util/tail.h"
+#include "view_edit.h"
 
 namespace tui {
 
@@ -311,6 +313,14 @@ Element render_deploy_screen(const Panel& panel, ftxui::Element url_input,
   out.push_back(ftxui::hbox(std::move(status)) | ftxui::dim);
   out.push_back(ftxui::separator());
 
+  // A refused edit (a builtin recipe) is a status line, not a modal: the user
+  // has not lost the screen and can pick a user recipe and press E again.
+  if (!panel.edit_error.empty()) {
+    for (const std::string& part : berth::split(panel.edit_error, "\n")) {
+      out.push_back(ftxui::paragraph("  " + part) | ftxui::color(Color::Red));
+    }
+  }
+
   if (!panel.catalog_error.empty()) {
     // A catalog that failed to load must say so (§11). The old screen fell
     // through to an empty list and showed the user nothing at all.
@@ -446,6 +456,61 @@ Element render_deploy_screen(const Panel& panel, ftxui::Element url_input,
           : deploy_key_hints(
                 panel.deploy_running.load(std::memory_order_relaxed));
   for (const std::string& hint : hints) {
+    out.push_back(ftxui::paragraph(hint) | ftxui::dim);
+  }
+  return ftxui::vbox(std::move(out)) | ftxui::flex;
+}
+
+// --- Recipe edit (4.19+) ---------------------------------------------------
+
+Element render_edit_screen(const Panel& panel,
+                           const ftxui::Elements& edit_inputs) {
+  Elements out;
+  out.push_back(ftxui::text("EDIT " + panel.edit_service) | ftxui::bold |
+                ftxui::color(Color::Magenta));
+  out.push_back(ftxui::text("  a user recipe — identity, pin and build steps "
+                            "are not editable here") |
+                ftxui::dim);
+  out.push_back(ftxui::separator());
+
+  if (!panel.edit_status.empty()) {
+    out.push_back(ftxui::text("\xe2\x97\x8f " + panel.edit_status) |
+                  ftxui::dim);
+  }
+  const bool locked = panel.edit_running;
+  for (std::size_t i = 0; i < edit_inputs.size() && i < kEditFieldCount; ++i) {
+    const EditField field = edit_field_at(i);
+    const bool focused = panel.edit_field == field;
+    Elements row;
+    row.push_back(ftxui::text(focused ? "\xe2\x96\xb8 " : "  ") |
+                  ftxui::color(focused ? Color::Magenta : Color::White));
+    std::string label(edit_field_label(field));
+    if (label.size() < 13) {
+      label.append(13 - label.size(), ' ');
+    }
+    row.push_back(ftxui::text(label + "  ") | ftxui::dim);
+    row.push_back(edit_inputs[i] | ftxui::xflex);
+    out.push_back(ftxui::hbox(std::move(row)) | ftxui::flex);
+  }
+  out.push_back(
+      locked ? ftxui::text("  fields are locked while the write is in flight")
+             : ftxui::text("  i  edit  ·  Tab  next field  ·  s  save"));
+  out.push_back(ftxui::separator());
+
+  if (panel.edit_saved) {
+    for (const std::string& line :
+         edit_saved_lines(panel.edit_diff, panel.edit_stored_path)) {
+      out.push_back(ftxui::paragraph(line) | ftxui::color(Color::Green));
+    }
+  }
+  if (!panel.edit_error.empty()) {
+    for (const std::string& part : berth::split(panel.edit_error, "\n")) {
+      out.push_back(ftxui::paragraph("  " + part) | ftxui::color(Color::Red));
+    }
+  }
+  out.push_back(ftxui::separator());
+  for (const std::string& hint :
+       edit_key_hints(panel.edit_field, panel.edit_running)) {
     out.push_back(ftxui::paragraph(hint) | ftxui::dim);
   }
   return ftxui::vbox(std::move(out)) | ftxui::flex;
@@ -776,6 +841,85 @@ void discard_draft(const std::shared_ptr<Panel>& panel) {
   panel->draft_clash = berth::DraftClash{};
   panel->draft_status.clear();
   panel->draft_error.clear();
+}
+
+// --- Recipe edit (4.19+) ---------------------------------------------------
+
+namespace {
+
+// The save's whole result: the engine's before/after/path, the rendered diff
+// the screen shows, and the reloaded catalog. One worker returns all three so
+// the catalog reload can never race the write — it happens AFTER it, on the
+// same thread, with no nested lock (the apply callback runs under the panel
+// lock; calling refresh_catalog() there would deadlock).
+struct EditSave {
+  berth::RecipeEditResult edit;
+  std::string diff;
+  Catalog catalog;
+};
+
+}  // namespace
+
+void start_recipe_edit(const std::shared_ptr<Panel>& panel,
+                       const berth::Paths& paths,
+                       const berth::RecipeEdits& edits) {
+  std::string service;
+  {
+    std::lock_guard lock(panel->mutex);
+    if (panel->edit_running) {
+      return;
+    }
+    panel->edit_running = true;
+    panel->edit_saved = false;
+    panel->edit_stored_path.clear();
+    panel->edit_diff.clear();
+    panel->edit_error.clear();
+    service = panel->edit_service;
+    panel->edit_status = "saving " + service;
+  }
+  run_on_worker<EditSave>(
+      panel, "recipe edit " + service,
+      [paths, service,
+       edits](const std::shared_ptr<Op>& op) -> berth::Result<EditSave> {
+        if (op->cancel.load(std::memory_order_relaxed)) {
+          return berth::Error("recipe edit: cancelled before it was written");
+        }
+        berth::Result<berth::RecipeEditResult> updated =
+            berth::user_recipe_update(paths, service, edits);
+        if (updated.is_err()) {
+          return std::move(updated).error();
+        }
+        berth::Result<Catalog> reloaded = load_catalog(paths);
+        if (reloaded.is_err()) {
+          return berth::with_context(
+              std::move(reloaded).error(),
+              "reloading the catalog after the edit was written");
+        }
+        EditSave save;
+        save.edit = std::move(updated).value();
+        save.diff =
+            berth::render_recipe_edit_diff(save.edit.before, save.edit.after);
+        save.catalog = std::move(reloaded).value();
+        return save;
+      },
+      [](Panel& state, berth::Result<EditSave>&& outcome) {
+        state.edit_running = false;
+        if (outcome.is_err()) {
+          state.edit_error = outcome.error().ctx();
+          state.edit_status = "the edit was NOT saved";
+          return;
+        }
+        EditSave save = std::move(outcome).value();
+        state.edit_saved = true;
+        state.edit_stored_path = save.edit.stored_path;
+        state.edit_diff = std::move(save.diff);
+        state.edit_status = "saved";
+        state.edit_error.clear();
+        state.catalog = std::move(save.catalog);
+        if (state.catalog_cursor >= state.catalog.recipes.size()) {
+          state.catalog_cursor = 0;
+        }
+      });
 }
 
 DraftKey handle_draft_clash_key(Panel& panel, const std::string& key) {

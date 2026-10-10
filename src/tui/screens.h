@@ -16,6 +16,7 @@
 
 #include <ftxui/dom/elements.hpp>
 
+#include "../berth/recipe_edit.h"
 #include "../berth/recipes.h"
 #include "../core/paths.h"
 #include "panel.h"
@@ -62,6 +63,16 @@ void accept_draft(const std::shared_ptr<Panel>& panel,
 
 // Throws the reviewed draft away without storing it.
 void discard_draft(const std::shared_ptr<Panel>& panel);
+
+// Edit an existing USER recipe (stage 4.19+). `edits` comes from the form,
+// already assembled and numerically validated on the render thread
+// (assemble_recipe_edits); this worker calls user_recipe_update — the ONE
+// engine — and reloads the catalog, so the list shows what was just stored.
+// A builtin-only or unknown service is refused by the engine; nothing is
+// written and the error is shown verbatim.
+void start_recipe_edit(const std::shared_ptr<Panel>& panel,
+                       const berth::Paths& paths,
+                       const berth::RecipeEdits& edits);
 
 // The overwrite confirmation. Same shape as the uninstall dialog: the dialog
 // decides, the caller acts.
@@ -122,6 +133,12 @@ void service_action_uninstall(const std::shared_ptr<Panel>& panel,
                                                   ftxui::Element url_input,
                                                   ftxui::Element ref_input,
                                                   ftxui::Element port_input);
+
+// Recipe edit (4.19+). The seven FTXUI Inputs are passed in, in EditField
+// order (start_cmd .. tasks_max), because their Render() belongs to the
+// component tree in app.cpp. The screen only places them.
+[[nodiscard]] ftxui::Element render_edit_screen(
+    const Panel& panel, const ftxui::Elements& edit_inputs);
 
 // What the modal confirmation did with a key. The dialog decides, the caller
 // acts: kConfirmed means "run the uninstall", and nothing else does.

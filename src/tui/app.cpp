@@ -26,6 +26,7 @@
 #include "panel.h"
 #include "screens.h"
 #include "view_deploy.h"
+#include "view_edit.h"
 #include "view_logs.h"
 
 namespace tui {
@@ -95,6 +96,27 @@ class AppComponent final : public ftxui::ComponentBase {
     port_option.placeholder = "auto";
     port_option.on_enter = [this]() { start_selected_deploy(); };
     port_input_ = ftxui::Input(port_option);
+
+    // The seven recipe-edit fields. Same shape as the wizard's three: a bare
+    // Input that only renders text, because the panel draws its own focus
+    // marker (EditField). Numeric fields are text too; assemble_recipe_edits()
+    // parses them loudly on save rather than dropping keystrokes (§12.16).
+    const auto make_edit = [&field_style](const char* placeholder,
+                                          std::string* content) {
+      ftxui::InputOption option;
+      option.transform = field_style;
+      option.content = content;
+      option.placeholder = placeholder;
+      return ftxui::Input(option);
+    };
+    edit_start_cmd_ = make_edit("e.g. {self} --addr 127.0.0.1 --port {port}",
+                                &panel_->edit.start_cmd);
+    edit_health_path_ = make_edit("/", &panel_->edit.health_path);
+    edit_display_name_ = make_edit("display name", &panel_->edit.display_name);
+    edit_description_ = make_edit("one line", &panel_->edit.description);
+    edit_port_ = make_edit("empty = free at deploy", &panel_->edit.port);
+    edit_memory_max_ = make_edit("e.g. 512M", &panel_->edit.memory_max);
+    edit_tasks_max_ = make_edit("e.g. 300", &panel_->edit.tasks_max);
   }
 
   Element OnRender() override {
@@ -203,6 +225,12 @@ class AppComponent final : public ftxui::ComponentBase {
     // mean cancel.
     const bool deploy_tab = tabs()[panel_->tab].tab == Tab::kDeploy;
     if (deploy_tab) {
+      // The edit sub-screen owns the Deploy tab's keys while it is open. It
+      // comes FIRST so Esc releases a field or leaves the screen instead of
+      // quitting, and so j/k cannot move the recipe cursor under the editor.
+      if (handle_edit_key(event, key)) {
+        return true;
+      }
       ftxui::ComponentBase* focused = nullptr;
       {
         std::lock_guard lock(panel_->mutex);
@@ -381,6 +409,16 @@ class AppComponent final : public ftxui::ComponentBase {
   void set_draft_field(DraftField field);
   [[nodiscard]] DraftField current_draft_field();
 
+  // Recipe edit (4.19+), the Deploy tab's 'E'. Returns true when it consumed
+  // the key; 'q' with no field focused falls through to the global quit.
+  bool handle_edit_key(const ftxui::Event& event, const std::string& key);
+  ftxui::ComponentBase* edit_input_for(EditField field);
+  [[nodiscard]] ftxui::Elements edit_input_elements();
+  void set_edit_field(EditField field);
+  void open_edit();
+  void close_edit();
+  void save_edit();
+
   // Enter on the url/ref fields: make the draft. Nothing else happens here —
   // no store, no deploy — because the draft is not the user's yet.
   void submit_draft();
@@ -397,6 +435,14 @@ class AppComponent final : public ftxui::ComponentBase {
   ftxui::Component url_input_;
   ftxui::Component ref_input_;
   ftxui::Component port_input_;
+  // The seven recipe-edit fields, in EditField order.
+  ftxui::Component edit_start_cmd_;
+  ftxui::Component edit_health_path_;
+  ftxui::Component edit_display_name_;
+  ftxui::Component edit_description_;
+  ftxui::Component edit_port_;
+  ftxui::Component edit_memory_max_;
+  ftxui::Component edit_tasks_max_;
 };
 
 void AppComponent::move_cursor(const int delta) {
@@ -474,6 +520,12 @@ void AppComponent::handle_deploy_key(const std::string& key) {
     panel_->catalog_details = !panel_->catalog_details;
     return;
   }
+  if (key == "E") {
+    // Shift-E, because 'e' is already the details toggle. Edits are for USER
+    // recipes only; a builtin is refused on screen, never silently edited.
+    open_edit();
+    return;
+  }
   if (key == "r") {
     refresh_catalog(panel_, panel_->paths);
   }
@@ -519,6 +571,173 @@ void AppComponent::submit_draft() {
   // The keys go back to the screen: the URL is on its way to the worker, and
   // the next thing the user wants is d, s or q — not more typing.
   set_draft_field(DraftField::kNone);
+}
+
+ftxui::ComponentBase* AppComponent::edit_input_for(const EditField field) {
+  switch (field) {
+    case EditField::kStartCmd:
+      return edit_start_cmd_.get();
+    case EditField::kHealthPath:
+      return edit_health_path_.get();
+    case EditField::kDisplayName:
+      return edit_display_name_.get();
+    case EditField::kDescription:
+      return edit_description_.get();
+    case EditField::kPort:
+      return edit_port_.get();
+    case EditField::kMemoryMax:
+      return edit_memory_max_.get();
+    case EditField::kTasksMax:
+      return edit_tasks_max_.get();
+    case EditField::kNone:
+      return nullptr;
+  }
+  return nullptr;
+}
+
+ftxui::Elements AppComponent::edit_input_elements() {
+  return {edit_start_cmd_->Render(),    edit_health_path_->Render(),
+          edit_display_name_->Render(), edit_description_->Render(),
+          edit_port_->Render(),         edit_memory_max_->Render(),
+          edit_tasks_max_->Render()};
+}
+
+void AppComponent::set_edit_field(const EditField field) {
+  {
+    std::lock_guard lock(panel_->mutex);
+    panel_->edit_field = field;
+  }
+  request_render(*panel_);
+}
+
+void AppComponent::open_edit() {
+  bool refused = false;
+  {
+    std::lock_guard lock(panel_->mutex);
+    if (panel_->catalog.recipes.empty() ||
+        panel_->catalog_cursor >= panel_->catalog.recipes.size()) {
+      return;
+    }
+    const RecipeSource source = panel_->catalog.sources[panel_->catalog_cursor];
+    const std::string refusal = edit_refusal_message(source);
+    if (!refusal.empty()) {
+      panel_->edit_error = refusal;
+      panel_->edit_status.clear();
+      refused = true;
+    } else {
+      const berth::Recipe& recipe =
+          panel_->catalog.recipes[panel_->catalog_cursor];
+      panel_->edit_service = recipe.service_name;
+      panel_->edit = edit_fields_from_recipe(recipe);
+      panel_->edit_active = true;
+      panel_->edit_field = EditField::kNone;
+      panel_->edit_saved = false;
+      panel_->edit_stored_path.clear();
+      panel_->edit_diff.clear();
+      panel_->edit_status.clear();
+      panel_->edit_error.clear();
+    }
+  }
+  if (refused) {
+    request_render(*panel_);
+    return;
+  }
+  set_edit_field(EditField::kNone);
+}
+
+void AppComponent::close_edit() {
+  {
+    std::lock_guard lock(panel_->mutex);
+    panel_->edit_active = false;
+    panel_->edit_field = EditField::kNone;
+  }
+  request_render(*panel_);
+}
+
+void AppComponent::save_edit() {
+  berth::RecipeEdits edits;
+  bool refused = false;
+  {
+    std::lock_guard lock(panel_->mutex);
+    if (panel_->edit_running) {
+      return;
+    }
+    const berth::Result<berth::RecipeEdits> assembled =
+        assemble_recipe_edits(panel_->edit);
+    if (assembled.is_err()) {
+      // A bad port/tasks is a loud refusal on the render thread, before any
+      // worker is spawned — exactly like the deploy screen's port field.
+      panel_->edit_error = assembled.error().ctx();
+      panel_->edit_status = "the edit was NOT saved";
+      refused = true;
+    } else {
+      edits = assembled.value();
+      panel_->edit_error.clear();
+    }
+  }
+  if (refused) {
+    request_render(*panel_);
+    return;
+  }
+  start_recipe_edit(panel_, panel_->paths, edits);
+}
+
+bool AppComponent::handle_edit_key(const ftxui::Event& event,
+                                   const std::string& key) {
+  bool active = false;
+  bool running = false;
+  EditField focus = EditField::kNone;
+  {
+    std::lock_guard lock(panel_->mutex);
+    active = panel_->edit_active;
+    running = panel_->edit_running;
+    focus = panel_->edit_field;
+  }
+  if (!active) {
+    return false;
+  }
+  // 'q' is the panel's quit everywhere — but only when a field is NOT focused:
+  // inside a field it is text, and Esc (not q) is the way out, exactly as the
+  // wizard's insert mode works (§12.16).
+  if (focus == EditField::kNone && key == "q") {
+    return false;
+  }
+  if (event == Event::Escape) {
+    if (focus != EditField::kNone) {
+      set_edit_field(EditField::kNone);
+    } else {
+      close_edit();
+    }
+    return true;
+  }
+  if (running) {
+    return true;  // the write is in flight: swallow everything but q
+  }
+  if ((event == Event::Tab || event == Event::Return) &&
+      focus != EditField::kNone) {
+    set_edit_field(next_edit_field(focus));
+    return true;
+  }
+  if (focus != EditField::kNone && key_goes_to_field(event)) {
+    ftxui::ComponentBase* input = edit_input_for(focus);
+    if (input != nullptr) {
+      input->OnEvent(event);
+      return true;
+    }
+  }
+  if (focus == EditField::kNone) {
+    if (key == "i") {
+      set_edit_field(EditField::kStartCmd);
+      return true;
+    }
+    if (key == "s") {
+      save_edit();
+      return true;
+    }
+  }
+  // The edit screen owns every remaining key: no cursor movement, no tab
+  // switch, no accidental deploy while the form is open.
+  return true;
 }
 
 // `delta` > 0 moves one line further back in time. Returns false when the Logs
@@ -651,6 +870,9 @@ Element AppComponent::render_content() {
     case Tab::kCatalog:
       return render_scan_screen(*panel_);
     case Tab::kDeploy:
+      if (panel_->edit_active) {
+        return render_edit_screen(*panel_, edit_input_elements());
+      }
       return render_deploy_screen(*panel_, url_input_->Render(),
                                   ref_input_->Render(), port_input_->Render());
     case Tab::kServices:

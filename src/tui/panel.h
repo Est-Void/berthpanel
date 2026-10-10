@@ -40,6 +40,7 @@
 #include "ring.h"
 #include "view_catalog.h"
 #include "view_deploy.h"
+#include "view_edit.h"
 #include "view_logs.h"
 #include "view_scan.h"
 #include "view_services.h"
@@ -130,6 +131,22 @@ struct Panel {
   bool draft_clash_confirming = false;
   // What the clash modal does after 'y': store AND deploy, or store only.
   bool draft_pending_deploy = false;
+
+  // Recipe edit (stage 4.19+/4.21 TUI): edit a USER recipe's values without
+  // hand-editing JSON. `edit_active` is the sub-screen; `edit_field` is the
+  // insert-mode focus, kNone until 'i' (§12.16). `edit` is the view model's
+  // form, so the renderer and the worker agree on one shape. A builtin recipe
+  // never sets these: the refusal is a status line on the Deploy screen.
+  bool edit_active = false;
+  EditField edit_field = EditField::kNone;
+  EditFields edit;
+  std::string edit_service;
+  bool edit_running = false;
+  bool edit_saved = false;
+  std::filesystem::path edit_stored_path;
+  std::string edit_diff;
+  std::string edit_status;
+  std::string edit_error;
 
   // My Services (6.4)
   bool services_loading = false;
