@@ -27,8 +27,23 @@ namespace tui {
 // reads; still a worker, because the rule "nothing blocks the render thread"
 // is absolute and a rule with an exception is a rule without one. The RECIPE
 // LIST itself lives on the Deploy screen, where a recipe becomes an action.
+// `background` is the silent auto-refresh tick: it takes the same in-flight
+// guard but touches no status line and no user-visible loading flag, so a
+// periodic refresh can never clobber an action's verdict or flicker the
+// empty-state text.
 void refresh_catalog(const std::shared_ptr<Panel>& panel,
-                     const berth::Paths& paths);
+                     const berth::Paths& paths, bool background = false);
+
+// Removes the SELECTED user recipe from the catalog: calls the ENGINE
+// `user_recipe_remove(paths, service_name)` on a worker, then reloads the
+// catalog in the SAME worker so the list can never race the write. It does
+// NOT touch a deployed service — that is uninstalled on the My Services tab.
+// The builtin refusal is decided on the render thread (recipe_removal), so
+// this is only reached for a user recipe. The confirmation is UI; the removal
+// is not, exactly like the uninstall dialog.
+void remove_user_recipe(const std::shared_ptr<Panel>& panel,
+                        const berth::Paths& paths,
+                        const std::string& service_name);
 
 // Deploy (6.3): ONE deploy at a time, on a worker, with the engine's cancel
 // flag behind the panel's. `forced_port` 0 means "ask the recipe, then pick a
@@ -96,9 +111,10 @@ void refresh_logs(const std::shared_ptr<Panel>& panel,
                   const berth::Paths& paths);
 
 // My Services (6.4): the registry plus one bounded `systemctl is-active` per
-// row. Explicitly requested by the user, never polled from the render loop.
+// row. Requested by the user (Enter/r) or by the periodic ticker; never polled
+// from the render loop. `background` is the silent tick (see refresh_catalog).
 void refresh_services(const std::shared_ptr<Panel>& panel,
-                      const berth::Paths& paths);
+                      const berth::Paths& paths, bool background = false);
 
 // start / stop / uninstall for the selected row. `uninstall` takes the
 // confirmation decision as data, because the dialog is UI and this is not.

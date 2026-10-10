@@ -15,6 +15,7 @@
 
 #include "../berth/service_ops.h"
 #include "../util/result.h"
+#include "chrome.h"  // KeyHint: the shared keys+words structured hint
 
 namespace tui {
 
@@ -57,7 +58,8 @@ namespace tui {
 [[nodiscard]] std::vector<std::string> confirm_uninstall_lines(
     const berth::ServiceRow& row);
 
-// One line naming the keys this screen acts on.
-[[nodiscard]] std::vector<std::string> services_key_hints();
+// One line per group naming the keys this screen acts on. Structured as
+// keys+words so the renderer colours only the keys.
+[[nodiscard]] std::vector<KeyHint> services_key_hints();
 
 }  // namespace tui

@@ -43,6 +43,18 @@ bool contains(const std::vector<std::string>& haystack,
   return false;
 }
 
+// The structured hints: `needle` may name either the key or the words.
+bool hint_contains(const std::vector<tui::KeyHint>& hints,
+                   const std::string_view needle) {
+  for (const tui::KeyHint& hint : hints) {
+    if (hint.keys.find(needle) != std::string_view::npos ||
+        hint.words.find(needle) != std::string_view::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 TEST(edit_focus_cycle_visits_every_field_then_wraps) {
@@ -237,21 +249,24 @@ TEST(edit_saved_lines_name_the_file_and_the_change) {
 
 TEST(edit_key_hints_follow_the_state_they_are_in) {
   // The form with no field focused: enter the fields, save, or leave.
-  const std::vector<std::string> idle =
+  const std::vector<tui::KeyHint> idle =
       tui::edit_key_hints(tui::EditField::kNone, false);
-  CHECK(contains(idle, "i  edit the fields"));
-  CHECK(contains(idle, "s  save the edit"));
-  CHECK(contains(idle, "Esc  leave the edit screen"));
+  CHECK(hint_contains(idle, "i"));
+  CHECK(hint_contains(idle, "edit the fields"));
+  CHECK(hint_contains(idle, "save the edit"));
+  CHECK(hint_contains(idle, "leave the edit screen"));
 
   // A field focused: Tab cycles, Esc releases.
-  const std::vector<std::string> typing =
+  const std::vector<tui::KeyHint> typing =
       tui::edit_key_hints(tui::EditField::kStartCmd, false);
-  CHECK(contains(typing, "Tab  next field"));
-  CHECK(contains(typing, "Esc  release the field"));
+  CHECK(hint_contains(typing, "Tab"));
+  CHECK(hint_contains(typing, "next field"));
+  CHECK(hint_contains(typing, "Esc"));
+  CHECK(hint_contains(typing, "release the field"));
 
   // In flight: the fields are locked and only quitting is on offer.
-  const std::vector<std::string> running =
+  const std::vector<tui::KeyHint> running =
       tui::edit_key_hints(tui::EditField::kNone, true);
-  CHECK(contains(running, "being written"));
-  CHECK(!contains(running, "s  save"));
+  CHECK(hint_contains(running, "being written"));
+  CHECK(!hint_contains(running, "save"));
 }

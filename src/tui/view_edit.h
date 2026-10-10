@@ -21,6 +21,7 @@
 #include "../berth/recipe_edit.h"
 #include "../berth/recipes.h"
 #include "../util/result.h"
+#include "chrome.h"  // KeyHint: the shared keys+words structured hint
 #include "view_catalog.h"
 
 namespace tui {
@@ -91,8 +92,9 @@ struct EditFields {
     std::string_view diff, const std::filesystem::path& stored_path);
 
 // The keys this screen acts on right now, one line per group. `running` locks
-// the fields while the write is in flight.
-[[nodiscard]] std::vector<std::string> edit_key_hints(EditField focus,
-                                                      bool running);
+// the fields while the write is in flight. Structured as keys+words so the
+// renderer colours only the keys.
+[[nodiscard]] std::vector<KeyHint> edit_key_hints(EditField focus,
+                                                  bool running);
 
 }  // namespace tui

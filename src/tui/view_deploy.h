@@ -24,6 +24,7 @@
 #include "../berth/deploy.h"
 #include "../berth/wizard.h"
 #include "../util/result.h"
+#include "chrome.h"  // KeyHint: the shared keys+words structured hint
 
 namespace tui {
 
@@ -110,11 +111,17 @@ enum class DraftField {
     const std::filesystem::path& recipe_path);
 
 // The keys this screen acts on right now. One line per group; the footer keeps
-// the global hints, this list is the screen's own.
-[[nodiscard]] std::vector<std::string> deploy_key_hints(bool running);
-[[nodiscard]] std::vector<std::string> draft_key_hints(DraftField focus,
-                                                       bool running,
-                                                       bool ready);
+// the global hints, this list is the screen's own. Structured as keys+words so
+// the renderer colours only the keys.
+[[nodiscard]] std::vector<KeyHint> deploy_key_hints(bool running);
+[[nodiscard]] std::vector<KeyHint> draft_key_hints(DraftField focus,
+                                                   bool running, bool ready);
+
+// The line under the three text fields. `i` opens the fields for a NEW deploy
+// (a pasted GitHub URL) — it is NOT recipe editing (that is E). `locked` is
+// true while a worker is in flight and the fields cannot take keys. Pure so
+// the label is assertable without a terminal.
+[[nodiscard]] KeyHint deploy_fields_hint(bool locked);
 
 // What the screen shows before anything was deployed: which recipe, and which
 // port the deploy would use.

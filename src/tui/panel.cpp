@@ -125,10 +125,13 @@ Element header_bar(const berth::NetSnapshot& net) {
   const std::vector<std::string>& sign = sign_lines();
   Elements lines;
   for (std::size_t i = 0; i < sign.size(); ++i) {
+    // The left margin sits BEFORE the mark so it is not flush against the
+    // border; sign_lines() is untouched (its own columns are asserted).
+    std::string glyph(kSignLeftMargin, ' ');
+    glyph.append(sign[i]);
     // All three sign lines get the same total width, so the wordmark and the
     // tagline start in the same column.
-    std::string glyph = sign[i];
-    pad_to_width(glyph, kSignWidth);
+    pad_to_width(glyph, kSignLeftMargin + kSignWidth);
     glyph.append(kSignGap, ' ');
 
     Elements row;
@@ -153,8 +156,8 @@ Element header_bar(const berth::NetSnapshot& net) {
   // lives on the Logs screen, where there is room for it.
   const std::string banner = net_banner(net);
   if (!banner.empty()) {
-    lines.push_back(ftxui::text("  " + banner) | ftxui::bold |
-                    ftxui::color(Color::Yellow));
+    lines.push_back(ftxui::text(std::string(kSignLeftMargin, ' ') + banner) |
+                    ftxui::bold | ftxui::color(Color::Yellow));
   }
   return ftxui::vbox(std::move(lines)) |
          ftxui::borderStyled(ftxui::ROUNDED, Color::Cyan);
@@ -204,6 +207,28 @@ Element footer_bar() {
                     ftxui::color(accent_color(hints[i].accent)));
     parts.push_back(ftxui::text(" " + std::string(hints[i].words)) |
                     ftxui::dim);
+  }
+  return ftxui::hbox(std::move(parts));
+}
+
+Element key_hint(const KeyHint& hint) {
+  if (hint.keys.empty()) {
+    return ftxui::text(std::string(hint.words)) | ftxui::dim;
+  }
+  Elements parts;
+  parts.push_back(ftxui::text(std::string(hint.keys)) | ftxui::bold |
+                  ftxui::color(accent_color(kKeyAccent)));
+  parts.push_back(ftxui::text("  " + std::string(hint.words)) | ftxui::dim);
+  return ftxui::hbox(std::move(parts));
+}
+
+Element key_hint_line(const std::vector<KeyHint>& hints) {
+  Elements parts;
+  for (std::size_t i = 0; i < hints.size(); ++i) {
+    if (i > 0) {
+      parts.push_back(ftxui::text(" \xc2\xb7 ") | ftxui::dim);
+    }
+    parts.push_back(key_hint(hints[i]));
   }
   return ftxui::hbox(std::move(parts));
 }

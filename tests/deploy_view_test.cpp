@@ -48,6 +48,18 @@ bool contains(const std::vector<std::string>& haystack,
   return false;
 }
 
+// The structured hints: `needle` may name either the key or the words.
+bool hint_contains(const std::vector<tui::KeyHint>& hints,
+                   const std::string_view needle) {
+  for (const tui::KeyHint& hint : hints) {
+    if (hint.keys.find(needle) != std::string_view::npos ||
+        hint.words.find(needle) != std::string_view::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 TEST(deploy_stage_parser_names_every_stage_the_engine_logs) {
@@ -296,24 +308,26 @@ TEST(draft_stored_says_the_draft_is_on_disk_before_it_deploys) {
 
 TEST(draft_key_hints_follow_the_state_they_are_in) {
   // Running: cancel is the only thing on offer.
-  const std::vector<std::string> running =
+  const std::vector<tui::KeyHint> running =
       tui::draft_key_hints(tui::DraftField::kNone, true, false);
-  CHECK(contains(running, "c  cancel"));
-  CHECK(contains(running, "nothing is stored"));
-  CHECK(!contains(running, "paste a GitHub URL"));
+  CHECK(hint_contains(running, "cancel"));
+  CHECK(hint_contains(running, "nothing is stored"));
+  CHECK(!hint_contains(running, "paste a GitHub URL"));
 
   // A field focused: the field's own keys, and the way out.
-  const std::vector<std::string> typing =
+  const std::vector<tui::KeyHint> typing =
       tui::draft_key_hints(tui::DraftField::kUrl, false, false);
-  CHECK(contains(typing, "Tab  next field"));
-  CHECK(contains(typing, "Esc  leave the fields"));
+  CHECK(hint_contains(typing, "Tab"));
+  CHECK(hint_contains(typing, "next field"));
+  CHECK(hint_contains(typing, "Esc"));
+  CHECK(hint_contains(typing, "leave the fields"));
 
   // A draft waiting: accept, store-only, or start over.
-  const std::vector<std::string> review =
+  const std::vector<tui::KeyHint> review =
       tui::draft_key_hints(tui::DraftField::kNone, false, true);
-  CHECK(contains(review, "d  store the draft and deploy it"));
-  CHECK(contains(review, "s  store the draft only"));
-  CHECK(contains(review, "i  paste another URL"));
+  CHECK(hint_contains(review, "store the draft and deploy it"));
+  CHECK(hint_contains(review, "store the draft only"));
+  CHECK(hint_contains(review, "paste another URL"));
 }
 
 TEST(deploy_cancellation_says_the_journal_entry_stays) {
@@ -329,16 +343,32 @@ TEST(deploy_cancellation_says_the_journal_entry_stays) {
 }
 
 TEST(deploy_hints_name_the_launch_key_and_the_cancel_key) {
-  const std::vector<std::string> idle = tui::deploy_key_hints(false);
-  CHECK(contains(idle, "Enter"));
-  CHECK(contains(idle, "e  recipe details"));
+  const std::vector<tui::KeyHint> idle = tui::deploy_key_hints(false);
+  CHECK(hint_contains(idle, "Enter"));
+  CHECK(hint_contains(idle, "recipe details"));
+  // 'i' opens a NEW deploy URL — it is not recipe editing (that is E).
+  CHECK(hint_contains(idle, "type a new GitHub URL"));
+  // Removal of the selected recipe is advertised, with the builtin refusal.
+  CHECK(hint_contains(idle, "remove the selected USER recipe"));
   // While idle, 'c' would be a letter in the port field, so it must not be
   // advertised as a cancel key there.
-  CHECK(!contains(idle, "cancel"));
+  CHECK(!hint_contains(idle, "cancel"));
 
-  const std::vector<std::string> running = tui::deploy_key_hints(true);
-  CHECK(contains(running, "c  cancel"));
-  CHECK(contains(running, "q  quit"));
+  const std::vector<tui::KeyHint> running = tui::deploy_key_hints(true);
+  CHECK(hint_contains(running, "cancel"));
+  CHECK(hint_contains(running, "quit"));
+}
+
+TEST(deploy_field_hint_calls_i_a_new_deploy_not_an_edit) {
+  // The regression this pins: "i edit" read as recipe editing, which is E.
+  const tui::KeyHint idle = tui::deploy_fields_hint(false);
+  CHECK(idle.keys == "i");
+  CHECK(idle.words.find("type a new deploy URL") != std::string_view::npos);
+  CHECK(idle.words.find("edit") == std::string_view::npos);
+
+  const tui::KeyHint locked = tui::deploy_fields_hint(true);
+  CHECK(locked.keys.empty());
+  CHECK(locked.words.find("locked") != std::string_view::npos);
 }
 
 TEST(deploy_outcome_lines_show_the_port_the_unit_and_the_data) {

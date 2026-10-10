@@ -25,9 +25,11 @@
 #include "chrome.h"
 #include "panel.h"
 #include "screens.h"
+#include "view_catalog.h"
 #include "view_deploy.h"
 #include "view_edit.h"
 #include "view_logs.h"
+#include "view_refresh.h"
 
 namespace tui {
 
@@ -216,6 +218,37 @@ class AppComponent final : public ftxui::ComponentBase {
         quit(panel_->ops.cancel_all());
       } else if (uninstall_decision == UninstallKey::kConfirmed) {
         service_action_uninstall(panel_, panel_->paths, uninstall_target);
+      }
+      return true;
+    }
+
+    // Removing a recipe is a delete, so it asks first, and the dialog says
+    // what it deletes and what it does NOT (a deployed service). It is the
+    // LAST modal checked so a more destructive question is never buried.
+    bool remove_confirming = false;
+    RemoveConfirm remove_decision = RemoveConfirm::kEaten;
+    std::string remove_target;
+    {
+      std::lock_guard lock(panel_->mutex);
+      if (panel_->confirming_recipe_remove) {
+        remove_confirming = true;
+        // Escape is a Special event, so `key` is empty for it; the gate names
+        // it "\x1b" like the other dialogs do.
+        remove_decision =
+            recipe_remove_key(event == Event::Escape ? "\x1b" : key);
+        remove_target = panel_->recipe_remove_target;
+        // The dialog DECIDED: close it before the caller acts, so a slow
+        // worker cannot leave the question on screen over the outcome.
+        if (remove_decision != RemoveConfirm::kEaten) {
+          panel_->confirming_recipe_remove = false;
+        }
+      }
+    }
+    if (remove_confirming) {
+      if (remove_decision == RemoveConfirm::kConfirmed) {
+        remove_user_recipe(panel_, panel_->paths, remove_target);
+      } else if (remove_decision == RemoveConfirm::kQuit) {
+        quit(panel_->ops.cancel_all());
       }
       return true;
     }
@@ -450,10 +483,12 @@ class AppComponent final : public ftxui::ComponentBase {
 
 void AppComponent::move_cursor(const int delta) {
   std::lock_guard lock(panel_->mutex);
-  // A confirm dialog is about a NAMED service ("uninstall berthpanel-memos?").
-  // Moving the highlight underneath it makes the screen offer a service the
-  // user is no longer looking at, so the dialog freezes the cursor.
-  if (panel_->confirming_uninstall || panel_->confirming_kill) {
+  // A confirm dialog is about a NAMED service or recipe ("uninstall
+  // berthpanel-memos?"). Moving the highlight underneath it makes the screen
+  // offer the user something they are no longer looking at, so the dialog
+  // freezes the cursor.
+  if (panel_->confirming_uninstall || panel_->confirming_kill ||
+      panel_->confirming_recipe_remove) {
     return;
   }
   std::size_t* cursor = nullptr;
@@ -527,6 +562,33 @@ void AppComponent::handle_deploy_key(const std::string& key) {
     // Shift-E, because 'e' is already the details toggle. Edits are for USER
     // recipes only; a builtin is refused on screen, never silently edited.
     open_edit();
+    return;
+  }
+  if (key == "x") {
+    // Removal is Deploy-tab only, and never while a draft or a worker holds
+    // the screen: the recipe it names must be the one the user is looking at.
+    std::lock_guard lock(panel_->mutex);
+    if (panel_->draft_ready || panel_->draft_running || panel_->draft_storing ||
+        panel_->edit_active || panel_->catalog_loading ||
+        panel_->catalog_auto || panel_->recipe_removing ||
+        panel_->deploy_in_flight) {
+      return;
+    }
+    if (panel_->catalog.recipes.empty() ||
+        panel_->catalog_cursor >= panel_->catalog.recipes.size()) {
+      return;
+    }
+    const RecipeSource source = panel_->catalog.sources[panel_->catalog_cursor];
+    const RecipeRemoval removal = recipe_removal(source);
+    if (!removal.removable) {
+      // A builtin is refused with a clear message, on screen — never a silent
+      // no-op and never a delete.
+      panel_->catalog_status = removal.refusal;
+      return;
+    }
+    panel_->recipe_remove_target =
+        panel_->catalog.recipes[panel_->catalog_cursor].service_name;
+    panel_->confirming_recipe_remove = true;
     return;
   }
   if (key == "r") {
@@ -825,9 +887,10 @@ void AppComponent::handle_services_key(const std::string& key) {
     std::lock_guard lock(panel_->mutex);
     // Nothing selected, an action already running, or a refresh in flight (the
     // rows are mid-replace and the cursor may point at a row that is gone): a
-    // key press must not queue a subprocess against stale data.
+    // key press must not queue a subprocess against stale data. A background
+    // tick counts: its apply could otherwise overwrite the action's re-list.
     if (panel_->rows.empty() || !panel_->action.empty() ||
-        panel_->services_loading) {
+        panel_->services_loading || panel_->services_auto) {
       return;
     }
     if (panel_->services_cursor >= panel_->rows.size()) {
@@ -888,6 +951,61 @@ Element AppComponent::render_content() {
   abort_bug("unknown tab in render_content");
 }
 
+// The periodic list ticker (My Services + the Deploy catalog). One detached
+// thread waking on a short poll; it asks the PURE auto_refresh_due() before it
+// spawns anything, so a tick can never overlap an in-flight refresh (the
+// workers' own loading flags are the second line of defence) and never runs
+// after q/Ctrl-C has started the unwind (§6.7). The tab SCOPES it: only the
+// list the user is actually looking at is refreshed, and each refresh reuses
+// its cursor-preserving path, so the selection never jumps.
+void start_auto_refresh(const std::shared_ptr<Panel>& panel) {
+  std::thread ticker([panel]() {
+    // Wake often enough that a quit is not held by the sleep; the DECISION
+    // still uses the full cadence through since_last.
+    constexpr auto kTickWake = std::chrono::milliseconds(250);
+    auto last = std::chrono::steady_clock::now();
+    while (!panel->shutting_down.load(std::memory_order_relaxed)) {
+      std::this_thread::sleep_for(kTickWake);
+      if (panel->shutting_down.load(std::memory_order_relaxed)) {
+        return;
+      }
+      const auto now = std::chrono::steady_clock::now();
+      const auto since =
+          std::chrono::duration_cast<std::chrono::milliseconds>(now - last);
+      bool services_tab = false;
+      bool deploy_tab = false;
+      bool services_busy = false;
+      bool catalog_busy = false;
+      {
+        std::lock_guard lock(panel->mutex);
+        const Tab active = tabs()[panel->tab].tab;
+        services_tab = active == Tab::kServices;
+        deploy_tab = active == Tab::kDeploy;
+        // A dialog freezes the cursor, so a refresh under it is a refresh the
+        // user cannot see change; treat it as busy too.
+        services_busy = panel->services_loading || panel->services_auto ||
+                        !panel->action.empty() || panel->confirming_uninstall ||
+                        panel->confirming_kill;
+        catalog_busy = panel->catalog_loading || panel->catalog_auto ||
+                       panel->recipe_removing || panel->edit_active ||
+                       panel->edit_running || panel->confirming_recipe_remove ||
+                       panel->deploy_in_flight || panel->draft_running ||
+                       panel->draft_ready;
+      }
+      if (services_tab &&
+          auto_refresh_due({services_tab, services_busy, false, since})) {
+        refresh_services(panel, panel->paths, /*background=*/true);
+        last = now;
+      } else if (deploy_tab &&
+                 auto_refresh_due({deploy_tab, catalog_busy, false, since})) {
+        refresh_catalog(panel, panel->paths, /*background=*/true);
+        last = now;
+      }
+    }
+  });
+  ticker.detach();
+}
+
 // SIGINT/SIGTERM are the only thing that can interrupt a quit from outside,
 // and they arrive as a flag — there is no "panel-wide cancel flag" any more,
 // because a flag nothing polls is exactly the §11 bug. The watcher asks for the
@@ -946,6 +1064,7 @@ int run_tui(const berth::Paths& paths) {
 
   auto app = std::make_shared<AppComponent>(panel);
   app->start();
+  start_auto_refresh(panel);
   start_cancel_watcher(panel, signalled);
   screen.Loop(app);
 

@@ -18,6 +18,7 @@
 #include "../berth/deploy.h"
 #include "../berth/recipe_edit.h"
 #include "../berth/service_ops.h"
+#include "../berth/userrecipes.h"
 #include "../berth/wizard.h"
 #include "../core/netstatus.h"
 #include "../util/result.h"
@@ -283,6 +284,17 @@ Element render_deploy_screen(const Panel& panel, ftxui::Element url_input,
         draft_clash_lines(panel.draft_clash, panel.draft.commit),
         Color::Yellow);
   }
+  if (panel.confirming_recipe_remove) {
+    // The real path, derived the same way the engine's recipe_file() does, so
+    // the dialog names the file it is about to delete (never a hand-typed
+    // XDG default that could drift, §11).
+    const std::string recipe_path =
+        (panel.paths.recipes_dir / (panel.recipe_remove_target + ".json"))
+            .string();
+    return boxed_dialog(
+        recipe_remove_confirm_lines(panel.recipe_remove_target, recipe_path),
+        Color::Red);
+  }
   const bool drafting = panel.draft_running || panel.draft_ready;
   Elements out;
   out.push_back(ftxui::text("DEPLOY") | ftxui::bold |
@@ -312,6 +324,14 @@ Element render_deploy_screen(const Panel& panel, ftxui::Element url_input,
   }
   out.push_back(ftxui::hbox(std::move(status)) | ftxui::dim);
   out.push_back(ftxui::separator());
+
+  // The catalog action's verdict (a recipe removed, or why it could not be).
+  // A refusal to remove a builtin also lands here.
+  if (!panel.catalog_status.empty()) {
+    const bool bad = panel.catalog_status.rfind("could not", 0) == 0;
+    out.push_back(ftxui::text("  " + panel.catalog_status) |
+                  ftxui::color(bad ? Color::Red : Color::Green));
+  }
 
   // A refused edit (a builtin recipe) is a status line, not a modal: the user
   // has not lost the screen and can pick a user recipe and press E again.
@@ -376,10 +396,8 @@ Element render_deploy_screen(const Panel& panel, ftxui::Element url_input,
       row.push_back(fields[i]);
       out.push_back(ftxui::hbox(std::move(row)) | ftxui::flex);
     }
-    out.push_back(locked ? ftxui::text("  fields are locked while work is in "
-                                       "flight")
-                         : ftxui::text("  i  edit  ·  empty port = the "
-                                       "recipe's default or a free one"));
+    out.push_back(
+        ftxui::hbox({ftxui::text("  "), key_hint(deploy_fields_hint(locked))}));
   }
   out.push_back(ftxui::separator());
 
@@ -448,15 +466,15 @@ Element render_deploy_screen(const Panel& panel, ftxui::Element url_input,
                            drafting ? kDraftTailRows : kDeployTailRows,
                            Color::Cyan));
   out.push_back(ftxui::separator());
-  const std::vector<std::string> hints =
+  const std::vector<KeyHint> hints =
       panel.draft_field != DraftField::kNone || panel.draft_running ||
               panel.draft_ready
           ? draft_key_hints(panel.draft_field, panel.draft_running,
                             panel.draft_ready)
           : deploy_key_hints(
                 panel.deploy_running.load(std::memory_order_relaxed));
-  for (const std::string& hint : hints) {
-    out.push_back(ftxui::paragraph(hint) | ftxui::dim);
+  for (const KeyHint& hint : hints) {
+    out.push_back(key_hint(hint));
   }
   return ftxui::vbox(std::move(out)) | ftxui::flex;
 }
@@ -493,8 +511,11 @@ Element render_edit_screen(const Panel& panel,
     out.push_back(ftxui::hbox(std::move(row)) | ftxui::flex);
   }
   out.push_back(
-      locked ? ftxui::text("  fields are locked while the write is in flight")
-             : ftxui::text("  i  edit  ·  Tab  next field  ·  s  save"));
+      locked ? key_hint(KeyHint{"",
+                                "fields are locked while the write "
+                                "is in flight"})
+             : key_hint_line(
+                   {{"i", "edit"}, {"Tab", "next field"}, {"s", "save"}}));
   out.push_back(ftxui::separator());
 
   if (panel.edit_saved) {
@@ -509,9 +530,9 @@ Element render_edit_screen(const Panel& panel,
     }
   }
   out.push_back(ftxui::separator());
-  for (const std::string& hint :
+  for (const KeyHint& hint :
        edit_key_hints(panel.edit_field, panel.edit_running)) {
-    out.push_back(ftxui::paragraph(hint) | ftxui::dim);
+    out.push_back(key_hint(hint));
   }
   return ftxui::vbox(std::move(out)) | ftxui::flex;
 }
@@ -519,13 +540,17 @@ Element render_edit_screen(const Panel& panel,
 // --- Catalog (6.2) ---------------------------------------------------------
 
 void refresh_catalog(const std::shared_ptr<Panel>& panel,
-                     const berth::Paths& paths) {
+                     const berth::Paths& paths, const bool background) {
   {
     std::lock_guard lock(panel->mutex);
-    if (panel->catalog_loading) {
+    if (panel->catalog_loading || panel->catalog_auto) {
       return;
     }
-    panel->catalog_loading = true;
+    if (background) {
+      panel->catalog_auto = true;
+    } else {
+      panel->catalog_loading = true;
+    }
     panel->catalog_error.clear();
   }
   run_on_worker<Catalog>(
@@ -541,6 +566,7 @@ void refresh_catalog(const std::shared_ptr<Panel>& panel,
       },
       [](Panel& state, berth::Result<Catalog>&& loaded) {
         state.catalog_loading = false;
+        state.catalog_auto = false;
         if (loaded.is_err()) {
           state.catalog_error = loaded.error().ctx();
           state.catalog = Catalog{};
@@ -551,6 +577,58 @@ void refresh_catalog(const std::shared_ptr<Panel>& panel,
         if (state.catalog_cursor >= state.catalog.recipes.size()) {
           state.catalog_cursor = 0;
         }
+      });
+}
+
+void remove_user_recipe(const std::shared_ptr<Panel>& panel,
+                        const berth::Paths& paths,
+                        const std::string& service_name) {
+  {
+    std::lock_guard lock(panel->mutex);
+    // Never overlap the auto-refresh or a second removal: both mutate the same
+    // list and cursor, and a delete racing a reload is the §11 stale-row bug.
+    if (panel->recipe_removing || panel->catalog_loading ||
+        panel->catalog_auto) {
+      return;
+    }
+    panel->recipe_removing = true;
+    panel->catalog_status = "removing the recipe " + service_name + "...";
+  }
+  run_on_worker<Catalog>(
+      panel, "recipe remove " + service_name,
+      [paths,
+       service_name](const std::shared_ptr<Op>& op) -> berth::Result<Catalog> {
+        if (op->cancel.load(std::memory_order_relaxed)) {
+          return berth::Error("recipe remove: cancelled before it ran");
+        }
+        const berth::Result<bool> removed =
+            berth::user_recipe_remove(paths, service_name);
+        if (removed.is_err()) {
+          return std::move(removed).error();
+        }
+        // The reload happens in the SAME worker, after the write: the list can
+        // never show what the removal did not do.
+        berth::Result<Catalog> reloaded = load_catalog(paths);
+        if (reloaded.is_err()) {
+          return berth::with_context(std::move(reloaded).error(),
+                                     "reloading the catalog after the removal");
+        }
+        return reloaded;
+      },
+      [service_name](Panel& state, berth::Result<Catalog>&& loaded) {
+        state.recipe_removing = false;
+        state.confirming_recipe_remove = false;
+        if (loaded.is_err()) {
+          state.catalog_status =
+              "could not remove " + service_name + ": " + loaded.error().ctx();
+          return;
+        }
+        state.catalog = std::move(loaded).value();
+        if (state.catalog_cursor >= state.catalog.recipes.size()) {
+          state.catalog_cursor = 0;
+        }
+        state.catalog_status = "removed the recipe " + service_name +
+                               " (a deployed service, if any, is unchanged)";
       });
 }
 
@@ -649,7 +727,7 @@ Element render_scan_screen(const Panel& panel) {
   out.push_back(scan_section("PORTS IN USE", scan_port_lines(panel.scan)));
   out.push_back(scan_section("YOUR SERVICES", scan_service_lines(panel.scan)));
   out.push_back(scan_section("NETWORK", scan_network_lines(panel.scan)));
-  out.push_back(ftxui::paragraph("r  run the scan again") | ftxui::dim);
+  out.push_back(key_hint(KeyHint{"r", "run the scan again"}));
   return ftxui::vbox(std::move(out)) | ftxui::flex;
 }
 
@@ -1072,23 +1150,34 @@ Element render_logs_screen(const Panel& panel) {
                              kLogVisibleRows, Color::Yellow));
   }
   out.push_back(ftxui::separator());
-  out.push_back(ftxui::paragraph("1 2 3  switch log  ·  r  reload  ·  "
-                                 "↑↓ scroll  ·  End pinned to the newest") |
-                ftxui::dim);
+  out.push_back(key_hint_line({{"1 2 3", "switch log"},
+                               {"r", "reload"},
+                               {"\xe2\x86\x91\xe2\x86\x93", "scroll"},
+                               {"End", "pinned to the newest"}}));
   return ftxui::vbox(std::move(out)) | ftxui::flex;
 }
 
 // --- My Services (6.4) ----------------------------------------------------
 
 void refresh_services(const std::shared_ptr<Panel>& panel,
-                      const berth::Paths& paths) {
+                      const berth::Paths& paths, const bool background) {
   {
     std::lock_guard lock(panel->mutex);
-    if (panel->services_loading || !panel->action.empty()) {
+    // An action owns the rows until its own re-list lands: a refresh must not
+    // race it (the §11 stale-row bug). One guard covers foreground and
+    // background so the two can never overlap either.
+    if (panel->services_loading || panel->services_auto ||
+        !panel->action.empty()) {
       return;
     }
-    panel->services_loading = true;
-    panel->services_status = "querying systemctl --user is-active...";
+    if (background) {
+      // Silent: no "querying..." status, and no user-visible loading flag, so
+      // a tick cannot clobber an action's verdict or flicker the screen.
+      panel->services_auto = true;
+    } else {
+      panel->services_loading = true;
+      panel->services_status = "querying systemctl --user is-active...";
+    }
   }
   run_on_worker<std::vector<berth::ServiceRow>>(
       panel, "service refresh",
@@ -1097,6 +1186,7 @@ void refresh_services(const std::shared_ptr<Panel>& panel,
       },
       [](Panel& state, berth::Result<std::vector<berth::ServiceRow>>&& rows) {
         state.services_loading = false;
+        state.services_auto = false;
         if (rows.is_err()) {
           state.services_status = rows.error().ctx();
           return;
@@ -1151,8 +1241,12 @@ void service_action(const std::shared_ptr<Panel>& panel,
   berth::Paths paths;
   {
     std::lock_guard lock(panel->mutex);
-    if (!panel->action.empty()) {
-      return;  // one action at a time: a second press is a no-op, not a race
+    // One action at a time, and never against rows a refresh is mid-replace:
+    // a second press is a no-op, not a race. A background tick counts too, or
+    // its apply could land after the action's re-list and show stale rows.
+    if (!panel->action.empty() || panel->services_loading ||
+        panel->services_auto) {
+      return;
     }
     panel->action = label;
     paths = panel->paths;
@@ -1231,7 +1325,8 @@ void service_action_freeze(const std::shared_ptr<Panel>& panel,
   bool freezing = true;
   {
     std::lock_guard lock(panel->mutex);
-    if (!panel->action.empty()) {
+    if (!panel->action.empty() || panel->services_loading ||
+        panel->services_auto) {
       return;
     }
     for (const berth::ServiceRow& row : panel->rows) {
@@ -1310,8 +1405,8 @@ Element render_services_screen(const Panel& panel) {
                             kVisibleRows - 1));
   }
   out.push_back(ftxui::separator());
-  for (const std::string& hint : services_key_hints()) {
-    out.push_back(ftxui::paragraph(hint) | ftxui::dim);
+  for (const KeyHint& hint : services_key_hints()) {
+    out.push_back(key_hint(hint));
   }
   return ftxui::vbox(std::move(out)) | ftxui::flex;
 }

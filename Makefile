@@ -101,6 +101,7 @@ LIB_SRC := \
 	src/tui/view_catalog.cpp \
 	src/tui/view_deploy.cpp \
 	src/tui/view_edit.cpp \
+	src/tui/view_refresh.cpp \
 	src/tui/view_scan.cpp \
 	src/tui/view_logs.cpp \
 	src/tui/view_services.cpp
@@ -180,6 +181,7 @@ TEST_SRC := \
 	tests/deploy_view_test.cpp \
 	tests/tui_view_test.cpp \
 	tests/edit_view_test.cpp \
+	tests/refresh_view_test.cpp \
 	tests/serve_test.cpp \
 	tests/status_test.cpp \
 	tests/proxy_test.cpp \

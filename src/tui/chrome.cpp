@@ -23,9 +23,9 @@ constexpr std::array<TabSpec, kTabCount> kTabs{{
 // The brand mark. Centre column 2 on all three lines — asserted by the test,
 // because a shift is invisible in review and obvious on screen.
 constexpr std::array<FooterHint, 3> kFooterHints{{
-    {"\xe2\x86\x91\xe2\x86\x93", "select", "cyan"},  // ↑↓
-    {"Enter", "choose", "magenta"},
-    {"q", "quit", "yellow"},
+    {"\xe2\x86\x91\xe2\x86\x93", "select", kKeyAccent},  // ↑↓
+    {"Enter", "choose", kKeyAccent},
+    {"q", "quit", kKeyAccent},
 }};
 
 }  // namespace

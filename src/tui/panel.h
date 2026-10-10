@@ -78,11 +78,22 @@ struct Panel {
 
   // Catalog (6.2). Loaded once at startup; the DEPLOY screen is where the
   // recipe list lives, because that is where a recipe becomes an action.
+  // `catalog_loading` is a user-visible refresh (spinner, the empty-state
+  // gate); `catalog_auto` is the silent background refresh, kept separate so a
+  // tick cannot blank the empty-state text or clobber an action's status.
   bool catalog_loading = false;
+  bool catalog_auto = false;
   std::string catalog_error;
   Catalog catalog;
   std::size_t catalog_cursor = 0;
   bool catalog_details = false;
+  // Recipe removal (Deploy tab, key x). The confirmation is modal and its
+  // target is a service NAME, not an index: a catalog refresh (or the
+  // auto-refresh tick) can move the row under a dialog otherwise.
+  bool confirming_recipe_remove = false;
+  std::string recipe_remove_target;
+  bool recipe_removing = false;  // the remove+reload worker is in flight
+  std::string catalog_status;    // result/error of the last catalog action
 
   // Deploy (6.3). `deploy_running` is an ATOMIC and not mutex-guarded state
   // because two threads read it without the panel lock: the render thread (can
@@ -148,8 +159,11 @@ struct Panel {
   std::string edit_status;
   std::string edit_error;
 
-  // My Services (6.4)
+  // My Services (6.4). As above: `services_loading` is user-visible, and
+  // `services_auto` is the silent background refresh so a tick never replaces
+  // the status line (e.g. "starting x: ok") with "querying..."
   bool services_loading = false;
+  bool services_auto = false;
   std::string services_status;
   std::vector<berth::ServiceRow> rows;
   std::size_t services_cursor = 0;
@@ -306,5 +320,14 @@ template <typename T>
 
 // The key hints along the bottom.
 [[nodiscard]] ftxui::Element footer_bar();
+
+// One per-screen hint line: the KEYS in the one accent, the words dim. The
+// renderer does no parsing — the key/words split is data from the view models
+// (dev.md §12.14), so it is asserted without a terminal.
+[[nodiscard]] ftxui::Element key_hint(const KeyHint& hint);
+
+// Several hints on ONE line, joined by a dim separator, for a screen that
+// keeps its keys on a single row (the Logs tab).
+[[nodiscard]] ftxui::Element key_hint_line(const std::vector<KeyHint>& hints);
 
 }  // namespace tui

@@ -221,15 +221,32 @@ std::vector<std::string> deploy_idle_lines(const berth::Recipe& recipe,
   return lines;
 }
 
-std::vector<std::string> deploy_key_hints(const bool running) {
+std::vector<KeyHint> deploy_key_hints(const bool running) {
   if (running) {
-    return {"c  cancel the deploy (the journal entry stays for __cleanup)",
-            "q  quit — the deploy is cancelled and unwound first"};
+    return {{"c", "cancel the deploy (the journal entry stays for __cleanup)"},
+            {"q", "quit — the deploy is cancelled and unwound first"}};
   }
-  return {"Enter  deploy the selected recipe at the typed port",
-          "e  recipe details (pin, tools, build steps, start command)",
-          "E  edit the selected USER recipe (builtin: make an override first)",
-          "r  reload the catalog", "↑↓  select a recipe"};
+  return {
+      {"Enter", "deploy the selected recipe at the typed port"},
+      {"i", "type a new GitHub URL to deploy anything (BYO)"},
+      {"e", "recipe details (pin, tools, build steps, start command)"},
+      {"E", "edit the selected USER recipe (builtin: make an override first)"},
+      {"x", "remove the selected USER recipe (builtin: nothing to remove)"},
+      {"r", "reload the catalog"},
+      {"\xe2\x86\x91\xe2\x86\x93", "select a recipe"},
+  };
+}
+
+KeyHint deploy_fields_hint(const bool locked) {
+  if (locked) {
+    return {"", "fields are locked while work is in flight"};
+  }
+  // The old text said "i edit", which read as recipe editing. It is not: `i`
+  // opens the URL/ref/port fields for a NEW deploy (BYO), and editing an
+  // existing recipe is E. The hint must say which one it is.
+  return {"i",
+          "type a new deploy URL  ·  empty port = the recipe's default "
+          "or a free one"};
 }
 
 std::string_view draft_field_label(const DraftField field) {
@@ -351,23 +368,30 @@ std::vector<std::string> draft_stored_lines(
   };
 }
 
-std::vector<std::string> draft_key_hints(const DraftField focus,
-                                         const bool running, const bool ready) {
+std::vector<KeyHint> draft_key_hints(const DraftField focus, const bool running,
+                                     const bool ready) {
   if (running) {
-    return {"c  cancel — the draft is thrown away and nothing is stored",
-            "q  quit"};
+    return {{"c", "cancel — the draft is thrown away and nothing is stored"},
+            {"q", "quit"}};
   }
   if (focus != DraftField::kNone) {
-    return {"Enter  act on this field", "Tab  next field (url, ref, port)",
-            "Esc  leave the fields — q, e, r work again"};
+    return {{"Enter", "act on this field"},
+            {"Tab", "next field (url, ref, port)"},
+            {"Esc", "leave the fields — q, e, r work again"}};
   }
   if (ready) {
-    return {"d  store the draft and deploy it", "s  store the draft only",
-            "i  paste another URL", "↑↓  select a recipe"};
+    return {{"d", "store the draft and deploy it"},
+            {"s", "store the draft only"},
+            {"i", "paste another URL"},
+            {"\xe2\x86\x91\xe2\x86\x93", "select a recipe"}};
   }
-  return {"i  paste a GitHub URL to deploy anything (BYO)",
-          "Enter  deploy the selected recipe at the typed port",
-          "e  recipe details", "r  reload the catalog", "↑↓  select a recipe"};
+  return {
+      {"i", "paste a GitHub URL to deploy anything (BYO)"},
+      {"Enter", "deploy the selected recipe at the typed port"},
+      {"e", "recipe details"},
+      {"r", "reload the catalog"},
+      {"\xe2\x86\x91\xe2\x86\x93", "select a recipe"},
+  };
 }
 
 std::vector<std::string> deploy_outcome_lines(

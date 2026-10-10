@@ -35,6 +35,11 @@ inline constexpr std::size_t kTabCount = 4;
 // Fixed width of the vertical tab strip, in columns.
 inline constexpr int kTabsWidth = 22;
 
+// The explicit left margin before the brand sign (dev.md chrome): the mark
+// is not flush against the border. Applied in the renderer; sign_lines()
+// itself is unchanged because the alignment test pins its own columns.
+inline constexpr std::size_t kSignLeftMargin = 2;
+
 struct TabSpec {
   Tab tab;
   std::string_view glyph;
@@ -49,7 +54,22 @@ struct TabSpec {
 // The three sign lines, top to bottom.
 [[nodiscard]] const std::vector<std::string>& sign_lines();
 
-// Rendered footer: keys colored, words dim. One hint per group.
+// The ONE accent every key token is drawn in — the footer AND every
+// per-screen hint line. The words stay dim. Named as a string so this header
+// stays free of the rendering library; accent_color() maps it in panel.cpp.
+inline constexpr std::string_view kKeyAccent = "cyan";
+
+// One hint line: the key token(s) and the words that explain them. The split
+// is DATA, so the renderer only has to colour `keys` and dim `words`, and the
+// split itself is assertable without a terminal (dev.md §12.14).
+struct KeyHint {
+  std::string_view keys;
+  std::string_view words;
+};
+
+// Rendered footer: keys colored, words dim. One hint per group. The accent
+// field is kept (it predates the unified key accent) and now names kKeyAccent
+// for all of them.
 struct FooterHint {
   std::string_view keys;
   std::string_view words;

@@ -109,15 +109,19 @@ std::vector<std::string> confirm_uninstall_lines(const berth::ServiceRow& row) {
   };
 }
 
-std::vector<std::string> services_key_hints() {
+std::vector<KeyHint> services_key_hints() {
   return {
-      "s  start      x  stop       t  restart    p  freeze / unfreeze",
-      "K  kill (SIGKILL, asks first)   u  uninstall   r / Enter  refresh",
-      "status comes from `systemctl --user is-active`, one bounded call per "
-      "row, on a worker. A frozen service still reads active to is-active, so "
-      "it shows as frozen here.",
-      "freeze is SIGSTOP: the process stops answering but keeps its port — it "
-      "is not a suspend.",
+      {"s  x  t  p", "start · stop · restart · freeze / unfreeze"},
+      {"K", "kill (SIGKILL, asks first)"},
+      {"u", "uninstall"},
+      {"r / Enter", "refresh"},
+      {"",
+       "status comes from `systemctl --user is-active`, one bounded call "
+       "per row, on a worker. A frozen service still reads active to "
+       "is-active, so it shows as frozen here."},
+      {"",
+       "freeze is SIGSTOP: the process stops answering but keeps its "
+       "port — it is not a suspend."},
   };
 }
 

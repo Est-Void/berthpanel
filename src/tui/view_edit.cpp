@@ -180,17 +180,19 @@ std::vector<std::string> edit_saved_lines(
   return lines;
 }
 
-std::vector<std::string> edit_key_hints(const EditField focus,
-                                        const bool running) {
+std::vector<KeyHint> edit_key_hints(const EditField focus, const bool running) {
   if (running) {
-    return {"the edit is being written — wait for the verdict",
-            "q  quit (the file write is atomic: no half-written recipe)"};
+    return {{"", "the edit is being written — wait for the verdict"},
+            {"q", "quit (the file write is atomic: no half-written recipe)"}};
   }
   if (focus != EditField::kNone) {
-    return {"Tab  next field", "Esc  release the field — s and q work again"};
+    return {{"Tab", "next field"},
+            {"Esc", "release the field — s and q work again"}};
   }
-  return {"i  edit the fields", "s  save the edit (validated, then stored)",
-          "Esc  leave the edit screen", "q  quit"};
+  return {{"i", "edit the fields"},
+          {"s", "save the edit (validated, then stored)"},
+          {"Esc", "leave the edit screen"},
+          {"q", "quit"}};
 }
 
 }  // namespace tui

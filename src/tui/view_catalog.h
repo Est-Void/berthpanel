@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "../berth/recipes.h"
@@ -25,6 +26,35 @@ enum class RecipeSource {
   kBuiltin,
   kUser,  // a user recipe, which OVERRIDES a builtin of the same name
 };
+
+// Whether the SELECTED recipe can be removed from the Deploy (catalog) list,
+// and why not when it cannot. A user recipe is a file the user owns, so it is
+// removable; a builtin is the frozen starter set — there is nothing to remove
+// and it is refused with a clear message (never a silent no-op). Pure, so the
+// builtin/user decision is tested without a terminal.
+struct RecipeRemoval {
+  bool removable = false;
+  std::string refusal;  // empty when removable
+};
+[[nodiscard]] RecipeRemoval recipe_removal(RecipeSource source);
+
+// What a key press means while the removal confirmation is up. The dialog
+// DECIDES; the caller (app.cpp) acts — a confirmation that returns "eaten"
+// without a removal behind it is a dialog that lies (§11).
+enum class RemoveConfirm {
+  kConfirmed,  // y: remove the selected user recipe file
+  kDismissed,  // n / Esc: keep it
+  kQuit,       // q: dismiss and quit the panel
+  kEaten,      // anything else: the modal keeps the key
+};
+[[nodiscard]] RemoveConfirm recipe_remove_key(std::string_view key);
+
+// The removal confirmation. It names the recipe FILE being deleted (the real
+// path, passed in — never a hardcoded XDG default) AND says that a DEPLOYED
+// service is a different thing, uninstalled on the My Services tab: a
+// confirmation that hides what it deletes is not a confirmation (§11).
+[[nodiscard]] std::vector<std::string> recipe_remove_confirm_lines(
+    const std::string& service_name, const std::string& recipe_path);
 
 struct Catalog {
   std::vector<berth::Recipe> recipes;

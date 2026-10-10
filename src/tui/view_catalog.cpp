@@ -95,6 +95,48 @@ berth::Result<Catalog> load_catalog(const berth::Paths& paths) {
   return catalog;
 }
 
+RecipeRemoval recipe_removal(const RecipeSource source) {
+  RecipeRemoval removal;
+  if (source == RecipeSource::kUser) {
+    removal.removable = true;
+    return removal;
+  }
+  removal.refusal =
+      "builtin recipe — frozen starter set; nothing to remove "
+      "(only a user recipe can be removed)";
+  return removal;
+}
+
+RemoveConfirm recipe_remove_key(const std::string_view key) {
+  if (key == "y" || key == "Y") {
+    return RemoveConfirm::kConfirmed;
+  }
+  if (key == "q") {
+    return RemoveConfirm::kQuit;
+  }
+  if (key == "n" || key == "N" || key == "\x1b") {
+    return RemoveConfirm::kDismissed;
+  }
+  return RemoveConfirm::kEaten;  // the modal is modal
+}
+
+std::vector<std::string> recipe_remove_confirm_lines(
+    const std::string& service_name, const std::string& recipe_path) {
+  return {
+      "remove the recipe " + service_name + "?",
+      "",
+      "  this deletes the stored USER recipe file:",
+      "    " + recipe_path,
+      "",
+      "  it does NOT touch a deployed service. A running " + service_name +
+          " (if any) keeps running and stays registered — uninstall it on "
+          "the My Services tab.",
+      "",
+      "  y  yes, delete the recipe file",
+      "  n  no, keep it",
+  };
+}
+
 std::string_view recipe_source_label(const RecipeSource source) {
   switch (source) {
     case RecipeSource::kBuiltin:

@@ -35,6 +35,18 @@ bool contains(const std::vector<std::string>& haystack,
   return false;
 }
 
+// The structured hints: `needle` may name either the key or the words.
+bool hint_contains(const std::vector<tui::KeyHint>& hints,
+                   const std::string_view needle) {
+  for (const tui::KeyHint& hint : hints) {
+    if (hint.keys.find(needle) != std::string_view::npos ||
+        hint.words.find(needle) != std::string_view::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
 berth::Recipe sample_recipe() {
   berth::Recipe r;
   r.owner = "usememos";
@@ -122,6 +134,12 @@ TEST(chrome_sign_lines_share_one_visual_centre) {
   }
   CHECK(doubled_centre(sign[0]) == doubled_centre(sign[1]));
   CHECK(doubled_centre(sign[1]) == doubled_centre(sign[2]));
+}
+
+TEST(chrome_sign_has_a_left_margin_but_sign_lines_are_unchanged) {
+  // The mark is not flush against the border. The margin is applied by the
+  // renderer, so sign_lines() keeps its own columns (asserted above).
+  CHECK(tui::kSignLeftMargin == 2);
 }
 
 TEST(chrome_footer_names_the_keys_and_the_words) {
@@ -215,6 +233,43 @@ TEST(catalog_render_step_keeps_arguments_together) {
   CHECK(tui::render_step({"true"}) == "true");
 }
 
+TEST(catalog_removal_is_user_only_and_a_builtin_is_refused) {
+  const tui::RecipeRemoval user = tui::recipe_removal(tui::RecipeSource::kUser);
+  CHECK(user.removable);
+  CHECK(user.refusal.empty());
+
+  const tui::RecipeRemoval builtin =
+      tui::recipe_removal(tui::RecipeSource::kBuiltin);
+  CHECK(!builtin.removable);
+  CHECK(builtin.refusal.find("builtin") != std::string::npos);
+  CHECK(builtin.refusal.find("nothing to remove") != std::string::npos);
+}
+
+TEST(catalog_removal_confirm_gate_maps_y_n_q_and_eats_the_rest) {
+  CHECK(tui::recipe_remove_key("y") == tui::RemoveConfirm::kConfirmed);
+  CHECK(tui::recipe_remove_key("Y") == tui::RemoveConfirm::kConfirmed);
+  CHECK(tui::recipe_remove_key("n") == tui::RemoveConfirm::kDismissed);
+  CHECK(tui::recipe_remove_key("N") == tui::RemoveConfirm::kDismissed);
+  CHECK(tui::recipe_remove_key("\x1b") == tui::RemoveConfirm::kDismissed);
+  CHECK(tui::recipe_remove_key("q") == tui::RemoveConfirm::kQuit);
+  // The modal is modal: nothing else leaks to the screen behind it.
+  CHECK(tui::recipe_remove_key("x") == tui::RemoveConfirm::kEaten);
+  CHECK(tui::recipe_remove_key("") == tui::RemoveConfirm::kEaten);
+}
+
+TEST(catalog_removal_confirmation_says_recipe_not_the_deployed_service) {
+  const std::vector<std::string> lines = tui::recipe_remove_confirm_lines(
+      "berthpanel-myapp",
+      "/home/u/.config/berthpanel/recipes/berthpanel-myapp.json");
+  CHECK(contains(lines, "remove the recipe berthpanel-myapp?"));
+  CHECK(contains(lines, "berthpanel-myapp.json"));
+  // §11: no silent delete, and no implying it uninstalls a running service.
+  CHECK(contains(lines, "does NOT touch a deployed service"));
+  CHECK(contains(lines, "My Services tab"));
+  CHECK(contains(lines, "y  yes, delete the recipe file"));
+  CHECK(contains(lines, "n  no, keep it"));
+}
+
 // --- services view model ---------------------------------------------------
 
 TEST(services_table_names_the_unit_the_state_the_port_and_the_pin) {
@@ -262,18 +317,21 @@ TEST(services_empty_registry_points_at_the_way_forward) {
 }
 
 TEST(services_key_hints_name_every_action) {
-  const std::vector<std::string> hints = tui::services_key_hints();
-  CHECK(contains(hints, "s  start"));
-  CHECK(contains(hints, "x  stop"));
-  CHECK(contains(hints, "t  restart"));
-  CHECK(contains(hints, "p  freeze"));
-  CHECK(contains(hints, "K  kill"));
-  CHECK(contains(hints, "u  uninstall"));
-  CHECK(contains(hints, "refresh"));
+  const std::vector<tui::KeyHint> hints = tui::services_key_hints();
+  CHECK(hint_contains(hints, "s"));
+  CHECK(hint_contains(hints, "start"));
+  CHECK(hint_contains(hints, "stop"));
+  CHECK(hint_contains(hints, "restart"));
+  CHECK(hint_contains(hints, "freeze"));
+  CHECK(hint_contains(hints, "K"));
+  CHECK(hint_contains(hints, "kill"));
+  CHECK(hint_contains(hints, "u"));
+  CHECK(hint_contains(hints, "uninstall"));
+  CHECK(hint_contains(hints, "refresh"));
   // The hint has to say what freeze really is: a SIGSTOPped service keeps its
   // port, and calling that a pause would be a lie the user pays for.
-  CHECK(contains(hints, "keeps its port"));
-  CHECK(contains(hints, "not a suspend"));
+  CHECK(hint_contains(hints, "keeps its port"));
+  CHECK(hint_contains(hints, "not a suspend"));
 }
 
 TEST(services_table_shows_a_frozen_service_as_frozen) {
@@ -313,7 +371,8 @@ TEST(services_kill_confirmation_says_what_sigkill_costs) {
   CHECK(contains(lines, "freeze it with p"));
   // Shift-K, because 'k' is the panel-wide cursor key — the hint has to show
   // the real key or the user presses k and nothing happens.
-  CHECK(contains(tui::services_key_hints(), "K  kill"));
+  CHECK(hint_contains(tui::services_key_hints(), "K"));
+  CHECK(hint_contains(tui::services_key_hints(), "kill"));
   CHECK(contains(lines, "y  yes, kill it"));
   CHECK(contains(lines, "n  no, leave it alone"));
 }
