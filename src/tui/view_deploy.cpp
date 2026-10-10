@@ -141,9 +141,13 @@ std::vector<std::string> deploy_stage_lines(const DeployStage current,
   std::vector<std::string> lines;
   for (const DeployStage stage : kLadder) {
     const bool is_reached = static_cast<std::size_t>(stage) <= reached;
+    // REGISTRY WRITE FAILED is a verdict, not a rung: showing it on a
+    // successful deploy reads as a failure. Draw it only when it happened.
+    if (stage == DeployStage::kRegistryFailed && !is_reached) {
+      continue;
+    }
     std::string marker = "  ";
     if (stage == DeployStage::kRegistryFailed) {
-      // Not a step in the ladder: a verdict on the last one.
       marker = is_reached ? "!!" : "  ";
     } else {
       marker = is_reached ? "ok" : "  ";

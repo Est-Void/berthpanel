@@ -97,7 +97,7 @@ class AppComponent final : public ftxui::ComponentBase {
     port_option.on_enter = [this]() { start_selected_deploy(); };
     port_input_ = ftxui::Input(port_option);
 
-    // The seven recipe-edit fields. Same shape as the wizard's three: a bare
+    // The eight recipe-edit fields. Same shape as the wizard's three: a bare
     // Input that only renders text, because the panel draws its own focus
     // marker (EditField). Numeric fields are text too; assemble_recipe_edits()
     // parses them loudly on save rather than dropping keystrokes (§12.16).
@@ -111,6 +111,8 @@ class AppComponent final : public ftxui::ComponentBase {
     };
     edit_start_cmd_ = make_edit("e.g. {self} --addr 127.0.0.1 --port {port}",
                                 &panel_->edit.start_cmd);
+    edit_bind_ = make_edit("127.0.0.1 (when start_cmd has no bind flag)",
+                           &panel_->edit.bind);
     edit_health_path_ = make_edit("/", &panel_->edit.health_path);
     edit_display_name_ = make_edit("display name", &panel_->edit.display_name);
     edit_description_ = make_edit("one line", &panel_->edit.description);
@@ -435,8 +437,9 @@ class AppComponent final : public ftxui::ComponentBase {
   ftxui::Component url_input_;
   ftxui::Component ref_input_;
   ftxui::Component port_input_;
-  // The seven recipe-edit fields, in EditField order.
+  // The eight recipe-edit fields, in EditField order.
   ftxui::Component edit_start_cmd_;
+  ftxui::Component edit_bind_;
   ftxui::Component edit_health_path_;
   ftxui::Component edit_display_name_;
   ftxui::Component edit_description_;
@@ -577,6 +580,8 @@ ftxui::ComponentBase* AppComponent::edit_input_for(const EditField field) {
   switch (field) {
     case EditField::kStartCmd:
       return edit_start_cmd_.get();
+    case EditField::kBind:
+      return edit_bind_.get();
     case EditField::kHealthPath:
       return edit_health_path_.get();
     case EditField::kDisplayName:
@@ -596,10 +601,10 @@ ftxui::ComponentBase* AppComponent::edit_input_for(const EditField field) {
 }
 
 ftxui::Elements AppComponent::edit_input_elements() {
-  return {edit_start_cmd_->Render(),    edit_health_path_->Render(),
-          edit_display_name_->Render(), edit_description_->Render(),
-          edit_port_->Render(),         edit_memory_max_->Render(),
-          edit_tasks_max_->Render()};
+  return {edit_start_cmd_->Render(),   edit_bind_->Render(),
+          edit_health_path_->Render(), edit_display_name_->Render(),
+          edit_description_->Render(), edit_port_->Render(),
+          edit_memory_max_->Render(),  edit_tasks_max_->Render()};
 }
 
 void AppComponent::set_edit_field(const EditField field) {

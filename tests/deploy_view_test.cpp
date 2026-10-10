@@ -127,12 +127,22 @@ TEST(deploy_stage_lines_show_reached_pending_and_the_failure) {
   const std::vector<std::string> finished =
       tui::deploy_stage_lines(tui::DeployStage::kDone, true, "");
   CHECK(contains(finished, "(last stage reached)"));
+  // A successful deploy must not show the registry-failure rung: it reads as a
+  // failure on an otherwise green ladder.
+  CHECK(!contains(finished, "REGISTRY WRITE FAILED"));
+
+  // But the verdict IS shown the moment it is actually reached.
+  const std::vector<std::string> registry_failed = tui::deploy_stage_lines(
+      tui::DeployStage::kRegistryFailed, true, "registry write refused");
+  CHECK(contains(registry_failed, "REGISTRY WRITE FAILED"));
+  CHECK(contains(registry_failed, "!!"));
 
   // A failure line is carried verbatim: the screen's own error box may wrap it,
   // but the ladder must not swallow it.
   const std::vector<std::string> failed = tui::deploy_stage_lines(
       tui::DeployStage::kBuild, false, "build failed: exit 1");
   CHECK(contains(failed, "build failed: exit 1"));
+  CHECK(!contains(failed, "REGISTRY WRITE FAILED"));
 
   // Before anything is logged, the ladder says so rather than showing nothing.
   CHECK(contains(tui::deploy_stage_lines(tui::DeployStage::kOther, false, ""),

@@ -53,6 +53,8 @@ std::string_view edit_field_label(const EditField field) {
   switch (field) {
     case EditField::kStartCmd:
       return "start_cmd";
+    case EditField::kBind:
+      return "bind";
     case EditField::kHealthPath:
       return "health_path";
     case EditField::kDisplayName:
@@ -77,6 +79,8 @@ EditField next_edit_field(const EditField field) {
     case EditField::kTasksMax:
       return EditField::kStartCmd;
     case EditField::kStartCmd:
+      return EditField::kBind;
+    case EditField::kBind:
       return EditField::kHealthPath;
     case EditField::kHealthPath:
       return EditField::kDisplayName;
@@ -97,16 +101,18 @@ EditField edit_field_at(const std::size_t index) {
     case 0:
       return EditField::kStartCmd;
     case 1:
-      return EditField::kHealthPath;
+      return EditField::kBind;
     case 2:
-      return EditField::kDisplayName;
+      return EditField::kHealthPath;
     case 3:
-      return EditField::kDescription;
+      return EditField::kDisplayName;
     case 4:
-      return EditField::kPort;
+      return EditField::kDescription;
     case 5:
-      return EditField::kMemoryMax;
+      return EditField::kPort;
     case 6:
+      return EditField::kMemoryMax;
+    case 7:
       return EditField::kTasksMax;
     default:
       abort_out_of_range();
@@ -116,6 +122,7 @@ EditField edit_field_at(const std::size_t index) {
 EditFields edit_fields_from_recipe(const berth::Recipe& recipe) {
   EditFields fields;
   fields.start_cmd = recipe.start_cmd;
+  fields.bind = recipe.bind;
   fields.health_path = recipe.health_path;
   fields.display_name = recipe.display_name;
   fields.description = recipe.description;
@@ -129,6 +136,7 @@ berth::Result<berth::RecipeEdits> assemble_recipe_edits(
     const EditFields& fields) {
   berth::RecipeEdits edits;
   edits.start_cmd = fields.start_cmd;
+  edits.bind = fields.bind;
   edits.health_path = fields.health_path;
   edits.display_name = fields.display_name;
   edits.description = fields.description;

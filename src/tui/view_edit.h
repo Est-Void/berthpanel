@@ -1,7 +1,7 @@
 #pragma once
 
 // src/tui/view_edit.h — the recipe-edit view model (dev.md §8, stage
-// 4.19+/4.21 TUI): the seven user-editable fields, the insert-mode focus
+// 4.19+/4.21 TUI): the eight user-editable fields, the insert-mode focus
 // cycle, the loud numeric parsing that assembles a RecipeEdits, and the
 // builtin refusal. Pure and FTXUI-free: the screen in screens.cpp builds
 // Elements from these strings and values, and the tests assert them without a
@@ -33,6 +33,7 @@ namespace tui {
 enum class EditField {
   kNone,
   kStartCmd,
+  kBind,
   kHealthPath,
   kDisplayName,
   kDescription,
@@ -41,12 +42,12 @@ enum class EditField {
   kTasksMax,
 };
 
-// The seven selectable slots, in focus order.
-inline constexpr std::size_t kEditFieldCount = 7;
+// The eight selectable slots, in focus order.
+inline constexpr std::size_t kEditFieldCount = 8;
 
 [[nodiscard]] std::string_view edit_field_label(EditField field);
 
-// The next field in the cycle: start_cmd → health_path → display_name →
+// The next field in the cycle: start_cmd → bind → health_path → display_name →
 // description → port → memory_max → tasks_max → start_cmd. kNone enters at
 // start_cmd.
 [[nodiscard]] EditField next_edit_field(EditField field);
@@ -55,11 +56,12 @@ inline constexpr std::size_t kEditFieldCount = 7;
 // loop. An out-of-range index is an invariant violation and aborts.
 [[nodiscard]] EditField edit_field_at(std::size_t index);
 
-// The seven values as typed. port/tasks stay text until save, so a bad number
+// The eight values as typed. port/tasks stay text until save, so a bad number
 // is refused by assemble_recipe_edits() rather than silently dropped as it is
 // typed (§11).
 struct EditFields {
   std::string start_cmd;
+  std::string bind;
   std::string health_path;
   std::string display_name;
   std::string description;

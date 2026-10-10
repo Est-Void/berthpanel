@@ -134,7 +134,7 @@ void service_action_uninstall(const std::shared_ptr<Panel>& panel,
                                                   ftxui::Element ref_input,
                                                   ftxui::Element port_input);
 
-// Recipe edit (4.19+). The seven FTXUI Inputs are passed in, in EditField
+// Recipe edit (4.19+). The eight FTXUI Inputs are passed in, in EditField
 // order (start_cmd .. tasks_max), because their Render() belongs to the
 // component tree in app.cpp. The screen only places them.
 [[nodiscard]] ftxui::Element render_edit_screen(

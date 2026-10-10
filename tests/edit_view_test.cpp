@@ -49,7 +49,8 @@ TEST(edit_focus_cycle_visits_every_field_then_wraps) {
   using tui::EditField;
   // kNone enters at the start command, like the wizard's kNone enters at url.
   CHECK(tui::next_edit_field(EditField::kNone) == EditField::kStartCmd);
-  CHECK(tui::next_edit_field(EditField::kStartCmd) == EditField::kHealthPath);
+  CHECK(tui::next_edit_field(EditField::kStartCmd) == EditField::kBind);
+  CHECK(tui::next_edit_field(EditField::kBind) == EditField::kHealthPath);
   CHECK(tui::next_edit_field(EditField::kHealthPath) ==
         EditField::kDisplayName);
   CHECK(tui::next_edit_field(EditField::kDisplayName) ==
@@ -63,6 +64,7 @@ TEST(edit_focus_cycle_visits_every_field_then_wraps) {
 
 TEST(edit_field_labels_match_the_slots) {
   CHECK(tui::edit_field_label(tui::EditField::kStartCmd) == "start_cmd");
+  CHECK(tui::edit_field_label(tui::EditField::kBind) == "bind");
   CHECK(tui::edit_field_label(tui::EditField::kHealthPath) == "health_path");
   CHECK(tui::edit_field_label(tui::EditField::kDisplayName) == "display_name");
   CHECK(tui::edit_field_label(tui::EditField::kDescription) == "description");
@@ -76,18 +78,20 @@ TEST(edit_field_at_matches_the_input_slot_order) {
   // The renderer's input vector is in this order, so an off-by-one would draw
   // one field's value under another field's label.
   CHECK(tui::edit_field_at(0) == tui::EditField::kStartCmd);
-  CHECK(tui::edit_field_at(1) == tui::EditField::kHealthPath);
-  CHECK(tui::edit_field_at(2) == tui::EditField::kDisplayName);
-  CHECK(tui::edit_field_at(3) == tui::EditField::kDescription);
-  CHECK(tui::edit_field_at(4) == tui::EditField::kPort);
-  CHECK(tui::edit_field_at(5) == tui::EditField::kMemoryMax);
-  CHECK(tui::edit_field_at(6) == tui::EditField::kTasksMax);
+  CHECK(tui::edit_field_at(1) == tui::EditField::kBind);
+  CHECK(tui::edit_field_at(2) == tui::EditField::kHealthPath);
+  CHECK(tui::edit_field_at(3) == tui::EditField::kDisplayName);
+  CHECK(tui::edit_field_at(4) == tui::EditField::kDescription);
+  CHECK(tui::edit_field_at(5) == tui::EditField::kPort);
+  CHECK(tui::edit_field_at(6) == tui::EditField::kMemoryMax);
+  CHECK(tui::edit_field_at(7) == tui::EditField::kTasksMax);
 }
 
 TEST(edit_fields_seed_from_the_recipe) {
   const berth::Recipe recipe = go_recipe();
   const tui::EditFields fields = tui::edit_fields_from_recipe(recipe);
   CHECK(fields.start_cmd == recipe.start_cmd);
+  CHECK(fields.bind == recipe.bind);  // "" when the start_cmd states it
   CHECK(fields.health_path == recipe.health_path);
   CHECK(fields.display_name == recipe.display_name);
   CHECK(fields.description == recipe.description);
@@ -99,6 +103,31 @@ TEST(edit_fields_seed_from_the_recipe) {
   berth::Recipe fixed = recipe;
   fixed.port = 8123;
   CHECK(tui::edit_fields_from_recipe(fixed).port == "8123");
+
+  berth::Recipe bound = recipe;
+  bound.bind = "127.0.0.1";
+  CHECK(tui::edit_fields_from_recipe(bound).bind == "127.0.0.1");
+}
+
+TEST(edit_assembles_a_declared_bind_from_the_form) {
+  // The no-bind-flag app: start_cmd is only {self}, the bind field declares
+  // loopback, and a fixed port drops the {port} requirement.
+  tui::EditFields fields = tui::edit_fields_from_recipe(go_recipe());
+  fields.start_cmd = "{self}";
+  fields.bind = "127.0.0.1";
+  fields.port = "46877";
+
+  const berth::Result<berth::RecipeEdits> edits =
+      tui::assemble_recipe_edits(fields);
+  CHECK(edits.is_ok());
+  CHECK(edits.value().bind.has_value());
+  CHECK(edits.value().bind.value() == "127.0.0.1");
+
+  // The assembly reaches the ONE engine: the declared bind makes it valid.
+  const berth::Result<berth::Recipe> applied =
+      berth::apply_recipe_edits(go_recipe(), edits.value());
+  CHECK(applied.is_ok());
+  CHECK(applied.value().bind == "127.0.0.1");
 }
 
 TEST(edit_assembles_recipe_edits_from_the_form) {
@@ -120,6 +149,7 @@ TEST(edit_assembles_recipe_edits_from_the_form) {
   // Every seeded field is set, so the ONE validator sees the whole form.
   CHECK(edits.value().health_path.has_value());
   CHECK(edits.value().description.has_value());
+  CHECK(edits.value().bind.has_value());
 }
 
 TEST(edit_empty_port_means_free) {
