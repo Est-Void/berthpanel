@@ -1,15 +1,15 @@
 # AGENTS.md — berthpanel
 
-> Status: **pre-implementation** (C++ rewrite; prior impl was Rust). No `Makefile`, no `src/` yet.
+> Status: **alpha** (`v0.1.0-alpha`) — code complete, release work is docs/notes only.
 > The full spec lives in `docs/dev.md`, which is **gitignored** (`docs/*`) — read it locally, never expect it on GitHub.
 
 ## Source of truth
 - Product pitch: `README.md`. Developer spec: `docs/dev.md` (§6 invariants, §8 catalog, §10 release, §11 traps are inherited, must-not-regress; rest is plan).
 - Staged roadmap: `docs/plan.md` (local) — phase/stage order, per-stage done criteria; follow it when implementing.
-- `docs/dev.md` §12 lists **open decisions** (error type, test framework, JSON choice, libgit2 vs `git`, GPL tension, format policy; catalog contents resolved → `docs/plan.md` «Каталог»). Read it before assuming anything is settled.
+- `docs/dev.md` §12 records the **settled decisions** and the v2 deferrals (catalog frozen at wave 1; github.com-only git egress; user-recipe editing added; multi-unit stacks and automatic toolchain provisioning → v2). Read it before assuming anything is settled.
 
-## Planned build (no code yet — follow when scaffolding)
-- C++20 baseline (GCC 13+ / Clang 16+), hand-written `Makefile`, no CMake/Meson. TUI: FTXUI. TLS: vendored mbedTLS (static). Vendored: miniz, nlohmann/json. System: zlib, `git`, `systemd --user`, `python3 >= 3.10` (SearXNG runtime).
+## Build (in place — see dev.md §3)
+- C++20 baseline (GCC 13+ / Clang 16+), hand-written `Makefile`, no CMake/Meson. TUI: FTXUI. TLS: vendored mbedTLS (static). Vendored: miniz, nlohmann/json. System: zlib, `git`, `systemd --user`, `python3 >= 3.10`.
 - Targets: `make` → `build/debug/berthpanel`; `make release`, `make test`, `make check` (read-only gate: lint+test, never rewrites), `make asan`, `make musl` (pinned Arch container **by digest**), `make clean`.
 - Warnings as errors incl. `-Wold-style-cast -Wconversion`; no `-fno-exceptions` (exceptions only for programmer error, never across module boundaries).
 
