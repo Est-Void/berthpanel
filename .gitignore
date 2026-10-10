@@ -8,6 +8,7 @@ build/
 # committed; the built artifacts are attached to the GitHub release instead.
 release/berthpanel
 release/install.sh
+release/release.pub
 release/*.tar.gz
 release/*.tar.gz.minisig
 

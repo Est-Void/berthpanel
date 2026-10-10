@@ -76,10 +76,13 @@ jobs:
             -x release/SHA256SUMS.minisig
 
   musl-reproducibility:
-    # Reproduce the shipped static artifact in the digest-pinned container and
-    # assert CI's checksums equal the committed ones. A mismatch is toolchain
-    # or container drift, and the release fails (dev.md §3). Skipped until a
-    # release has committed SHA256SUMS.
+    # DISABLED for the alpha. The static musl build needs a musl-native C++
+    # toolchain (MUSL_CXX); the default glibc `g++` + musl-specs path strips the
+    # C++ include paths and fails on the vendored C++ (dev.md §3, §12.26). The
+    # alpha ships a host (glibc) build, so there is no static artifact to
+    # reproduce yet. Remove `if: false` when MUSL_CXX lands; until then the job
+    # is skipped, not silently failing.
+    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
