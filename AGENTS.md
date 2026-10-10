@@ -10,7 +10,7 @@
 
 ## Build (in place — see dev.md §3)
 - C++20 baseline (GCC 13+ / Clang 16+), hand-written `Makefile`, no CMake/Meson. TUI: FTXUI. TLS: vendored mbedTLS (static). Vendored: miniz, nlohmann/json. System: zlib, `git`, `systemd --user`, `python3 >= 3.10`.
-- Targets: `make` → `build/debug/berthpanel`; `make release`, `make test`, `make check` (read-only gate: lint+test, never rewrites), `make asan`, `make musl` (pinned Arch container **by digest**), `make clean`.
+- Targets: `make` → `build/debug/berthpanel`; `make release`, `make test`, `make check` (read-only gate: lint+test, never rewrites), `make asan`, `make musl` (pinned Arch container **by digest**; currently needs a musl-native C++ toolchain via `MUSL_CXX` — the default `g++` + musl-specs path strips the C++ include paths and fails on the vendored C++), `make clean`.
 - Warnings as errors incl. `-Wold-style-cast -Wconversion`; no `-fno-exceptions` (exceptions only for programmer error, never across module boundaries).
 
 ## Conventions that differ from defaults

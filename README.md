@@ -51,7 +51,7 @@
   **user** unit on an assigned port, with `memory_max`/`tasks_max`.
 - **Honest egress.** Every outbound request passes a compile-time host
   allowlist and is appended to `net.log`. There is no telemetry.
-- **No daemon, no root.** One static binary. Nothing needs Docker, and nothing
+- **No daemon, no root.** One binary. Nothing needs Docker, and nothing
   needs `sudo` at runtime.
 
 <div align="center">
@@ -91,7 +91,7 @@ unit and registers the service. The stages stream from `deploy.log`.
 | Needs a Docker daemon | **No** | Yes | Yes | Yes | No |
 | Allowlisted egress + `net.log` | **Yes** | No | No | No | No |
 | Isolation per app | systemd **user** unit + sandbox | container | container | container | nginx + system units |
-| Ships as | one static binary | appliance OS | shell install | shell install | ISO / script |
+| Ships as | one binary | appliance OS | shell install | shell install | ISO / script |
 | Root at runtime | **No** | via daemon | via daemon | via daemon | root services |
 | Documented min. RAM | see [note](#a-note-on-memory) | project docs | project docs | 2 GB ([docs](https://coolify.io/docs/get-started/installation)) | project docs |
 
@@ -103,7 +103,7 @@ read.
 
 ### A note on memory
 
-berthpanel's panel is a single static binary of about 5.3 MiB and runs **no
+berthpanel's panel is a single binary of about 5.4 MiB and runs **no
 daemon**; its services are systemd user units. A Docker-based panel additionally
 runs the Docker daemon and one container per app — Coolify, for instance,
 documents a **2 GB RAM** minimum

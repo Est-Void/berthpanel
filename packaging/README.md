@@ -4,8 +4,11 @@
 files are the distribution-native alternatives:
 
 - `PKGBUILD` — the AUR package (builds from source, installs to `/usr/bin`);
-- `nfpm.yaml` — `.deb` and `.rpm`, built from the static `make musl` artifact,
+- `nfpm.yaml` — `.deb` and `.rpm`, built from the static `make musl` artifact
   and carrying the Corresponding Source tarball (`/usr/share/berthpanel`).
+  **Not produced in this alpha:** the static musl build does not work yet with
+  the default toolchain (the `g++` + musl-specs path fails on the C++ tree); a
+  musl-native C++ toolchain via the `MUSL_CXX` seam is the fix.
 
 ## License
 
@@ -23,4 +26,4 @@ is compliant as-is; the deb/rpm ship the source tarball inside the package.
 4. In `PKGBUILD`, set `pkgver` and `sha256sums` from the release source tarball.
 5. `make musl && scripts/release-local.sh` then
    `BERTHPANEL_VERSION=vX.Y.Z nfpm package -f packaging/nfpm.yaml -p deb`
-   (and `-p rpm`).
+   (and `-p rpm`). Blocked until the static musl build works (see above).
