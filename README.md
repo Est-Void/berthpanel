@@ -1,16 +1,24 @@
 # berthpanel
 
-Local-first deploy panel for curated self-hosted apps — plus bring-your-own:
-paste any GitHub repo, get a draft recipe, edit it, deploy. Every deploy gets a
-sandboxed build and a hardened systemd user unit on an assigned port. No root,
-allowlisted egress, `net.log` transparency, and journaled cleanup of
-interrupted deploys.
+Local-first, no-root deploy panel: paste a public GitHub URL, review the draft
+recipe it detects, fix anything it guessed wrong, and deploy to a hardened
+systemd **user** unit. Every deploy gets a sandboxed build and an assigned
+loopback port. No root, no daemon, allowlisted egress, `net.log` transparency,
+and journaled cleanup of interrupted deploys.
+
+> **Status: alpha.** See [Known limitations](#known-limitations-alpha) — in
+> particular, the source must be a public `github.com` repository, toolchains
+> are not auto-provisioned, and a detected `start_cmd` must be verified.
 
 ## What it does
 
-- **Catalog or your own repo.** Pick a curated app, or paste a GitHub URL and
-  let the wizard resolve the pin, clone, detect the stack and draft a recipe
-  you review before anything is stored.
+- **Bring your own, or start from a small starter set.** Paste a public GitHub
+  URL and let the wizard resolve the pin, clone, detect the stack and draft a
+  recipe you review before anything is stored. A small, frozen starter catalog
+  (Memos, Filebrowser, Gitea, Uptime Kuma) ships alongside it — it is a
+  convenience, not the product.
+- **Fix a wrong guess.** A detected `start_cmd` is an assumption; correct the
+  user recipe with `berthpanel __recipe-edit` or `E` in the panel.
 - **Sandboxed builds.** Builds run under `systemd-run --user` with a
   blast-radius-reducing sandbox — never as a trusted step (see
   [Trust model](#trust-model)).
@@ -24,9 +32,10 @@ interrupted deploys.
 ## Paste a URL, get a unit running
 
 <!--
-Record a short demo and drop it here (see assets/README.md), then uncomment:
-
-![paste a GitHub URL, watch the deploy stages, get a running unit](assets/demo.gif)
+Demo: record a short recording with a live user manager and drop it at
+assets/demo.gif (see assets/README.md), then embed it here. No placeholder
+image ships, because a synthetic demo that only looks like a deploy is exactly
+the kind of thing this project avoids.
 -->
 
 Paste a GitHub URL → the wizard resolves the commit, detects the build, and
@@ -124,6 +133,32 @@ user units and the binary, and leaves your data under
 ```sh
 sh install.sh --uninstall
 ```
+
+From source:
+
+```sh
+make            # debug build   -> build/debug/berthpanel
+make release    # release build -> build/release/berthpanel
+```
+
+Run `berthpanel --selftest` after installing to confirm your user manager works.
+
+## Known limitations (alpha)
+
+- **`github.com` only.** The source front door accepts an https GitHub URL and
+  nothing else; other forges are not supported.
+- **Public repositories only.** Pins are resolved without a token, so a private
+  repository cannot be deployed.
+- **Toolchains are limited to `bun`, `pnpm`, `go` and `python3`** and must
+  already be on `PATH`; the alpha does not auto-provision a toolchain into the
+  sandbox.
+- **A detected `start_cmd` is a heuristic.** A service can deploy and still
+  never answer; verify it and correct it with `__recipe-edit` (or `E`).
+- **The builtin catalog is frozen at wave 1** (Memos, Filebrowser, Gitea,
+  Uptime Kuma). Add your own project as a user recipe instead.
+- **Single-unit services only.** Multi-process stacks are out of scope for v1.
+- **Uninstall does not purge data.** It stops and unregisters a service but
+  leaves its data directory under `~/.local/share/berthpanel` for you to delete.
 
 ## Where it fits
 
