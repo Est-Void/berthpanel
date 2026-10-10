@@ -15,9 +15,11 @@
 //     entries found under the lock are swept first, loudly.
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -74,8 +76,11 @@ class DeployOps {
   virtual Result<void> start_service(const std::string& service_name) = 0;
   // Confirms the unit actually reached 'active'. `systemctl enable --now`
   // returns 0 even for a unit that dies a moment later, so success is only
-  // claimed after this returns Ok (§11).
+  // claimed after this returns Ok (§11). On failure the real implementation
+  // captures the unit's own verdict/output into deploy.log (paths) before
+  // returning, so the panel's tail pane shows the app's own error.
   virtual Result<void> await_running(const std::string& service_name,
+                                     const Paths& paths,
                                      std::atomic<bool>* cancel) = 0;
   virtual Result<void> register_service(const ServiceRecord& record,
                                         const Paths& paths) = 0;
@@ -103,7 +108,7 @@ class RealDeployOps final : public DeployOps {
       const Recipe& recipe, const std::filesystem::path& work_dir,
       std::uint16_t port, const Paths& paths) override;
   Result<void> start_service(const std::string& service_name) override;
-  Result<void> await_running(const std::string& service_name,
+  Result<void> await_running(const std::string& service_name, const Paths& paths,
                              std::atomic<bool>* cancel) override;
   Result<void> register_service(const ServiceRecord& record,
                                 const Paths& paths) override;
@@ -134,8 +139,27 @@ inline constexpr std::chrono::milliseconds kSettleWindow{3000};
 // Restart=on-failure forever. The deploy reported success on a unit that was
 // crash-looping — the exact §11 failure ("`enable --now` returns 0 even for a
 // unit that dies a moment later"), reached through a different door.
+//
+// `evidence` is the bounded, already-prefixed capture of the unit's own
+// verdict/output (see capture_unit_failure_evidence). It is composed into the
+// error, never produced here: this function stays pure and does no subprocess.
 [[nodiscard]] Result<std::string> settle_active(
-    const std::string& service_name, const std::vector<std::string>& states);
+    const std::string& service_name, const std::vector<std::string>& states,
+    const std::string& evidence = {});
+
+// Parses `systemctl --user show <unit> -p Result -p ExecMainStatus ...` output
+// into one compact line, e.g. "Result=exit-code ExecMainStatus=2". Pure;
+// unknown extra properties are ignored, keys are emitted in a fixed order, and
+// an empty string means nothing recognisable was found.
+[[nodiscard]] std::string parse_systemctl_show(std::string_view show);
+
+// The last at most `max_lines` lines of `text`, further reduced to at most
+// `max_bytes` bytes (dropping the leading partial line if the byte cap lands
+// mid-line). Pure; both caps are upper bounds, so a chatty app cannot flood
+// deploy.log.
+[[nodiscard]] std::string bound_journal_tail(std::string_view text,
+                                             std::size_t max_lines,
+                                             std::size_t max_bytes);
 
 // `forced_port` of 0 means "ask the recipe, then pick a free port".
 [[nodiscard]] Result<DeployOutcome> run_deploy(const Paths& paths,

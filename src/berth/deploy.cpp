@@ -1,6 +1,8 @@
 #include "deploy.h"
 
+#include <array>
 #include <cerrno>
+#include <cstddef>
 #include <ctime>
 #include <string>
 #include <system_error>
@@ -279,7 +281,140 @@ std::string step_error(const std::string& step, std::string ctx) {
 
 }  // namespace
 
+std::string parse_systemctl_show(const std::string_view show) {
+  // The listed properties, in a fixed output order: systemctl prints its own
+  // order, which is not what we asked for, so we must not depend on it.
+  constexpr std::array<std::string_view, 5> kKeys{
+      "Result", "ExecMainStatus", "ExecMainCode", "ActiveState", "SubState"};
+  std::array<std::string, kKeys.size()> values;
+  std::array<bool, kKeys.size()> found{};
+  for (const std::string& raw : split(show, "\n")) {
+    const std::string_view line(raw);
+    const std::size_t eq = line.find('=');
+    if (eq == std::string_view::npos) {
+      continue;
+    }
+    const std::string_view key = line.substr(0, eq);
+    for (std::size_t i = 0; i < kKeys.size(); ++i) {
+      if (key == kKeys[i]) {
+        values[i] = std::string(trim(line.substr(eq + 1)));
+        found[i] = true;
+      }
+    }
+  }
+  std::string out;
+  for (std::size_t i = 0; i < kKeys.size(); ++i) {
+    if (!found[i]) {
+      continue;
+    }
+    if (!out.empty()) {
+      out += ' ';
+    }
+    out += kKeys[i];
+    out += '=';
+    out += values[i];
+  }
+  return out;
+}
+
+std::string bound_journal_tail(const std::string_view text,
+                               const std::size_t max_lines,
+                               const std::size_t max_bytes) {
+  if (max_lines == 0 || max_bytes == 0) {
+    return {};
+  }
+  // Trailing blank lines are noise, not lines to show; dropping them first
+  // makes the line count match what a reader would call the tail.
+  std::size_t end = text.size();
+  while (end > 0 && text[end - 1] == '\n') {
+    --end;
+  }
+  const std::string_view body = text.substr(0, end);
+  std::size_t start = 0;
+  std::size_t seen = 0;
+  for (std::size_t i = body.size(); i > 0; --i) {
+    if (body[i - 1] == '\n') {
+      ++seen;
+      if (seen == max_lines) {
+        start = i;
+        break;
+      }
+    }
+  }
+  std::string_view tail = body.substr(start);
+  if (tail.size() > max_bytes) {
+    tail = tail.substr(tail.size() - max_bytes);
+    // The byte cap can land mid-line; drop the partial leading line so the
+    // evidence never starts with a truncated word. A single over-long line
+    // has no newline to cut on and is kept as the capped slice.
+    const std::size_t nl = tail.find('\n');
+    if (nl != std::string_view::npos) {
+      tail = tail.substr(nl + 1);
+    }
+  }
+  return std::string(tail);
+}
+
+namespace {
+
+constexpr std::size_t kFailureEvidenceMaxLines = 20;
+constexpr std::size_t kFailureEvidenceMaxBytes = 4096;
+
+// Gathers the unit's OWN evidence for a failed start: the systemd verdict and
+// the bounded journal tail, each line prefixed so the panel's log pane reads
+// as the app's words. Cannot fail: a missing systemctl/journalctl, a timeout
+// or a cancellation are handled by skipping that part, so a start failure
+// never turns into a different failure. Never runs on the UI thread.
+[[nodiscard]] std::string capture_unit_failure_evidence(
+    const std::string& service_name, std::atomic<bool>* cancel) {
+  std::string evidence;
+  const Result<std::string> systemctl = resolve_executable("systemctl");
+  if (systemctl.is_ok()) {
+    RunLimits limits;
+    limits.timeout = std::chrono::milliseconds(5000);
+    limits.cancel = cancel;
+    const Result<RunOutput> out =
+        run({systemctl.value(), "--user", "show", service_name + ".service",
+             "-p", "Result", "-p", "ExecMainStatus", "-p", "ExecMainCode", "-p",
+             "ActiveState", "-p", "SubState"},
+            limits);
+    if (out.is_ok()) {
+      const std::string verdict = parse_systemctl_show(out.value().out);
+      if (!verdict.empty()) {
+        evidence += "systemd: " + verdict;
+      }
+    }
+  }
+  const Result<std::string> journalctl = resolve_executable("journalctl");
+  if (journalctl.is_ok()) {
+    RunLimits limits;
+    limits.timeout = std::chrono::milliseconds(5000);
+    limits.cancel = cancel;
+    const Result<RunOutput> out =
+        run({journalctl.value(), "--user", "-u", service_name + ".service",
+             "-n", "20", "--no-pager", "--output=cat"},
+            limits);
+    if (out.is_ok()) {
+      const std::string tail = bound_journal_tail(
+          out.value().out, kFailureEvidenceMaxLines, kFailureEvidenceMaxBytes);
+      for (const std::string& line : split(tail, "\n")) {
+        if (line.empty()) {
+          continue;
+        }
+        if (!evidence.empty()) {
+          evidence += '\n';
+        }
+        evidence += "service output: " + line;
+      }
+    }
+  }
+  return evidence;
+}
+
+}  // namespace
+
 Result<void> RealDeployOps::await_running(const std::string& service_name,
+                                          const Paths& paths,
                                           std::atomic<bool>* cancel) {
   Result<std::string> active = wait_for_active_unit(
       service_name, std::chrono::milliseconds(8000), cancel);
@@ -324,6 +459,17 @@ Result<void> RealDeployOps::await_running(const std::string& service_name,
   }
   Result<std::string> settled = settle_active(service_name, observed);
   if (settled.is_err()) {
+    // The unit is down: surface ITS OWN words, in the error and in deploy.log
+    // (the panel reads the log), instead of sending the user to journalctl.
+    const std::string evidence =
+        capture_unit_failure_evidence(service_name, cancel);
+    if (!evidence.empty()) {
+      for (const std::string& line : split(evidence, "\n")) {
+        const Result<void> logged = deploylog_append(paths, line);
+        static_cast<void>(logged);
+      }
+      settled = settle_active(service_name, observed, evidence);
+    }
     return std::move(settled).error();
   }
   return {};
@@ -368,27 +514,36 @@ Result<std::string> wait_for_active_unit(const std::string& service_name,
 }
 
 Result<std::string> settle_active(const std::string& service_name,
-                                  const std::vector<std::string>& states) {
+                                  const std::vector<std::string>& states,
+                                  const std::string& evidence) {
   if (states.empty()) {
     // Vacuous truth is not evidence: a settle window that never got an answer
     // has confirmed nothing, and must not report a service as up.
-    return Error("deploy: " + service_name +
-                 " was never confirmed active after starting — no answer from "
-                 "systemctl during the settle window");
+    std::string message = "deploy: " + service_name +
+                          " was never confirmed active after starting — no "
+                          "answer from systemctl during the settle window";
+    if (!evidence.empty()) {
+      message += "\n" + evidence;
+    }
+    return Error(std::move(message));
   }
   for (const std::string& state : states) {
     if (state != "active") {
       // The most common cause by far is a start_cmd the app does not
-      // understand — the detector's is an ASSUMPTION and says so — so the
-      // error says that instead of leaving the user to read unit logs.
+      // understand — the detector's is an ASSUMPTION and says so — and the
+      // app's OWN verdict now rides along, so the user is not sent to the
+      // unit logs for a flag typo.
       std::string message = "deploy: ";
       message += service_name;
       message += " came up and then left 'active' (state: ";
       message += state;
       message +=
-          ") — it is not serving. A start_cmd the app does not "
-          "understand is the usual cause; the recipe file is the "
-          "recipe to edit.";
+          ") — it is not serving. the start_cmd is wrong; fix it with "
+          "'berthpanel __recipe-edit " +
+          service_name + " --start-cmd ...' or 'E' in the panel.";
+      if (!evidence.empty()) {
+        message += "\n" + evidence;
+      }
       return Error(std::move(message));
     }
   }
@@ -809,7 +964,8 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
   // `systemctl enable --now` returns 0 even for a unit that dies a moment
   // later, so success is only claimed once the unit is actually up (§11:
   // a failure must never read as a success).
-  Result<void> running = ops.await_running(recipe.service_name, options.cancel);
+  Result<void> running =
+      ops.await_running(recipe.service_name, paths, options.cancel);
   if (running.is_err()) {
     return Error(step_error("start", std::move(running).error().ctx()) +
                  " (journal entry kept for cleanup)");

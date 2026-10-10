@@ -135,8 +135,10 @@ class FakeOps final : public DeployOps {
     return {};
   }
   Result<void> await_running(const std::string& service_name,
+                             const berth::Paths& paths,
                              std::atomic<bool>* cancel) override {
     static_cast<void>(service_name);
+    static_cast<void>(paths);
     static_cast<void>(cancel);
     calls.push_back("await");
     if (fail_running)
@@ -350,6 +352,64 @@ TEST(settle_accepts_only_a_unit_that_stays_active) {
   const auto none = berth::settle_active("berthpanel-x", {});
   CHECK(none.is_err());
   CHECK(none.error().ctx().find("never confirmed") != std::string::npos);
+}
+
+// The panel must show the app's OWN error, not send the user to journalctl, so
+// the unit's captured verdict/output is composed into the failure message. The
+// function stays pure: the evidence is passed in, never gathered here.
+TEST(
+    settle_failure_message_carries_the_unit_evidence_and_points_at_the_editor) {
+  const std::string evidence =
+      "systemd: Result=exit-code ExecMainStatus=2\n"
+      "service output: flag provided but not defined: -addr";
+  const auto left = berth::settle_active("berthpanel-ascii-live",
+                                         {"active", "activating"}, evidence);
+  CHECK(left.is_err());
+  const std::string message = left.error().ctx();
+  CHECK(message.find("left 'active'") != std::string::npos);
+  // Point at the edit feature, not the stale "edit the recipe file" wording.
+  CHECK(message.find("__recipe-edit berthpanel-ascii-live") !=
+        std::string::npos);
+  CHECK(message.find("'E' in the panel") != std::string::npos);
+  // The captured evidence itself rides along, verbatim.
+  CHECK(message.find("Result=exit-code ExecMainStatus=2") != std::string::npos);
+  CHECK(message.find("flag provided but not defined: -addr") !=
+        std::string::npos);
+}
+
+// `systemctl show` prints its own order; the parser must not depend on it and
+// must emit the properties in a fixed order.
+TEST(systemctl_show_parses_the_failure_properties) {
+  const std::string show =
+      "ActiveState=activating\nSubState=start\nResult=exit-code\n"
+      "ExecMainStatus=2\nExecMainCode=1\nMainPID=0\n";
+  CHECK(berth::parse_systemctl_show(show) ==
+        "Result=exit-code ExecMainStatus=2 ExecMainCode=1 "
+        "ActiveState=activating SubState=start");
+  // Absent and unknown properties are omitted, not invented.
+  CHECK(berth::parse_systemctl_show("Result=success\nMainPID=0\n") ==
+        "Result=success");
+  CHECK(berth::parse_systemctl_show("").empty());
+  CHECK(berth::parse_systemctl_show("garbage without an equals").empty());
+}
+
+TEST(journal_tail_is_bounded_by_lines_and_bytes) {
+  // Line cap: the LAST n lines, trailing blank lines dropped.
+  CHECK(berth::bound_journal_tail("a\nb\nc\n", 2, 100) == "b\nc");
+  CHECK(berth::bound_journal_tail("only", 5, 100) == "only");
+  // Byte cap: the last bytes, partial leading line dropped.
+  CHECK(berth::bound_journal_tail("aaaa\nbbbb\ncccc", 10, 6) == "cccc");
+  // A single over-long line has no newline to cut on: keep the capped slice.
+  CHECK(berth::bound_journal_tail("abcdefghij", 10, 4) == "ghij");
+  // Caps are upper bounds and zero means "nothing".
+  CHECK(berth::bound_journal_tail("x", 0, 10).empty());
+  CHECK(berth::bound_journal_tail("x", 5, 0).empty());
+
+  std::string many;
+  for (int i = 0; i < 10; ++i) {
+    many += "line" + std::to_string(i) + "\n";
+  }
+  CHECK(berth::bound_journal_tail(many, 3, 1024) == "line7\nline8\nline9");
 }
 
 }  // namespace
