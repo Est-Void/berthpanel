@@ -549,6 +549,37 @@ TEST(reconcile_interrupted_sweeps_when_the_lock_is_free) {
   CHECK(berth::journal_load(p).value().empty());
 }
 
+TEST(sweep_removes_the_enable_symlink_left_by_an_interrupted_deploy) {
+  const TempDir tmp;
+  const berth::Paths p = test_paths(tmp.path());
+  CHECK(berth::journal_upsert(p,
+                              stale_entry(p, "berthpanel-memos", "registering"))
+            .is_ok());
+  CHECK(berth::ensure_dir(p.services_dir / "berthpanel-memos").is_ok());
+  // start_service ran `enable --now`: a unit file AND a wants symlink.
+  CHECK(berth::ensure_dir(p.units_dir).is_ok());
+  CHECK(
+      berth::atomic_write(p.units_dir / "berthpanel-memos.service", "[Unit]\n")
+          .is_ok());
+  const std::filesystem::path wants =
+      p.units_dir / "default.target.wants" / "berthpanel-memos.service";
+  CHECK(berth::ensure_dir(wants.parent_path()).is_ok());
+  std::error_code ec;
+  std::filesystem::create_symlink(p.units_dir / "berthpanel-memos.service",
+                                  wants, ec);
+  CHECK(!ec);
+
+  FakeOps ops;
+  const auto report = berth::reconcile_interrupted(p, ops, nullptr);
+  CHECK(report.is_ok());
+  CHECK(report.value().swept.size() == 1);
+  CHECK(!std::filesystem::exists(p.units_dir / "berthpanel-memos.service"));
+  // The symlink itself must be gone, dangling or not.
+  CHECK(!std::filesystem::is_symlink(wants));
+  CHECK(std::filesystem::symlink_status(wants).type() ==
+        std::filesystem::file_type::not_found);
+}
+
 TEST(sweep_refuses_a_work_dir_outside_the_services_layout) {
   const TempDir tmp;
   const berth::Paths p = test_paths(tmp.path());

@@ -602,6 +602,20 @@ void log_sweep(const Paths& paths, const std::string& line) {
   static_cast<void>(logged);
 }
 
+// Removes a unit artifact — the unit file or the `enable` symlink under
+// default.target.wants/. Returns true when something was removed. remove(2)
+// does not follow a symlink (so a DANGLING wants link is removed as a link)
+// and does not report an error for a missing path, which is exactly what we
+// need; symlink_status/exists would either follow the link or raise ENOENT
+// when the parent directory is absent.
+Result<bool> remove_unit_artifact(const std::filesystem::path& path) {
+  std::error_code ec;
+  const bool removed = std::filesystem::remove(path, ec);
+  if (ec)
+    return Error("remove " + path.string() + ": " + ec.message());
+  return removed;
+}
+
 }  // namespace
 
 Result<ReconcileReport> sweep_interrupted_entries(
@@ -722,24 +736,33 @@ Result<ReconcileReport> sweep_interrupted_entries(
     }
 
     // 4. The unit file, if the deploy died at 'registering' with the unit
-    //    already written. No daemon-reload: a loaded-but-fileless unit is
+    //    already written — plus the `enable` symlink start_service created
+    //    under default.target.wants/. Removing only the unit file leaves a
+    //    dangling wants symlink behind, the exact leftover this sweep
+    //    exists to prevent. No daemon-reload: a loaded-but-fileless unit is
     //    inert, and the next enable does a reload anyway.
     if (ok) {
       const std::filesystem::path unit_file =
           paths.units_dir / (entry.service_name + ".service");
-      std::error_code ec;
-      const bool existed = std::filesystem::exists(unit_file, ec);
-      if (ec) {
+      Result<bool> removed_unit = remove_unit_artifact(unit_file);
+      if (removed_unit.is_err()) {
         ok = false;
-        why = "stat " + unit_file.string() + ": " + ec.message();
-      } else if (existed) {
-        std::filesystem::remove(unit_file, ec);
-        if (ec) {
-          ok = false;
-          why = "remove " + unit_file.string() + ": " + ec.message();
-        } else {
-          log_sweep(paths, "cleanup removed unit file " + unit_file.string());
-        }
+        why = removed_unit.error().ctx();
+      } else if (removed_unit.value()) {
+        log_sweep(paths, "cleanup removed unit file " + unit_file.string());
+      }
+    }
+    if (ok) {
+      const std::filesystem::path wants_link =
+          paths.units_dir / "default.target.wants" /
+          (entry.service_name + ".service");
+      Result<bool> removed_link = remove_unit_artifact(wants_link);
+      if (removed_link.is_err()) {
+        ok = false;
+        why = removed_link.error().ctx();
+      } else if (removed_link.value()) {
+        log_sweep(paths,
+                  "cleanup removed enable symlink " + wants_link.string());
       }
     }
 
