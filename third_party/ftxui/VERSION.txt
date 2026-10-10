@@ -1,0 +1,27 @@
+FTXUI — vendored, static
+========================
+
+Tag:     v6.1.9 (latest stable 6.x)
+Source:  https://github.com/ArthurSonzogni/FTXUI/releases/download/v6.1.9/source.tar.gz
+SHA-256: 868670e451c38bdc3ad23d086796543cde4a845fd0420148b198dff5cbe08285  (original tarball)
+Files:   include/ftxui/** and src/ftxui/{dom,screen,component}/** (no
+         *_test.cpp, no *_fuzzer.cpp, no CMakeLists/BUILD.bazel/scripts/
+         examples/docs), LICENSE. The upstream layout is kept as-is: both
+         the include/ and the src/ dir are on the -isystem path, because
+         the private headers live next to their .cpp.
+License: MIT (per LICENSE)
+
+Vendored rather than taken from the distro for two reasons, in this order:
+CI-portability and reproducibility. There is no distro package we can rely
+on being present in every environment the project is built or gated in, and a
+pinned source tree with a pinned SHA-256 is the only way the release tarball
+can claim the same sources that were tested.
+
+Compiled per mode with relaxed warnings (`-w`): third-party code must not
+gate on our -Werror set (Makefile vendored-C++ rule). Includes go through
+-isystem so their headers never trip our warning flags either. The only
+sources we compile are dom/, screen/ and component/ — the amalgamated and
+example trees are not vendored.
+
+Update by replacing the tree and this manifest in one commit, and re-run
+`make musl` (stage 8.2) if the static-link requirements change.

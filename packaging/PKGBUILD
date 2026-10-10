@@ -1,0 +1,37 @@
+# Maintainer: berthpanel <maintainer@example.invalid>
+#
+# Distribution-native alternative to install.sh (dev.md §10, §12.5). License is
+# settled: GPL-3.0, and the source this package builds from IS the
+# Corresponding Source, so the package is compliant as-is.
+#
+# Before the first upload: set pkgver to the release tag and fill sha256sums
+# from the release source tarball (`scripts/release-local.sh` writes
+# `release/berthpanel-<tag>-src.tar.gz`; use its GitHub archive equivalent),
+# then `makepkg`.
+
+pkgname=berthpanel
+pkgver=0.0.0
+pkgrel=1
+pkgdesc="Local-first deploy panel for curated self-hosted apps (no root, allowlisted egress, net.log)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Est-Void/berthpanel"
+license=('GPL-3.0-only')
+# Runtime: git (clone), python >= 3.10 (SearXNG builds), systemd (user units).
+# No root at runtime and no Docker daemon.
+depends=('git' 'python' 'systemd')
+makedepends=('gcc' 'make' 'zlib')
+# The release build is already stripped with a deterministic build-id (dev.md §3).
+options=('!strip')
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/v${pkgver}.tar.gz")
+sha256sums=('SKIP')  # pin from the release source tarball before upload
+
+build() {
+  cd "${srcdir}/${pkgname}-${pkgver}"
+  make release
+}
+
+package() {
+  cd "${srcdir}/${pkgname}-${pkgver}"
+  install -Dm755 build/release/berthpanel "${pkgdir}/usr/bin/berthpanel"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

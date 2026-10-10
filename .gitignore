@@ -1,0 +1,16 @@
+docs/*
+# The one doc that IS tracked: the pinned public release key CI verifies
+# against (dev.md §10). Everything else under docs/ is local-only.
+!docs/release.pub
+build/
+
+# release staging (stage 8.3): only the checksums and the curated notes are
+# committed; the built artifacts are attached to the GitHub release instead.
+release/berthpanel
+release/install.sh
+release/*.tar.gz
+release/*.tar.gz.minisig
+
+# A private signing key must never be tracked. It lives in ~/.config/berthpanel
+# (see scripts/keygen-release.sh); this pattern is only a safety net.
+*.key

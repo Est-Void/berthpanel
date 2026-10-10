@@ -1,0 +1,41 @@
+# nfpm config for the .deb and .rpm (dev.md §10, §12.5).
+#
+# License is settled: GPL-3.0. The Corresponding Source tarball is packaged
+# alongside the binary (/usr/share/berthpanel), so the package is compliant.
+#
+# Build the static artifact first, then package it:
+#   make musl
+#   scripts/release-local.sh            # stages release/ incl. the src tarball
+#   BERTHPANEL_VERSION=vX.Y.Z nfpm package -f packaging/nfpm.yaml -p deb
+#   BERTHPANEL_VERSION=vX.Y.Z nfpm package -f packaging/nfpm.yaml -p rpm
+#
+# nfpm substitutes ${VAR} from the environment.
+
+name: berthpanel
+arch: amd64
+platform: linux
+version: ${BERTHPANEL_VERSION}
+section: admin
+priority: optional
+maintainer: berthpanel
+vendor: berthpanel
+homepage: https://github.com/Est-Void/berthpanel
+license: GPL-3.0-only
+description: |
+  Local-first deploy panel for curated self-hosted apps.
+  No root, allowlisted egress, net.log transparency, and hardened systemd
+  user units. Ships one static binary.
+
+contents:
+  - src: build/musl/berthpanel
+    dst: /usr/bin/berthpanel
+    file_info:
+      mode: 0755
+  - src: LICENSE
+    dst: /usr/share/licenses/berthpanel/LICENSE
+    file_info:
+      mode: 0644
+  - src: release/berthpanel-${BERTHPANEL_VERSION}-src.tar.gz
+    dst: /usr/share/berthpanel/berthpanel-${BERTHPANEL_VERSION}-src.tar.gz
+    file_info:
+      mode: 0644

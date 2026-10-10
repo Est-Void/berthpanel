@@ -1,0 +1,16 @@
+mbedTLS — vendored, static
+==========================
+
+Tag:     mbedtls-3.6.7 (LTS)
+Source:  https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2
+SHA-256: a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6  (original tarball)
+Files:   library/, include/, LICENSE (release tarball is self-contained;
+         programs/, tests/ and the framework submodule are not vendored)
+License: Apache-2.0 OR GPL-2.0-or-later (dual, per LICENSE)
+
+Used for the allowlisted HTTPS client (hoster/httpclient.cpp). Compiled
+per mode with relaxed warnings; the default mbedtls_config.h is used —
+no config trimming until there is a reason and a test.
+
+Update by replacing the tree and this manifest in one commit, and re-pin
+the trust store (see trust/VERSION.txt) only if the release requires it.

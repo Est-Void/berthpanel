@@ -1,0 +1,18 @@
+sha2 (SHA-256) — vendored
+=========================
+
+Source:  https://github.com/B-Con/crypto-algorithms (public domain)
+Commit:  cfbde48414baacf51fc7c74f275190881f037d32 (master at vendoring time)
+Files:   sha256.c, sha256.h
+SHA-256: f0ca1f35f5a575efa528e58f1cb4dfaa018a004cca78f35983a6f4201a5570bd  sha256.c
+         a946e621775fd8251624e77d19f25407c4b6074ab780027e5797b77c7acf79b5  sha256.h
+Patch:   sha256.c line 49 casts each byte to WORD before `<< 24`. Upstream
+         promotes BYTE (unsigned char) to int, so a byte >= 0x80 shifts into
+         the sign bit — signed-overflow UB that UBSan flags on every digest of
+         non-ASCII input, and that the sha256 tests exercise. Local patch; the
+         SHA-256 above is of the patched file.
+
+Used for tool (toolbox.cpp) and plugin content pins. Compiled as C with
+relaxed flags on purpose (third-party code must not gate on our warning
+set); the C++ wrapper is src/util/sha256.h. Update by replacing the files
+and this manifest in one commit.
