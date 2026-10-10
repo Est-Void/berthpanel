@@ -12,6 +12,7 @@
 #include "units.h"
 #include "util/errno.h"
 #include "util/sleep.h"
+#include "util/strutil.h"
 
 namespace berth {
 
@@ -45,14 +46,25 @@ Error cancelled_error(const std::string& unit) {
 }
 
 // is-active's nonzero exit means "not active", which is DATA here, not a
-// failure — hence the _code variant.
+// failure — hence the _output variant. But the exit code alone cannot tell
+// a stopped unit from one that is crash-looping: `is-active` exits nonzero
+// for BOTH "inactive" and "activating (auto-restart)". A unit mid-restart
+// still holds its resources and will come back, so it MUST be stopped, not
+// treated as absent — otherwise a deploy that died at 'registering' leaves
+// an orphan that cleanup removes the unit file for but systemd keeps
+// restarting. Only a genuinely stopped state is Ok(false).
 Result<bool> is_active(const std::string& unit, const StopPolicy& policy,
                        std::atomic<bool>* cancel) {
-  Result<int> code =
-      systemctl_user_code({"is-active", unit}, policy.stop_timeout, cancel);
-  if (code.is_err())
-    return std::move(code).error();
-  return code.value() == 0;
+  Result<RunOutput> out =
+      systemctl_user_output({"is-active", unit}, policy.stop_timeout, cancel);
+  if (out.is_err())
+    return std::move(out).error();
+  if (out.value().exit_code == 0)
+    return true;  // "active"
+  const std::string_view state = trim(out.value().out);
+  if (state == "activating" || state == "reloading" || state == "deactivating")
+    return true;
+  return false;
 }
 
 // Polls until the unit is inactive or the budget runs out. Ok(false) means

@@ -362,10 +362,16 @@ Result<RunOutput> systemctl_user_run(const std::vector<std::string>& args,
 Result<int> systemctl_user_code(const std::vector<std::string>& args,
                                 const std::chrono::milliseconds timeout,
                                 std::atomic<bool>* cancel) {
-  Result<RunOutput> out = systemctl_user_run(args, timeout, cancel);
+  Result<RunOutput> out = systemctl_user_output(args, timeout, cancel);
   if (out.is_err())
     return std::move(out).error();
   return out.value().exit_code;
+}
+
+Result<RunOutput> systemctl_user_output(const std::vector<std::string>& args,
+                                        const std::chrono::milliseconds timeout,
+                                        std::atomic<bool>* cancel) {
+  return systemctl_user_run(args, timeout, cancel);
 }
 
 Result<void> systemctl_user(const std::vector<std::string>& args) {

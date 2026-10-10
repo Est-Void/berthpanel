@@ -32,6 +32,7 @@
 
 #include "../core/paths.h"
 #include "../util/result.h"
+#include "../util/subprocess.h"
 
 namespace berth {
 
@@ -111,6 +112,15 @@ struct UnitSpec {
 // `is-active` exits nonzero for "not active" without being broken). Err
 // only on spawn/wait/timeout/cancellation.
 [[nodiscard]] Result<int> systemctl_user_code(
+    const std::vector<std::string>& args, std::chrono::milliseconds timeout,
+    std::atomic<bool>* cancel);
+
+// Like systemctl_user_code, but keeps the child's stdout/stderr. Needed
+// wherever the exit code is not enough to tell states apart: `is-active`
+// exits nonzero for BOTH "inactive" and "activating" (crash-loop
+// auto-restart), and only the printed state word distinguishes a stopped
+// unit from one that is still live and coming back.
+[[nodiscard]] Result<RunOutput> systemctl_user_output(
     const std::vector<std::string>& args, std::chrono::milliseconds timeout,
     std::atomic<bool>* cancel);
 [[nodiscard]] Result<void> systemctl_daemon_reload();

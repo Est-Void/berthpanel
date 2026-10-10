@@ -167,6 +167,28 @@ TEST(terminator_stops_a_running_unit) {
   CHECK(log.find("SIGKILL") == std::string::npos);  // no escalation needed
 }
 
+TEST(terminator_stops_an_activating_auto_restart_unit) {
+  // Regression: `systemctl is-active` exits 3 for a unit that is
+  // "activating" (a crash-loop / auto-restart), which is NOT the same as
+  // "inactive". The terminator must still STOP it — an interrupted deploy
+  // that died at 'registering' leaves exactly this shape, and treating it
+  // as "nothing to stop" left the live unit retrying forever after cleanup.
+  const TempDir tmp;
+  const FakeSystemctl ctl(tmp.path(), "activating", "stopped", "stopped");
+  std::lock_guard lock(berth::env_test_lock());
+  ScopedEnv path_env("PATH");
+  path_env.set(ctl.bin_dir().string() + ":/usr/bin:/bin");
+
+  SystemdUnitTerminator terminator(fast_policy());
+  const Result<bool> stopped = terminator.stop("berthpanel-memos", nullptr);
+  CHECK(stopped.is_ok());
+  CHECK(stopped.value());  // it was live and is now confirmed inactive
+
+  const std::string log = ctl.log();
+  CHECK(log.find("is-active berthpanel-memos.service") != std::string::npos);
+  CHECK(log.find("stop berthpanel-memos.service") != std::string::npos);
+}
+
 TEST(terminator_escalates_to_sigkill_when_sigterm_is_ignored) {
   const TempDir tmp;
   // stop "succeeds" but the unit stays active; only the kill lands.
