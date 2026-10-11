@@ -363,6 +363,8 @@ std::vector<std::string> draft_stored_lines(
     const std::filesystem::path& recipe_path) {
   return {
       "saved: " + recipe_path.string(),
+      "selected in the list above — Esc closes this draft, then Enter deploys "
+      "it",
       "it is on disk before anything deploys — the draft you deploy is the "
       "draft you can read",
   };
@@ -381,7 +383,8 @@ std::vector<KeyHint> draft_key_hints(const DraftField focus, const bool running,
   }
   if (ready) {
     return {{"d", "store the draft and deploy it"},
-            {"s", "store the draft only"},
+            {"s", "store the draft only (then select it and press Enter)"},
+            {"Esc", "discard the draft — Enter, e and x work again"},
             {"i", "paste another URL"},
             {"\xe2\x86\x91\xe2\x86\x93", "select a recipe"}};
   }

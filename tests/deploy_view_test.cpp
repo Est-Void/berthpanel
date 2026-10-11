@@ -304,6 +304,8 @@ TEST(draft_stored_says_the_draft_is_on_disk_before_it_deploys) {
       "/home/u/.config/berthpanel/recipes/berthpanel-myapp.json");
   CHECK(contains(lines, "berthpanel-myapp.json"));
   CHECK(contains(lines, "on disk before anything deploys"));
+  // And it tells the user the recipe is selected, so Esc then Enter runs it.
+  CHECK(contains(lines, "selected in the list above"));
 }
 
 TEST(draft_key_hints_follow_the_state_they_are_in) {
@@ -322,11 +324,13 @@ TEST(draft_key_hints_follow_the_state_they_are_in) {
   CHECK(hint_contains(typing, "Esc"));
   CHECK(hint_contains(typing, "leave the fields"));
 
-  // A draft waiting: accept, store-only, or start over.
+  // A draft waiting: accept, store-only, or start over. Escape dismisses it
+  // (without quitting the panel) so the stored recipe becomes deployable.
   const std::vector<tui::KeyHint> review =
       tui::draft_key_hints(tui::DraftField::kNone, false, true);
   CHECK(hint_contains(review, "store the draft and deploy it"));
   CHECK(hint_contains(review, "store the draft only"));
+  CHECK(hint_contains(review, "discard the draft"));
   CHECK(hint_contains(review, "paste another URL"));
 }
 

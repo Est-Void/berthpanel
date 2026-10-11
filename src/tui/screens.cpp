@@ -891,12 +891,30 @@ void accept_draft(const std::shared_ptr<Panel>& panel,
     }
     panel->draft_storing = true;
   }
-  run_on_worker<std::filesystem::path>(
+  // Storing reloads the catalog in the SAME worker (like the removal does), so
+  // the recipe that was just written can be selected without racing the write:
+  // the next Enter then deploys exactly what was saved.
+  struct StoredDraft {
+    std::filesystem::path path;
+    Catalog catalog;
+  };
+  const std::string service_name = recipe.service_name;
+  run_on_worker<StoredDraft>(
       panel, "store draft",
-      [paths, recipe, force](const std::shared_ptr<Op>& /*op*/) {
-        return berth::store_draft(paths, recipe, force);
+      [paths, recipe,
+       force](const std::shared_ptr<Op>& /*op*/) -> berth::Result<StoredDraft> {
+        const berth::Result<std::filesystem::path> stored =
+            berth::store_draft(paths, recipe, force);
+        if (stored.is_err())
+          return std::move(stored).error();
+        berth::Result<Catalog> reloaded = load_catalog(paths);
+        if (reloaded.is_err())
+          return berth::with_context(
+              std::move(reloaded).error(),
+              "reloading the catalog after storing the draft");
+        return StoredDraft{stored.value(), std::move(reloaded).value()};
       },
-      [](Panel& state, berth::Result<std::filesystem::path>&& stored) {
+      [service_name](Panel& state, berth::Result<StoredDraft>&& stored) {
         state.draft_clash_confirming = false;
         state.draft_storing = false;
         if (stored.is_err()) {
@@ -904,10 +922,20 @@ void accept_draft(const std::shared_ptr<Panel>& panel,
           state.draft_status = "the draft was NOT stored";
           return;
         }
+        StoredDraft value = std::move(stored).value();
         state.draft_stored = true;
-        state.draft_stored_path = stored.value();
+        state.draft_stored_path = std::move(value.path);
         state.draft_error.clear();
         state.draft_status = "stored";
+        // Select it so Enter deploys it once Esc closes the draft (the draft
+        // owns Enter while it is up).
+        state.catalog = std::move(value.catalog);
+        for (std::size_t i = 0; i < state.catalog.recipes.size(); ++i) {
+          if (state.catalog.recipes[i].service_name == service_name) {
+            state.catalog_cursor = i;
+            break;
+          }
+        }
       });
 }
 

@@ -333,6 +333,20 @@ class AppComponent final : public ftxui::ComponentBase {
       switch_tab(-1);
       return true;
     }
+    // A ready draft owns Enter until it is dismissed. Escape drops it (rather
+    // than quitting the whole panel) and hands the keys back to the list, so
+    // the recipe just stored can be deployed with the next Enter (4.21).
+    if (deploy_tab && event == Event::Escape) {
+      bool draft_up = false;
+      {
+        std::lock_guard lock(panel_->mutex);
+        draft_up = panel_->draft_ready;
+      }
+      if (draft_up) {
+        discard_draft(panel_);
+        return true;
+      }
+    }
     if (key == "q" || event == Event::Escape) {
       // Cancel FIRST, then leave the loop: every long operation polls its flag
       // (§11), so a quit unwinds what is running instead of orphaning it.
