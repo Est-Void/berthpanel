@@ -7,6 +7,9 @@
 // Covered:
 //   * verify-first, fail-closed: a bad signature or a checksum mismatch
 //     installs nothing;
+//   * only the artifacts a binary install actually fetches are checksummed
+//     (a real SHA256SUMS also lists install.sh and the source tarball);
+//   * a SHA256SUMS with no line for the binary is a loud failure;
 //   * --allow-checksum-only is the explicit opt-out of the signature step;
 //   * a good signature installs the binary into <prefix>/bin;
 //   * the uninstaller stops/removes only `berthpanel-` units and unit files,
@@ -167,6 +170,54 @@ TEST(installer_rejects_a_checksum_mismatch) {
   CHECK(result.is_ok());
   CHECK(result.value().exit_code != 0);
   CHECK(result.value().err.find("checksum verification FAILED") !=
+        std::string::npos);
+  CHECK(!fs::exists(prefix / "bin" / "berthpanel"));
+}
+
+TEST(installer_verifies_only_the_artifacts_it_fetches) {
+  const fs::path root = repo_root();
+  CHECK(!root.empty());
+
+  const TempDir tmp;
+  const fs::path src = make_source(tmp.path() / "src", "BIN", true);
+  const fs::path prefix = tmp.path() / "prefix";
+  // A real release's SHA256SUMS also lists install.sh and the source tarball,
+  // neither of which a binary install fetches. They must not be required.
+  {
+    std::ofstream out(src / "SHA256SUMS", std::ios::app);
+    out << std::string(64, 'a') << "  install.sh\n"
+        << std::string(64, 'b') << "  berthpanel-v0.1.0-alpha-src.tar.gz\n";
+  }
+
+  const std::vector<std::string> env{"PATH=/usr/bin:/bin"};
+  const berth::Result<berth::RunOutput> result =
+      run_cmd({root / "install.sh", "--source", src.string(), "--prefix",
+               prefix.string(), "--allow-checksum-only", "--dry-run"},
+              env);
+  CHECK(result.is_ok());
+  CHECK(result.value().exit_code == 0);
+  CHECK(result.value().out.find("would install") != std::string::npos);
+  CHECK(!fs::exists(prefix / "bin" / "berthpanel"));
+}
+
+TEST(installer_rejects_a_missing_binary_checksum_line) {
+  const fs::path root = repo_root();
+  CHECK(!root.empty());
+
+  const TempDir tmp;
+  const fs::path src = make_source(tmp.path() / "src", "BIN", true);
+  const fs::path prefix = tmp.path() / "prefix";
+  // Lists the installer but not the artifact being installed: fail closed.
+  write_text(src / "SHA256SUMS", std::string(64, 'a') + "  install.sh\n");
+
+  const std::vector<std::string> env{"PATH=/usr/bin:/bin"};
+  const berth::Result<berth::RunOutput> result =
+      run_cmd({root / "install.sh", "--source", src.string(), "--prefix",
+               prefix.string(), "--allow-checksum-only"},
+              env);
+  CHECK(result.is_ok());
+  CHECK(result.value().exit_code != 0);
+  CHECK(result.value().err.find("no berthpanel entry in SHA256SUMS") !=
         std::string::npos);
   CHECK(!fs::exists(prefix / "bin" / "berthpanel"));
 }

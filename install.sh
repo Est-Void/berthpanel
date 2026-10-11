@@ -324,8 +324,27 @@ install() {
   fi
 
   echo "install: verifying artifact checksums"
-  (cd "$work_dir" && sha256sum --check --strict SHA256SUMS) ||
+  # SHA256SUMS also covers install.sh and the source tarball, which a binary
+  # install neither fetched nor uses; check exactly the artifacts present and
+  # needed. The binary's own line is mandatory — a guard that cannot fail is
+  # not a guard (dev.md §11), so a missing line is loud, never a silent skip.
+  filtered="$(mktemp)"
+  for artifact in "$BIN_NAME" release.pub; do
+    [ -f "$work_dir/${artifact}" ] || continue
+    if line="$(awk -v f="$artifact" '$2 == f { print; found = 1 } END { if (!found) exit 1 }' "$work_dir/SHA256SUMS")"; then
+      printf '%s\n' "$line" >> "$filtered"
+    elif [ "$artifact" = "$BIN_NAME" ]; then
+      rm -f "$filtered"
+      die "no ${BIN_NAME} entry in SHA256SUMS — refusing to install"
+    else
+      echo "install: warning: no ${artifact} entry in SHA256SUMS; not checked" >&2
+    fi
+  done
+  if ! (cd "$work_dir" && sha256sum --check --strict "$filtered"); then
+    rm -f "$filtered"
     die "checksum verification FAILED — refusing to install"
+  fi
+  rm -f "$filtered"
 
   dest_dir="${prefix}/bin"
   dest="${dest_dir}/${BIN_NAME}"
