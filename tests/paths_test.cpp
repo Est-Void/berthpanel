@@ -12,24 +12,16 @@
 
 using berth::paths_from_env;
 
-namespace {
-
-void clear_xdg() {
-  ScopedEnv state("XDG_STATE_HOME");
-  ScopedEnv data("XDG_DATA_HOME");
-  ScopedEnv config("XDG_CONFIG_HOME");
-  state.unset();
-  data.unset();
-  config.unset();
-}
-
-}  // namespace
-
 TEST(paths_defaults_from_home) {
   std::lock_guard lock(berth::env_test_lock());
   ScopedEnv home("HOME");
   home.set("/home/u");
-  clear_xdg();
+  ScopedEnv state("XDG_STATE_HOME");
+  state.unset();
+  ScopedEnv data("XDG_DATA_HOME");
+  data.unset();
+  ScopedEnv config("XDG_CONFIG_HOME");
+  config.unset();
 
   const auto r = paths_from_env();
   CHECK(r.is_ok());
@@ -72,7 +64,10 @@ TEST(paths_empty_env_is_unset) {
   home.set("/home/u");
   ScopedEnv state("XDG_STATE_HOME");
   state.set("");  // the §11 trap: empty means unset, never relative
-  clear_xdg();
+  ScopedEnv data("XDG_DATA_HOME");
+  data.unset();
+  ScopedEnv config("XDG_CONFIG_HOME");
+  config.unset();
 
   const auto r = paths_from_env();
   CHECK(r.is_ok());
@@ -85,7 +80,10 @@ TEST(paths_relative_xdg_ignored) {
   home.set("/home/u");
   ScopedEnv data("XDG_DATA_HOME");
   data.set("relative/path");  // XDG spec: non-absolute is invalid
-  clear_xdg();
+  ScopedEnv state("XDG_STATE_HOME");
+  state.unset();
+  ScopedEnv config("XDG_CONFIG_HOME");
+  config.unset();
 
   const auto r = paths_from_env();
   CHECK(r.is_ok());
