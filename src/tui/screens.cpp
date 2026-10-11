@@ -258,25 +258,8 @@ void cancel_deploy(const std::shared_ptr<Panel>& panel) {
   request_render(*panel);
 }
 
-namespace {
-
-// The index of a field, for the marker row above (kNone renders no marker).
-DraftField draft_field_at(const std::size_t index) {
-  switch (index) {
-    case 0:
-      return DraftField::kUrl;
-    case 1:
-      return DraftField::kRef;
-    default:
-      return DraftField::kPort;
-  }
-}
-
-}  // namespace
-
-Element render_deploy_screen(const Panel& panel, ftxui::Element url_input,
-                             ftxui::Element ref_input,
-                             ftxui::Element port_input) {
+Element render_deploy_screen(const Panel& panel,
+                             const ftxui::Elements& create_inputs) {
   // The overwrite question replaces the screen, like every other dialog: it is
   // the one thing that must not be read past.
   if (panel.draft_clash_confirming) {
@@ -372,32 +355,42 @@ Element render_deploy_screen(const Panel& panel, ftxui::Element url_input,
   }
   out.push_back(ftxui::separator());
 
-  // The three text fields. The labels, the values and the focus marker are all
-  // laid out in one line each: an Input only draws its own box, so a bare
-  // hbox of three of them would stack them instead.
-  const bool locked = panel.deploy_running.load(std::memory_order_relaxed) ||
-                      panel.draft_running;
-  {
-    // The marker and the label are ours; the VALUE is the Input's own render,
-    // which brings its cursor with it. Each row is flex so the Input takes
-    // whatever width is left instead of wrapping onto the next field's line.
-    const ftxui::Element fields[3] = {url_input | ftxui::xflex,
-                                      ref_input | ftxui::xflex,
-                                      port_input | ftxui::xflex};
-    for (std::size_t i = 0; i < 3; ++i) {
-      const bool focused = panel.draft_field == draft_field_at(i);
+  // The creation form takes the whole block: it is the only way to describe a
+  // new service, so its eleven fields are what the user is looking at.
+  if (panel.create_active || panel.create_running) {
+    out.push_back(ftxui::text("NEW SERVICE") | ftxui::bold |
+                  ftxui::color(Color::Magenta));
+    out.push_back(
+        ftxui::text("  url and ref say where it comes from; the eight fields "
+                    "below are yours — they override what detection guesses") |
+        ftxui::dim);
+    if (!panel.create_status.empty()) {
+      out.push_back(ftxui::text("\xe2\x97\x8f " + panel.create_status) |
+                    ftxui::dim);
+    }
+    if (!panel.create_error.empty()) {
+      for (const std::string& part : berth::split(panel.create_error, "\n")) {
+        out.push_back(ftxui::paragraph("  " + part) | ftxui::color(Color::Red));
+      }
+    }
+    for (std::size_t i = 0; i < create_inputs.size() && i < kCreateFieldCount;
+         ++i) {
+      const CreateField field = create_field_at(i);
+      const bool focused = panel.create_field == field;
       Elements row;
       row.push_back(ftxui::text(focused ? "\xe2\x96\xb8 " : "  ") |
                     ftxui::color(focused ? Color::Magenta : Color::White));
-      row.push_back(
-          ftxui::text(std::string(draft_field_label(draft_field_at(i))) +
-                      "   ") |
-          ftxui::dim);
-      row.push_back(fields[i]);
+      std::string label(create_field_label(field));
+      label.append(13 - std::min<std::size_t>(label.size(), 13), ' ');
+      row.push_back(ftxui::text(label + "  ") | ftxui::dim);
+      row.push_back(create_inputs[i] | ftxui::xflex);
       out.push_back(ftxui::hbox(std::move(row)) | ftxui::flex);
     }
-    out.push_back(
-        ftxui::hbox({ftxui::text("  "), key_hint(deploy_fields_hint(locked))}));
+    out.push_back(ftxui::separator());
+    for (const KeyHint& hint :
+         create_key_hints(panel.create_field, panel.create_running)) {
+      out.push_back(key_hint(hint));
+    }
   }
   out.push_back(ftxui::separator());
 
@@ -467,10 +460,8 @@ Element render_deploy_screen(const Panel& panel, ftxui::Element url_input,
                            Color::Cyan));
   out.push_back(ftxui::separator());
   const std::vector<KeyHint> hints =
-      panel.draft_field != DraftField::kNone || panel.draft_running ||
-              panel.draft_ready
-          ? draft_key_hints(panel.draft_field, panel.draft_running,
-                            panel.draft_ready)
+      panel.draft_running || panel.draft_ready
+          ? draft_key_hints(panel.draft_running, panel.draft_ready)
           : deploy_key_hints(
                 panel.deploy_running.load(std::memory_order_relaxed));
   for (const KeyHint& hint : hints) {
@@ -747,86 +738,122 @@ struct DraftPrepared {
 
 }  // namespace
 
-void start_draft(const std::shared_ptr<Panel>& panel,
-                 const berth::Paths& paths) {
-  std::string url;
-  std::string ref;
+namespace {
+
+// The creation form's result: the detected draft with the user's eight values
+// applied on top. Everything the review shows and the store writes.
+struct PreparedRecipe {
+  berth::Recipe recipe;
+  std::string owner_repo;
+  std::string commit;
+  std::vector<berth::ToolStatus> tools;
+  std::vector<std::string> warnings;
+  berth::DraftClash clash;
+  std::string error;
+};
+
+}  // namespace
+
+void start_create_recipe(const std::shared_ptr<Panel>& panel,
+                         const berth::Paths& paths,
+                         const berth::DraftRequest& request,
+                         const EditFields& fields) {
   {
     std::lock_guard lock(panel->mutex);
-    if (panel->draft_running || panel->deploy_in_flight) {
+    if (panel->create_running || panel->deploy_in_flight) {
       return;
     }
-    url = berth::trim(panel->draft_url);
-    ref = berth::trim(panel->draft_ref);
-    if (url.empty()) {
-      // Silence on an empty field: there is nothing to say about nothing, and
-      // the field is on screen with its hint.
-      return;
-    }
-    panel->draft_running = true;
-    panel->draft_ready = false;
-    panel->draft_stored = false;
-    panel->draft_stored_path.clear();
-    panel->draft_error.clear();
-    panel->draft_clash = berth::DraftClash{};
-    panel->draft_status =
-        "resolving " + url + (ref.empty() ? "" : "@" + ref) + "...";
+    panel->create_running = true;
+    panel->create_error.clear();
+    panel->create_status = "working...";
   }
-
   const std::shared_ptr<Panel> keep_alive = panel;
-  run_on_worker<DraftPrepared>(
-      panel, "recipe draft",
-      [paths, url, ref, keep_alive](const std::shared_ptr<Op>& op) {
+  run_on_worker<PreparedRecipe>(
+      panel, "create recipe",
+      [paths, request, fields, keep_alive](
+          const std::shared_ptr<Op>& op) -> berth::Result<PreparedRecipe> {
         {
-          // Publish the op so 'c' reaches the draft's own flag while it runs;
-          // it is reset in the apply once the draft is no longer in flight.
+          // Publish the op so 'c' reaches the creation's own flag while it
+          // runs.
           std::lock_guard lock(keep_alive->mutex);
-          keep_alive->draft_op = op;
+          keep_alive->create_op = op;
         }
-        // Progress from the worker lands in the status line under the panel
-        // lock, and asks for a redraw: the render thread reads it next frame.
         const berth::DraftProgress progress =
             [keep_alive](const std::string& line) {
               std::lock_guard lock(keep_alive->mutex);
-              keep_alive->draft_status = line;
+              keep_alive->create_status = line;
               request_render(*keep_alive);
             };
-        berth::Result<berth::DraftResult> prepared = berth::prepare_draft(
-            paths, berth::DraftRequest{.url = url, .ref = ref}, &op->cancel,
-            progress);
-        DraftPrepared out;
+        berth::Result<berth::DraftResult> prepared =
+            berth::prepare_draft(paths, request, &op->cancel, progress);
+        PreparedRecipe out;
         if (prepared.is_err()) {
           out.error = prepared.error().ctx();
           return out;
         }
-        out.draft = std::move(prepared).value();
+        berth::DraftResult detected = std::move(prepared).value();
+
+        // The user's eight values WIN over the detector's guesses — that is the
+        // whole point of the form. The PURE engine runs validate_recipe on the
+        // result, so a form that describes something invalid is refused here,
+        // before a review exists, let alone a file (§8).
+        const berth::Result<berth::RecipeEdits> edits =
+            assemble_recipe_edits(fields);
+        if (edits.is_err()) {
+          out.error = edits.error().ctx();
+          return out;
+        }
+        const berth::Result<berth::Recipe> applied =
+            berth::apply_recipe_edits(detected.draft, edits.value());
+        if (applied.is_err()) {
+          out.error = applied.error().ctx();
+          return out;
+        }
+        detected.draft = std::move(applied).value();
+        out.recipe = std::move(detected.draft);
+        out.owner_repo = std::move(detected.owner_repo);
+        out.commit = std::move(detected.commit);
+        out.tools = std::move(detected.tools);
+        out.warnings = std::move(detected.warnings);
         const berth::Result<berth::DraftClash> clash =
-            berth::find_recipe_clash(paths, out.draft.draft.service_name);
+            berth::find_recipe_clash(paths, out.recipe.service_name);
+        // A clash we could not determine is treated as a clash: a store that
+        // cannot check the name has to ask, never assume it is free.
         if (clash.is_err()) {
-          // A clash we could not determine is treated as a clash: a store that
-          // cannot check the name has to ask, never assume it is free.
           out.clash.exists = true;
-          out.clash.service_name = out.draft.draft.service_name;
+          out.clash.service_name = out.recipe.service_name;
         } else {
           out.clash = clash.value();
         }
         return out;
       },
-      [](Panel& state, berth::Result<DraftPrepared>&& prepared) {
-        state.draft_running = false;
-        state.draft_op.reset();
-        if (!prepared.value().error.empty()) {
-          state.draft_ready = false;
-          state.draft_error = prepared.value().error;
-          state.draft_status = "the draft could not be made";
+      [](Panel& state, berth::Result<PreparedRecipe>&& prepared) {
+        state.create_running = false;
+        state.create_op.reset();
+        PreparedRecipe value = std::move(prepared).value();
+        if (!value.error.empty()) {
+          state.create_error = value.error;
+          state.create_status = "the recipe could not be created";
           return;
         }
-        state.draft_error.clear();
-        DraftPrepared value = std::move(prepared).value();
-        state.draft = std::move(value.draft);
+        state.create_error.clear();
+        state.create_active = false;
+        state.create_field = CreateField::kNone;
+        // Handed to the EXISTING review + store path: the form created it, and
+        // from here `s` stores and `d` stores and deploys. One store, one
+        // clash policy, one review (the old shape: two create paths drift).
+        state.draft = berth::DraftResult{};
+        state.draft.draft = std::move(value.recipe);
+        state.draft.owner_repo = std::move(value.owner_repo);
+        state.draft.commit = std::move(value.commit);
+        state.draft.tools = std::move(value.tools);
+        state.draft.warnings = std::move(value.warnings);
         state.draft_clash = std::move(value.clash);
         state.draft_ready = true;
-        state.draft_status = "review it, then d to store and deploy";
+        state.draft_stored = false;
+        state.draft_error.clear();
+        state.draft_status =
+            "review it, then s to store or d to store and deploy";
       });
 }
 
@@ -849,7 +876,7 @@ void accept_draft(const std::shared_ptr<Panel>& panel,
     } else {
       recipe = panel->draft.draft;
       const berth::Result<std::uint16_t> parsed =
-          parse_port_field(panel->deploy_port_field);
+          parse_port_field(panel->create_deploy_port);
       if (parsed.is_err()) {
         panel->draft_error = parsed.error().ctx();
         panel->draft_status = "nothing was stored";

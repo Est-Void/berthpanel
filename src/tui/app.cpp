@@ -58,12 +58,6 @@ bool key_goes_to_field(const ftxui::Event& event) {
          event == Event::End;
 }
 
-// The Enter that means "act on what is typed here", per field. The port field
-// acts on a recipe; the url/ref fields make a draft.
-bool enter_goes_to_field(const ftxui::Event& event) {
-  return event == Event::Return;
-}
-
 class AppComponent final : public ftxui::ComponentBase {
  public:
   explicit AppComponent(const std::shared_ptr<Panel>& panel) : panel_(panel) {
@@ -73,7 +67,7 @@ class AppComponent final : public ftxui::ComponentBase {
     // key and the field cannot drift apart.
     // A standalone Input has no inactive parent, so Focused() is ALWAYS true
     // and InputOption::Default() paints it `inverted` — a white block on a dark
-    // terminal. The panel draws its own focus marker (DraftField), so this
+    // terminal. The panel draws its own focus marker (CreateField), so this
     // style only has to render text: white, dim placeholder, cursor intact.
     const auto field_style = [](ftxui::InputState state) {
       state.element |= ftxui::color(ftxui::Color::White);
@@ -82,31 +76,12 @@ class AppComponent final : public ftxui::ComponentBase {
       }
       return state.element;
     };
-    ftxui::InputOption url_option;
-    url_option.transform = field_style;
-    url_option.content = &panel_->draft_url;
-    url_option.placeholder = "https://github.com/owner/repo";
-    url_option.on_enter = [this]() { submit_draft(); };
-    url_input_ = ftxui::Input(url_option);
 
-    ftxui::InputOption ref_option;
-    ref_option.transform = field_style;
-    ref_option.content = &panel_->draft_ref;
-    ref_option.placeholder = "default branch";
-    ref_option.on_enter = [this]() { submit_draft(); };
-    ref_input_ = ftxui::Input(ref_option);
-
-    ftxui::InputOption port_option;
-    port_option.transform = field_style;
-    port_option.content = &panel_->deploy_port_field;
-    port_option.placeholder = "auto";
-    port_option.on_enter = [this]() { start_selected_deploy(); };
-    port_input_ = ftxui::Input(port_option);
-
-    // The eight recipe-edit fields. Same shape as the wizard's three: a bare
+    // The eight recipe-edit fields. Same shape as the creation form's: a bare
     // Input that only renders text, because the panel draws its own focus
-    // marker (EditField). Numeric fields are text too; assemble_recipe_edits()
-    // parses them loudly on save rather than dropping keystrokes (§12.16).
+    // marker (EditField / CreateField). Numeric fields are text too;
+    // assemble_recipe_edits() parses them loudly on save rather than dropping
+    // keystrokes (§12.16).
     const auto make_edit = [&field_style](const char* placeholder,
                                           std::string* content) {
       ftxui::InputOption option;
@@ -125,6 +100,26 @@ class AppComponent final : public ftxui::ComponentBase {
     edit_port_ = make_edit("empty = free at deploy", &panel_->edit.port);
     edit_memory_max_ = make_edit("e.g. 512M", &panel_->edit.memory_max);
     edit_tasks_max_ = make_edit("e.g. 300", &panel_->edit.tasks_max);
+
+    // The creation form's eleven fields, same bare Input shape: the panel draws
+    // the focus marker (CreateField) and parses the numbers on create, not as
+    // they are typed (§12.16). The eight recipe values are EditFields, so the
+    // loud parsers and the ONE validator are the ones the edit screen uses.
+    create_url_ =
+        make_edit("https://github.com/owner/repo", &panel_->create_url);
+    create_ref_ = make_edit("default branch or tag", &panel_->create_ref);
+    create_deploy_port_ = make_edit("auto", &panel_->create_deploy_port);
+    create_start_cmd_ = make_edit("{self} --addr 127.0.0.1 --port {port}",
+                                  &panel_->create.start_cmd);
+    create_bind_ = make_edit("127.0.0.1", &panel_->create.bind);
+    create_health_path_ = make_edit("/", &panel_->create.health_path);
+    create_display_name_ =
+        make_edit("display name", &panel_->create.display_name);
+    create_description_ = make_edit("one line", &panel_->create.description);
+    create_app_port_ =
+        make_edit("empty = free at deploy", &panel_->create.port);
+    create_memory_max_ = make_edit("e.g. 512M", &panel_->create.memory_max);
+    create_tasks_max_ = make_edit("e.g. 300", &panel_->create.tasks_max);
   }
 
   Element OnRender() override {
@@ -264,49 +259,18 @@ class AppComponent final : public ftxui::ComponentBase {
     // mean cancel.
     const bool deploy_tab = tabs()[panel_->tab].tab == Tab::kDeploy;
     if (deploy_tab) {
+      // The CREATION form owns the Deploy tab's keys while it is open. It comes
+      // first, before the edit screen and the draft fields: it is the only
+      // thing on screen while it is up, so Esc must leave IT rather than quit,
+      // and j/k must not move the recipe cursor under it.
+      if (handle_create_key(event, key)) {
+        return true;
+      }
       // The edit sub-screen owns the Deploy tab's keys while it is open. It
       // comes FIRST so Esc releases a field or leaves the screen instead of
       // quitting, and so j/k cannot move the recipe cursor under the editor.
       if (handle_edit_key(event, key)) {
         return true;
-      }
-      ftxui::ComponentBase* focused = nullptr;
-      {
-        std::lock_guard lock(panel_->mutex);
-        if (panel_->draft_field != DraftField::kNone &&
-            !panel_->deploy_in_flight && !panel_->draft_running) {
-          focused = input_for(panel_->draft_field);
-        }
-      }
-      if (focused != nullptr) {
-        if (event == Event::Escape) {
-          set_draft_field(DraftField::kNone);
-          return true;
-        }
-        // Tab walks the fields. 'i' deliberately does NOT: inside insert mode
-        // every printable key is text, and a URL is full of letters.
-        if (event == Event::Tab) {
-          set_draft_field(next_draft_field(current_draft_field()));
-          return true;
-        }
-        if (key_goes_to_field(event)) {
-          focused->OnEvent(event);
-          return true;
-        }
-        if (enter_goes_to_field(event)) {
-          // Enter acts on the field that has focus, not on a global rule.
-          if (current_draft_field() == DraftField::kPort) {
-            // A deploy that actually started releases insert mode: the focus
-            // marker must not linger over a locked field and then silently
-            // start capturing keys again once the deploy finishes.
-            if (start_selected_deploy()) {
-              set_draft_field(DraftField::kNone);
-            }
-          } else {
-            submit_draft();
-          }
-          return true;
-        }
       }
     }
 
@@ -456,11 +420,8 @@ class AppComponent final : public ftxui::ComponentBase {
   bool scroll_logs(int delta);
 
   // The focused field's Component, or null when no field is focused.
-  ftxui::ComponentBase* input_for(DraftField field);
 
   // Insert mode on/off. Setting a field re-renders, because the marker moves.
-  void set_draft_field(DraftField field);
-  [[nodiscard]] DraftField current_draft_field();
 
   // Recipe edit (4.19+), the Deploy tab's 'E'. Returns true when it consumed
   // the key; 'q' with no field focused falls through to the global quit.
@@ -472,10 +433,6 @@ class AppComponent final : public ftxui::ComponentBase {
   void close_edit();
   void save_edit();
 
-  // Enter on the url/ref fields: make the draft. Nothing else happens here —
-  // no store, no deploy — because the draft is not the user's yet.
-  void submit_draft();
-
   // The recipe under the cursor plus the port the user typed, validated. Both
   // reads happen under the lock and nothing is spawned from inside it. Returns
   // whether a deploy actually started (false when the port was refused or the
@@ -484,10 +441,24 @@ class AppComponent final : public ftxui::ComponentBase {
 
   Element render_content();
 
+  // --- The creation form ----------------------------------------------------
+  // 'i' opens ONE form for a new service. It replaces the old three-field
+  // draft form: the eight recipe values are typed here, not repaired after the
+  // detector's guess was stored. `submit_create` hands them to the worker,
+  // which applies them ON TOP of what detection found and hands the result to
+  // the existing review (s stores, d stores and deploys).
+  ftxui::ComponentBase* create_input_for(CreateField field);
+  ftxui::Elements create_input_elements();
+  void set_create_field(CreateField field);
+  void open_create();
+  void close_create();
+  void submit_create();
+
+  // The creation form's own key handling. Returns true when the form consumed
+  // the key (it is open, or it was open and this key opened/closed it).
+  bool handle_create_key(const ftxui::Event& event, const std::string& key);
+
   std::shared_ptr<Panel> panel_;
-  ftxui::Component url_input_;
-  ftxui::Component ref_input_;
-  ftxui::Component port_input_;
   // The eight recipe-edit fields, in EditField order.
   ftxui::Component edit_start_cmd_;
   ftxui::Component edit_bind_;
@@ -497,6 +468,18 @@ class AppComponent final : public ftxui::ComponentBase {
   ftxui::Component edit_port_;
   ftxui::Component edit_memory_max_;
   ftxui::Component edit_tasks_max_;
+  // The creation form's eleven fields, in CreateField order.
+  ftxui::Component create_url_;
+  ftxui::Component create_ref_;
+  ftxui::Component create_deploy_port_;
+  ftxui::Component create_start_cmd_;
+  ftxui::Component create_bind_;
+  ftxui::Component create_health_path_;
+  ftxui::Component create_display_name_;
+  ftxui::Component create_description_;
+  ftxui::Component create_app_port_;
+  ftxui::Component create_memory_max_;
+  ftxui::Component create_tasks_max_;
 };
 
 void AppComponent::move_cursor(const int delta) {
@@ -556,10 +539,6 @@ void AppComponent::handle_deploy_key(const std::string& key) {
     cancel_deploy(panel_);
     return;
   }
-  if (key == "i") {
-    set_draft_field(DraftField::kUrl);
-    return;
-  }
   if (key == "d") {
     // Quick mode: the reviewed draft is stored AND deployed with one key. The
     // store comes first — what deploys is what is on disk (plan 4.21).
@@ -614,48 +593,6 @@ void AppComponent::handle_deploy_key(const std::string& key) {
   }
 }
 
-ftxui::ComponentBase* AppComponent::input_for(const DraftField field) {
-  switch (field) {
-    case DraftField::kUrl:
-      return url_input_.get();
-    case DraftField::kRef:
-      return ref_input_.get();
-    case DraftField::kPort:
-      return port_input_.get();
-    case DraftField::kNone:
-      return nullptr;
-  }
-  return nullptr;
-}
-
-DraftField AppComponent::current_draft_field() {
-  std::lock_guard lock(panel_->mutex);
-  return panel_->draft_field;
-}
-
-void AppComponent::set_draft_field(const DraftField field) {
-  {
-    std::lock_guard lock(panel_->mutex);
-    // Entering a field while a draft is up keeps the draft: pasting another URL
-    // must not throw away the one being reviewed without a word.
-    panel_->draft_field = field;
-  }
-  request_render(*panel_);
-}
-
-void AppComponent::submit_draft() {
-  {
-    std::lock_guard lock(panel_->mutex);
-    if (panel_->draft_field == DraftField::kNone) {
-      return;
-    }
-  }
-  start_draft(panel_, panel_->paths);
-  // The keys go back to the screen: the URL is on its way to the worker, and
-  // the next thing the user wants is d, s or q — not more typing.
-  set_draft_field(DraftField::kNone);
-}
-
 ftxui::ComponentBase* AppComponent::edit_input_for(const EditField field) {
   switch (field) {
     case EditField::kStartCmd:
@@ -685,6 +622,173 @@ ftxui::Elements AppComponent::edit_input_elements() {
           edit_health_path_->Render(), edit_display_name_->Render(),
           edit_description_->Render(), edit_port_->Render(),
           edit_memory_max_->Render(),  edit_tasks_max_->Render()};
+}
+
+ftxui::ComponentBase* AppComponent::create_input_for(const CreateField field) {
+  switch (field) {
+    case CreateField::kUrl:
+      return create_url_.get();
+    case CreateField::kRef:
+      return create_ref_.get();
+    case CreateField::kDeployPort:
+      return create_deploy_port_.get();
+    case CreateField::kStartCmd:
+      return create_start_cmd_.get();
+    case CreateField::kBind:
+      return create_bind_.get();
+    case CreateField::kHealthPath:
+      return create_health_path_.get();
+    case CreateField::kDisplayName:
+      return create_display_name_.get();
+    case CreateField::kDescription:
+      return create_description_.get();
+    case CreateField::kAppPort:
+      return create_app_port_.get();
+    case CreateField::kMemoryMax:
+      return create_memory_max_.get();
+    case CreateField::kTasksMax:
+      return create_tasks_max_.get();
+    case CreateField::kNone:
+      return nullptr;
+  }
+  return nullptr;
+}
+
+ftxui::Elements AppComponent::create_input_elements() {
+  return {create_url_->Render(),          create_ref_->Render(),
+          create_deploy_port_->Render(),  create_start_cmd_->Render(),
+          create_bind_->Render(),         create_health_path_->Render(),
+          create_display_name_->Render(), create_description_->Render(),
+          create_app_port_->Render(),     create_memory_max_->Render(),
+          create_tasks_max_->Render()};
+}
+
+void AppComponent::set_create_field(const CreateField field) {
+  {
+    std::lock_guard lock(panel_->mutex);
+    panel_->create_field = field;
+  }
+  request_render(*panel_);
+}
+
+void AppComponent::open_create() {
+  {
+    std::lock_guard lock(panel_->mutex);
+    if (panel_->create_running || panel_->deploy_in_flight) {
+      return;
+    }
+    // A form that opens with stale values from an abandoned attempt would be
+    // describing something the user is not looking at (§11).
+    panel_->create_active = true;
+    panel_->create_url.clear();
+    panel_->create_ref.clear();
+    panel_->create_deploy_port.clear();
+    panel_->create = EditFields{};
+    panel_->create_status.clear();
+    panel_->create_error.clear();
+  }
+  set_create_field(CreateField::kNone);
+}
+
+void AppComponent::close_create() {
+  {
+    std::lock_guard lock(panel_->mutex);
+    panel_->create_active = false;
+    panel_->create_field = CreateField::kNone;
+  }
+  request_render(*panel_);
+}
+
+void AppComponent::submit_create() {
+  berth::DraftRequest request;
+  EditFields fields;
+  {
+    std::lock_guard lock(panel_->mutex);
+    if (panel_->create_running) {
+      return;
+    }
+    request.url = panel_->create_url;
+    request.ref = panel_->create_ref;
+    fields = panel_->create;
+  }
+  start_create_recipe(panel_, panel_->paths, request, fields);
+  // The keys go back to the screen: the form is on its way to the worker, and
+  // the next thing the user wants is the review's s/d, not more typing.
+  set_create_field(CreateField::kNone);
+}
+
+bool AppComponent::handle_create_key(const ftxui::Event& event,
+                                     const std::string& key) {
+  bool open = false;
+  bool running = false;
+  bool editing = false;
+  CreateField focus = CreateField::kNone;
+  {
+    std::lock_guard lock(panel_->mutex);
+    open = panel_->create_active || panel_->create_running;
+    running = panel_->create_running;
+    editing = panel_->edit_active;
+    focus = panel_->create_field;
+  }
+  // 'i' opens the form from the Deploy tab — the ONLY way in, so it must work
+  // from anywhere that is not already the form or the editor.
+  if (!open && !editing && key == "i") {
+    open_create();
+    return true;
+  }
+  if (!open) {
+    return false;
+  }
+  if (running) {
+    // The worker owns the screen. 'c' cancels THIS operation's flag and
+    // nothing else — one flag per operation, never a panel-wide cancel (6.7).
+    if (key == "c") {
+      std::lock_guard lock(panel_->mutex);
+      if (panel_->create_op) {
+        panel_->create_op->cancel.store(true, std::memory_order_relaxed);
+      }
+      request_render(*panel_);
+    }
+    return true;
+  }
+  ftxui::ComponentBase* focused = create_input_for(focus);
+  if (focused != nullptr) {
+    if (event == Event::Escape) {
+      set_create_field(CreateField::kNone);
+      return true;
+    }
+    if (event == Event::Tab) {
+      set_create_field(next_create_field(focus));
+      return true;
+    }
+    if (key_goes_to_field(event)) {
+      focused->OnEvent(event);
+      return true;
+    }
+    if (event == Event::Return) {
+      submit_create();
+      return true;
+    }
+  }
+  if (event == Event::Escape) {
+    close_create();
+    return true;
+  }
+  if (key == "i") {
+    set_create_field(CreateField::kUrl);
+    return true;
+  }
+  if (event == Event::Return) {
+    submit_create();
+    return true;
+  }
+  // 'q' is the panel's quit everywhere — but only when no field is focused,
+  // exactly like the edit screen (§12.16).
+  if (focus == CreateField::kNone && key == "q") {
+    return false;  // fall through to the global quit
+  }
+  // The form owns every remaining key: no cursor movement, no tab switch.
+  return true;
 }
 
 void AppComponent::set_edit_field(const EditField field) {
@@ -885,7 +989,7 @@ bool AppComponent::start_selected_deploy() {
     // spawned: coercing it to 0 would deploy somewhere the user did not ask
     // for, which is the worst possible reading of "I typed 808O".
     const berth::Result<std::uint16_t> parsed =
-        parse_port_field(panel_->deploy_port_field);
+        parse_port_field(panel_->create_deploy_port);
     if (parsed.is_err()) {
       panel_->deploy_finished = false;
       panel_->deploy_cancelled = false;
@@ -959,8 +1063,7 @@ Element AppComponent::render_content() {
       if (panel_->edit_active) {
         return render_edit_screen(*panel_, edit_input_elements());
       }
-      return render_deploy_screen(*panel_, url_input_->Render(),
-                                  ref_input_->Render(), port_input_->Render());
+      return render_deploy_screen(*panel_, create_input_elements());
     case Tab::kServices:
       return render_services_screen(*panel_);
     case Tab::kLogs:

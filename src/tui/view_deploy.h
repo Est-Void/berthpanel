@@ -67,26 +67,47 @@ struct DeployLogLine {
 [[nodiscard]] berth::Result<std::uint16_t> parse_port_field(
     std::string_view field);
 
-// Which text field the Deploy screen is typing into. kNone is the default and
-// it is the DEFAULT ON PURPOSE: while no field has focus the screen's own keys
-// (q, e, r, c, j, k) work, and 'i' enters the fields. A field that swallowed
-// every printable key would take 'q' — quit — hostage, which is how the first
-// version of this screen had to be fixed (§12.16).
-enum class DraftField {
-  kNone,
+// --- The creation form ('i') -----------------------------------------------
+//
+// ONE form for a new service: where it comes from (url, ref), which port to
+// deploy it on, and the eight recipe values. It is a form and not a repair
+// screen on purpose — the earlier shape made the user store the detector's
+// guess first and only then fix it, so a wrong start_cmd or a missing limit was
+// always written before anyone could see it.
+//
+// The eight values are the ones a user can reasonably type. What a recipe
+// needs and a human cannot (language, tools, build steps, a prebuilt pin) still
+// comes from detection, and the review shows all of it before anything is
+// stored — a form that hid those would promise a recipe the validator rejects
+// (validate_recipe requires a build or a prebuilt, §8).
+enum class CreateField : std::size_t {
+  kNone = 0,
   kUrl,
   kRef,
-  kPort,
+  kDeployPort,
+  kStartCmd,
+  kBind,
+  kHealthPath,
+  kDisplayName,
+  kDescription,
+  kAppPort,
+  kMemoryMax,
+  kTasksMax,
 };
 
-[[nodiscard]] std::string_view draft_field_label(DraftField field);
-// The next field in the cycle: url → ref → port → url.
-[[nodiscard]] DraftField next_draft_field(DraftField field);
+// Every fillable slot, in focus order. The count is the contract the renderer
+// and the focus cycle both walk.
+inline constexpr std::size_t kCreateFieldCount = 11;
 
-// The three field LABELS, one per line, with '▸' on the focused one. The
-// values are not here: each Input renders its own, because it owns the cursor.
-// Fixed label widths, so the marker does not move when a field gains a value.
-[[nodiscard]] std::vector<std::string> draft_field_lines(DraftField focus);
+[[nodiscard]] std::string_view create_field_label(CreateField field);
+// Tab walks the whole form and wraps; kNone enters at the url.
+[[nodiscard]] CreateField next_create_field(CreateField field);
+[[nodiscard]] CreateField create_field_at(std::size_t index);
+
+// The keys the creation form acts on. `creating` is true while the worker runs
+// (fields locked). Pure so the hints are assertable without a terminal.
+[[nodiscard]] std::vector<KeyHint> create_key_hints(CreateField focus,
+                                                    bool creating);
 
 // The reviewed draft: what was detected, what the tools say, and every warning
 // the detector produced. A draft is heuristics — the screen has to say so, and
@@ -114,14 +135,7 @@ enum class DraftField {
 // the global hints, this list is the screen's own. Structured as keys+words so
 // the renderer colours only the keys.
 [[nodiscard]] std::vector<KeyHint> deploy_key_hints(bool running);
-[[nodiscard]] std::vector<KeyHint> draft_key_hints(DraftField focus,
-                                                   bool running, bool ready);
-
-// The line under the three text fields. `i` opens the fields for a NEW deploy
-// (a pasted GitHub URL) — it is NOT recipe editing (that is E). `locked` is
-// true while a worker is in flight and the fields cannot take keys. Pure so
-// the label is assertable without a terminal.
-[[nodiscard]] KeyHint deploy_fields_hint(bool locked);
+[[nodiscard]] std::vector<KeyHint> draft_key_hints(bool running, bool ready);
 
 // What the screen shows before anything was deployed: which recipe, and which
 // port the deploy would use.

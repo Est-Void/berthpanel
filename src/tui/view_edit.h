@@ -27,9 +27,9 @@
 namespace tui {
 
 // Which editable field has focus. kNone is the default and means "insert mode
-// off", exactly like DraftField (§12.16): while no field is focused the
+// off", exactly like CreateField (§12.16): while no field is focused the
 // screen's own keys (q, s, Esc) work, and 'i' enters the fields. A separate
-// enum from DraftField because the two field SETS differ — not a second focus
+// enum from CreateField because the two field SETS differ — not a second focus
 // model, the same one applied to different data.
 enum class EditField {
   kNone,

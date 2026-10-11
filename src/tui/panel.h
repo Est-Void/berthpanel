@@ -115,15 +115,11 @@ struct Panel {
   bool deploy_cancelled = false;
   berth::DeployOutcome deploy_outcome;
   std::string deploy_service;     // the recipe being deployed
-  std::string deploy_port_field;  // the port Input's content, "" = auto
   RingBuffer<std::string> deploy_log_lines{kLogCapacity};
 
-  // BYO wizard (plan 4.21): paste a GitHub URL, review the draft, store it,
-  // deploy it. `draft_field` is kNone until 'i' — the fields are behind an
-  // explicit insert mode so that q / e / r / c keep working (§12.16).
-  DraftField draft_field = DraftField::kNone;
-  std::string draft_url;
-  std::string draft_ref;
+  // The reviewed recipe (plan 4.21, stage 4.21): the creation form makes it,
+  // the review shows it, s/d store it. Fields are behind an explicit insert
+  // mode so that q / e / r / c keep working (§12.16).
   bool draft_running = false;
   // True while a store-only worker is writing the draft. Without it a second
   // 's' press during the write queued a second writer over the same file.
@@ -142,6 +138,25 @@ struct Panel {
   bool draft_clash_confirming = false;
   // What the clash modal does after 'y': store AND deploy, or store only.
   bool draft_pending_deploy = false;
+
+  // Creation form ('i'): one form for a new service — url, ref, the port to
+  // deploy on, and the eight recipe values. `create_active` is the form;
+  // `create_field` is the insert-mode focus, kNone until 'i' (§12.16). The
+  // eight values are the view model's EditFields, so the loud parsers
+  // (assemble_recipe_edits) and the ONE validator are the same ones the edit
+  // screen uses — two forms cannot disagree (§11).
+  bool create_active = false;
+  CreateField create_field = CreateField::kNone;
+  EditFields create;
+  std::string create_url;
+  std::string create_ref;
+  std::string create_deploy_port;
+  std::string create_status;
+  std::string create_error;
+  bool create_running = false;
+  // The creation form's own op, so 'c' cancels the create and NOT whatever
+  // else is in flight — one flag per operation, never a panel-wide cancel (6.7).
+  std::shared_ptr<Op> create_op;
 
   // Recipe edit (stage 4.19+/4.21 TUI): edit a USER recipe's values without
   // hand-editing JSON. `edit_active` is the sub-screen; `edit_field` is the

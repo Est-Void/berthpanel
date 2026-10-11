@@ -64,10 +64,17 @@ void start_deploy(const std::shared_ptr<Panel>& panel,
 // subprocesses and returns; the journal entry stays for __cleanup (§6.7).
 void cancel_deploy(const std::shared_ptr<Panel>& panel);
 
-// BYO wizard (plan 4.21). prepare_draft() is expensive — an API call, a clone,
-// a tree walk — so it runs on a worker like everything else here.
-void start_draft(const std::shared_ptr<Panel>& panel,
-                 const berth::Paths& paths);
+// The CREATION form ('i'): the user's own eight values, applied ON TOP of what
+// detection found, through the PURE engine (apply_recipe_edits, which runs
+// validate_recipe). An invalid description is refused HERE — before a review
+// exists, let alone a file — and nothing is stored by this call at all: it ends
+// with a draft on the review, where s/d keep their own keys. Splitting it that
+// way is the same reason prepare_draft() stores nothing (wizard.h): whether to
+// write is a human decision, with its own key.
+void start_create_recipe(const std::shared_ptr<Panel>& panel,
+                         const berth::Paths& paths,
+                         const berth::DraftRequest& request,
+                         const EditFields& fields);
 
 // The reviewed draft's next step: store it (always before a deploy, so what
 // deploys is what is on disk) and optionally deploy it right away. A name that
@@ -143,12 +150,11 @@ void service_action_uninstall(const std::shared_ptr<Panel>& panel,
 [[nodiscard]] ftxui::Element confirm_uninstall_screen(const Panel& panel);
 [[nodiscard]] ftxui::Element confirm_kill_screen(const Panel& panel);
 
-// Deploy (6.3, 4.21). The three FTXUI Inputs the app owns are passed in
-// because a Component's Render() belongs to the component tree in app.cpp.
-[[nodiscard]] ftxui::Element render_deploy_screen(const Panel& panel,
-                                                  ftxui::Element url_input,
-                                                  ftxui::Element ref_input,
-                                                  ftxui::Element port_input);
+// Deploy (6.3, 4.21). The creation form's eleven FTXUI Inputs are passed in
+// because a Component's Render() belongs to the component tree in app.cpp;
+// they are rendered only while the form is open.
+[[nodiscard]] ftxui::Element render_deploy_screen(
+    const Panel& panel, const ftxui::Elements& create_inputs);
 
 // Recipe edit (4.19+). The eight FTXUI Inputs are passed in, in EditField
 // order (start_cmd .. tasks_max), because their Render() belongs to the

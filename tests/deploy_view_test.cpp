@@ -188,47 +188,81 @@ TEST(deploy_port_field_refuses_letters_loudly_instead_of_dropping_them) {
   CHECK(parsed.error().ctx().find("not a number") != std::string::npos);
 }
 
-TEST(draft_fields_cycle_url_ref_port) {
-  // The cycle is the whole focus model: 'i' enters at the url, Tab walks
-  // forward, and no field can be reached without passing through the others.
-  CHECK(tui::draft_field_label(tui::DraftField::kUrl) == "url");
-  CHECK(tui::draft_field_label(tui::DraftField::kRef) == "ref");
-  CHECK(tui::draft_field_label(tui::DraftField::kPort) == "port");
-  CHECK(tui::draft_field_label(tui::DraftField::kNone).empty());
+TEST(create_fields_cycle_visits_every_field_then_wraps) {
+  // The cycle is the whole focus model: 'i' enters at the url, Tab walks the
+  // WHOLE form, and no field can be reached without passing through the others.
+  CHECK(tui::create_field_label(tui::CreateField::kUrl) == "url");
+  CHECK(tui::create_field_label(tui::CreateField::kRef) == "ref");
+  CHECK(tui::create_field_label(tui::CreateField::kDeployPort) ==
+        "deploy port");
+  CHECK(tui::create_field_label(tui::CreateField::kStartCmd) == "start_cmd");
+  CHECK(tui::create_field_label(tui::CreateField::kBind) == "bind");
+  CHECK(tui::create_field_label(tui::CreateField::kHealthPath) ==
+        "health_path");
+  CHECK(tui::create_field_label(tui::CreateField::kDisplayName) ==
+        "display_name");
+  CHECK(tui::create_field_label(tui::CreateField::kDescription) ==
+        "description");
+  CHECK(tui::create_field_label(tui::CreateField::kAppPort) == "app port");
+  CHECK(tui::create_field_label(tui::CreateField::kMemoryMax) == "memory_max");
+  CHECK(tui::create_field_label(tui::CreateField::kTasksMax) == "tasks_max");
+  CHECK(tui::create_field_label(tui::CreateField::kNone).empty());
 
-  CHECK(tui::next_draft_field(tui::DraftField::kNone) == tui::DraftField::kUrl);
-  CHECK(tui::next_draft_field(tui::DraftField::kUrl) == tui::DraftField::kRef);
-  CHECK(tui::next_draft_field(tui::DraftField::kRef) == tui::DraftField::kPort);
-  CHECK(tui::next_draft_field(tui::DraftField::kPort) == tui::DraftField::kUrl);
+  CHECK(tui::next_create_field(tui::CreateField::kNone) ==
+        tui::CreateField::kUrl);
+  CHECK(tui::next_create_field(tui::CreateField::kUrl) ==
+        tui::CreateField::kRef);
+  CHECK(tui::next_create_field(tui::CreateField::kRef) ==
+        tui::CreateField::kDeployPort);
+  CHECK(tui::next_create_field(tui::CreateField::kDeployPort) ==
+        tui::CreateField::kStartCmd);
+  CHECK(tui::next_create_field(tui::CreateField::kStartCmd) ==
+        tui::CreateField::kBind);
+  CHECK(tui::next_create_field(tui::CreateField::kBind) ==
+        tui::CreateField::kHealthPath);
+  CHECK(tui::next_create_field(tui::CreateField::kHealthPath) ==
+        tui::CreateField::kDisplayName);
+  CHECK(tui::next_create_field(tui::CreateField::kDisplayName) ==
+        tui::CreateField::kDescription);
+  CHECK(tui::next_create_field(tui::CreateField::kDescription) ==
+        tui::CreateField::kAppPort);
+  CHECK(tui::next_create_field(tui::CreateField::kAppPort) ==
+        tui::CreateField::kMemoryMax);
+  CHECK(tui::next_create_field(tui::CreateField::kMemoryMax) ==
+        tui::CreateField::kTasksMax);
+  CHECK(tui::next_create_field(tui::CreateField::kTasksMax) ==
+        tui::CreateField::kUrl);
 }
 
-TEST(draft_field_lines_mark_the_focused_one_and_keep_the_columns) {
-  // Labels only: the values are the Inputs' own render (they own the cursor),
-  // so a field gaining a value must not move the marker.
-  const std::vector<std::string> none =
-      tui::draft_field_lines(tui::DraftField::kNone);
-  CHECK(none.size() == 3);
-  CHECK(none[0].find("url") != std::string::npos);
-  CHECK(none[1].find("ref") != std::string::npos);
-  CHECK(none[2].find("port") != std::string::npos);
-  // No field focused ⇒ no marker anywhere.
-  for (const std::string& line : none) {
-    CHECK(line.rfind("\xe2\x96\xb8", 0) != 0);
+TEST(create_field_at_matches_the_input_slot_order) {
+  for (std::size_t i = 0; i < tui::kCreateFieldCount; ++i) {
+    CHECK(tui::create_field_at(i) != tui::CreateField::kNone);
   }
-  // The three labels are the same width, so the columns line up.
-  CHECK(none[0].size() == none[1].size());
-  CHECK(none[1].size() == none[2].size());
+  CHECK(tui::create_field_at(0) == tui::CreateField::kUrl);
+  CHECK(tui::create_field_at(tui::kCreateFieldCount - 1) ==
+        tui::CreateField::kTasksMax);
+}
 
-  const std::vector<std::string> focused =
-      tui::draft_field_lines(tui::DraftField::kRef);
-  std::size_t marked = 0;
-  for (const std::string& line : focused) {
-    if (line.rfind("\xe2\x96\xb8", 0) == 0) {
-      ++marked;
-      CHECK(line.find("ref") != std::string::npos);
-    }
-  }
-  CHECK(marked == 1);
+TEST(create_key_hints_promise_a_review_not_a_store) {
+  // The form creates; the REVIEW's s/d store. A hint that said "stored" here
+  // would be a lie — this call writes nothing (§11).
+  const std::vector<tui::KeyHint> idle =
+      tui::create_key_hints(tui::CreateField::kNone, false);
+  CHECK(hint_contains(idle, "create the recipe"));
+  CHECK(hint_contains(idle, "review"));
+  CHECK(hint_contains(idle, "nothing was created or stored"));
+  CHECK(!hint_contains(idle, "save"));
+
+  const std::vector<tui::KeyHint> typing =
+      tui::create_key_hints(tui::CreateField::kStartCmd, false);
+  CHECK(hint_contains(typing, "Tab"));
+  CHECK(hint_contains(typing, "next field"));
+  CHECK(hint_contains(typing, "Esc"));
+
+  const std::vector<tui::KeyHint> running =
+      tui::create_key_hints(tui::CreateField::kNone, true);
+  CHECK(hint_contains(running, "cancel"));
+  CHECK(hint_contains(running, "nothing is created or stored"));
 }
 
 TEST(draft_review_shows_the_pin_the_start_command_the_tools_and_every_warning) {
@@ -310,28 +344,16 @@ TEST(draft_stored_says_the_draft_is_on_disk_before_it_deploys) {
 
 TEST(draft_key_hints_follow_the_state_they_are_in) {
   // Running: cancel is the only thing on offer.
-  const std::vector<tui::KeyHint> running =
-      tui::draft_key_hints(tui::DraftField::kNone, true, false);
+  const std::vector<tui::KeyHint> running = tui::draft_key_hints(true, false);
   CHECK(hint_contains(running, "cancel"));
   CHECK(hint_contains(running, "nothing is stored"));
-  CHECK(!hint_contains(running, "paste a GitHub URL"));
 
-  // A field focused: the field's own keys, and the way out.
-  const std::vector<tui::KeyHint> typing =
-      tui::draft_key_hints(tui::DraftField::kUrl, false, false);
-  CHECK(hint_contains(typing, "Tab"));
-  CHECK(hint_contains(typing, "next field"));
-  CHECK(hint_contains(typing, "Esc"));
-  CHECK(hint_contains(typing, "leave the fields"));
-
-  // A draft waiting: accept, store-only, or start over. Escape dismisses it
+  // A review waiting: store, store+deploy, or start over. Escape dismisses it
   // (without quitting the panel) so the stored recipe becomes deployable.
-  const std::vector<tui::KeyHint> review =
-      tui::draft_key_hints(tui::DraftField::kNone, false, true);
+  const std::vector<tui::KeyHint> review = tui::draft_key_hints(false, true);
   CHECK(hint_contains(review, "store the draft and deploy it"));
   CHECK(hint_contains(review, "store the draft only"));
   CHECK(hint_contains(review, "discard the draft"));
-  CHECK(hint_contains(review, "paste another URL"));
 }
 
 TEST(deploy_cancellation_says_the_journal_entry_stays) {
@@ -350,8 +372,8 @@ TEST(deploy_hints_name_the_launch_key_and_the_cancel_key) {
   const std::vector<tui::KeyHint> idle = tui::deploy_key_hints(false);
   CHECK(hint_contains(idle, "Enter"));
   CHECK(hint_contains(idle, "recipe details"));
-  // 'i' opens a NEW deploy URL — it is not recipe editing (that is E).
-  CHECK(hint_contains(idle, "type a new GitHub URL"));
+  // 'i' opens the NEW SERVICE form — it is not recipe editing (that is E).
+  CHECK(hint_contains(idle, "create a new service"));
   // Removal of the selected recipe is advertised, with the builtin refusal.
   CHECK(hint_contains(idle, "remove the selected USER recipe"));
   // While idle, 'c' would be a letter in the port field, so it must not be
@@ -361,18 +383,6 @@ TEST(deploy_hints_name_the_launch_key_and_the_cancel_key) {
   const std::vector<tui::KeyHint> running = tui::deploy_key_hints(true);
   CHECK(hint_contains(running, "cancel"));
   CHECK(hint_contains(running, "quit"));
-}
-
-TEST(deploy_field_hint_calls_i_a_new_deploy_not_an_edit) {
-  // The regression this pins: "i edit" read as recipe editing, which is E.
-  const tui::KeyHint idle = tui::deploy_fields_hint(false);
-  CHECK(idle.keys == "i");
-  CHECK(idle.words.find("type a new deploy URL") != std::string_view::npos);
-  CHECK(idle.words.find("edit") == std::string_view::npos);
-
-  const tui::KeyHint locked = tui::deploy_fields_hint(true);
-  CHECK(locked.keys.empty());
-  CHECK(locked.words.find("locked") != std::string_view::npos);
 }
 
 TEST(deploy_outcome_lines_show_the_port_the_unit_and_the_data) {

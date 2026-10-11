@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -37,13 +39,6 @@ DeployStage stage_of(const std::string_view first) {
     return DeployStage::kRegistryFailed;
   }
   return DeployStage::kOther;
-}
-
-// Right-pads a label so the three field lines line up.
-void pad(std::string& text, const std::size_t width) {
-  if (text.size() < width) {
-    text.append(width - text.size(), ' ');
-  }
 }
 
 // The service token: "fetch berthpanel-memos@<sha> port 8080" names it in the
@@ -228,7 +223,7 @@ std::vector<KeyHint> deploy_key_hints(const bool running) {
   }
   return {
       {"Enter", "deploy the selected recipe at the typed port"},
-      {"i", "type a new GitHub URL to deploy anything (BYO)"},
+      {"i", "create a new service (url, ref, port + the eight fields)"},
       {"e", "recipe details (pin, tools, build steps, start command)"},
       {"E", "edit the selected USER recipe (builtin: make an override first)"},
       {"x", "remove the selected USER recipe (builtin: nothing to remove)"},
@@ -237,56 +232,111 @@ std::vector<KeyHint> deploy_key_hints(const bool running) {
   };
 }
 
-KeyHint deploy_fields_hint(const bool locked) {
-  if (locked) {
-    return {"", "fields are locked while work is in flight"};
-  }
-  // The old text said "i edit", which read as recipe editing. It is not: `i`
-  // opens the URL/ref/port fields for a NEW deploy (BYO), and editing an
-  // existing recipe is E. The hint must say which one it is.
-  return {"i",
-          "type a new deploy URL  ·  empty port = the recipe's default "
-          "or a free one"};
-}
-
-std::string_view draft_field_label(const DraftField field) {
+std::string_view create_field_label(const CreateField field) {
   switch (field) {
-    case DraftField::kUrl:
+    case CreateField::kUrl:
       return "url";
-    case DraftField::kRef:
+    case CreateField::kRef:
       return "ref";
-    case DraftField::kPort:
-      return "port";
-    case DraftField::kNone:
+    case CreateField::kDeployPort:
+      return "deploy port";
+    case CreateField::kStartCmd:
+      return "start_cmd";
+    case CreateField::kBind:
+      return "bind";
+    case CreateField::kHealthPath:
+      return "health_path";
+    case CreateField::kDisplayName:
+      return "display_name";
+    case CreateField::kDescription:
+      return "description";
+    case CreateField::kAppPort:
+      return "app port";
+    case CreateField::kMemoryMax:
+      return "memory_max";
+    case CreateField::kTasksMax:
+      return "tasks_max";
+    case CreateField::kNone:
       return "";
   }
   return "";
 }
 
-DraftField next_draft_field(const DraftField field) {
+CreateField next_create_field(const CreateField field) {
   switch (field) {
-    case DraftField::kRef:
-      return DraftField::kPort;
-    case DraftField::kPort:
-    case DraftField::kNone:  // entering insert mode starts at the url
-      return DraftField::kUrl;
-    case DraftField::kUrl:
-      return DraftField::kRef;
+    case CreateField::kNone:  // entering insert mode starts at the url
+    case CreateField::kTasksMax:
+      return CreateField::kUrl;
+    case CreateField::kUrl:
+      return CreateField::kRef;
+    case CreateField::kRef:
+      return CreateField::kDeployPort;
+    case CreateField::kDeployPort:
+      return CreateField::kStartCmd;
+    case CreateField::kStartCmd:
+      return CreateField::kBind;
+    case CreateField::kBind:
+      return CreateField::kHealthPath;
+    case CreateField::kHealthPath:
+      return CreateField::kDisplayName;
+    case CreateField::kDisplayName:
+      return CreateField::kDescription;
+    case CreateField::kDescription:
+      return CreateField::kAppPort;
+    case CreateField::kAppPort:
+      return CreateField::kMemoryMax;
+    case CreateField::kMemoryMax:
+      return CreateField::kTasksMax;
   }
-  return DraftField::kUrl;
+  return CreateField::kUrl;
 }
 
-std::vector<std::string> draft_field_lines(const DraftField focus) {
-  std::vector<std::string> lines;
-  for (const DraftField field :
-       {DraftField::kUrl, DraftField::kRef, DraftField::kPort}) {
-    std::string line = field == focus ? "\xe2\x96\xb8 " : "  ";
-    std::string label(draft_field_label(field));
-    pad(label, 7);
-    line += label;
-    lines.push_back(std::move(line));
+CreateField create_field_at(const std::size_t index) {
+  switch (index) {
+    case 0:
+      return CreateField::kUrl;
+    case 1:
+      return CreateField::kRef;
+    case 2:
+      return CreateField::kDeployPort;
+    case 3:
+      return CreateField::kStartCmd;
+    case 4:
+      return CreateField::kBind;
+    case 5:
+      return CreateField::kHealthPath;
+    case 6:
+      return CreateField::kDisplayName;
+    case 7:
+      return CreateField::kDescription;
+    case 8:
+      return CreateField::kAppPort;
+    case 9:
+      return CreateField::kMemoryMax;
+    case 10:
+      return CreateField::kTasksMax;
+    default:
+      break;
   }
-  return lines;
+  std::fputs("tui: invariant violated: create field index out of range\n",
+             stderr);
+  std::abort();
+}
+
+std::vector<KeyHint> create_key_hints(const CreateField focus,
+                                      const bool creating) {
+  if (creating) {
+    return {{"c", "cancel — nothing is created or stored"}, {"q", "quit"}};
+  }
+  if (focus != CreateField::kNone) {
+    return {{"Tab", "next field"},
+            {"Enter", "create the recipe from these fields, then review it"},
+            {"Esc", "leave the fields — the form's own keys work again"}};
+  }
+  return {{"i", "type a field"},
+          {"Enter", "create the recipe from these fields, then review it"},
+          {"Esc", "close the form — nothing was created or stored"},
+          {"q", "quit"}};
 }
 
 std::vector<std::string> draft_review_lines(const berth::DraftResult& draft) {
@@ -370,16 +420,10 @@ std::vector<std::string> draft_stored_lines(
   };
 }
 
-std::vector<KeyHint> draft_key_hints(const DraftField focus, const bool running,
-                                     const bool ready) {
+std::vector<KeyHint> draft_key_hints(const bool running, const bool ready) {
   if (running) {
     return {{"c", "cancel — the draft is thrown away and nothing is stored"},
             {"q", "quit"}};
-  }
-  if (focus != DraftField::kNone) {
-    return {{"Enter", "act on this field"},
-            {"Tab", "next field (url, ref, port)"},
-            {"Esc", "leave the fields — q, e, r work again"}};
   }
   if (ready) {
     return {{"d", "store the draft and deploy it"},
