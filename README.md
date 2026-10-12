@@ -1,6 +1,6 @@
 <div align="center">
   <img
-    src="./assets/BerchPanel.png"
+    src="./assets/BerthPanel.png"
     width="900"
     alt="Berthpanel"
   />
