@@ -1,9 +1,6 @@
 #pragma once
 
-// src/berth/net/fetch.h — the entry point every module outside net/ uses.
-// It is the only file that knows BOTH the HTTP client and the resolver, and
-// wiring them here is what lets client.cpp and resolver.cpp depend on each
-// other's absence instead of on each other.
+// Wiring the client and the resolver here is what keeps them independent.
 
 #include <string>
 
@@ -16,4 +13,4 @@ namespace berth {
                                          const HttpGetOptions& options,
                                          const Paths& paths);
 
-}  // namespace berth
+}

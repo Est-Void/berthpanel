@@ -25,8 +25,7 @@ const char* kCommitReply =
     R"({"sha":"2b2192d4e153bd04f1d325b60fd880cf00d68b01",)"
     R"("commit":{"message":"initial"}})";
 
-}  // namespace
-
+}
 TEST(parse_default_branch_reads_the_repos_reply) {
   const auto branch = berth::parse_default_branch(kRepoReply);
   CHECK(branch.is_ok());

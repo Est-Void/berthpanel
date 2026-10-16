@@ -1,6 +1,5 @@
-// Tests for resolver.h (stage 3.3): the pure DoH parser offline, live
-// resolution strictly opt-in via BERTHPANEL_RUN_NETWORK_TESTS (never in
-// CI, dev.md §9).
+// Tests for resolver.h: the pure DoH parser offline, live resolution strictly
+// opt-in via BERTHPANEL_RUN_NETWORK_TESTS (never in CI, dev.md §9).
 
 #include "berth/net/resolver.h"
 #include "berth/net/doh.h"
@@ -49,9 +48,8 @@ TEST(doh_parse_rejects_loudly) {
 }
 
 TEST(doh_parse_rejects_a_non_integer_type_without_throwing) {
-  // "type" used to be read with get<int>() after only a contains() check, so a
-  // valid-JSON answer with a string/null type threw nlohmann::type_error out
-  // of the parser (only parse_error is caught) and aborted the process.
+  // get<int>() after only a contains() check threw nlohmann::type_error,
+  // past the catch, and aborted the process.
   CHECK(parse_doh_answers(
             R"({"Status": 0, "Answer": [{"type": "A", "data": "1.1.1.1"}]})")
             .is_err());
@@ -67,10 +65,7 @@ TEST(doh_parse_rejects_a_non_integer_type_without_throwing) {
   CHECK(mixed.value()[0].ip == "1.1.1.1");
 }
 
-// ---------------------------------------------------------------------------
-// Live network — opt-in only, never in CI (dev.md §9).
-// ---------------------------------------------------------------------------
-
+// Live network — opt-in only, never in CI (§9).
 namespace {
 
 bool network_tests_enabled() {
@@ -80,7 +75,7 @@ bool network_tests_enabled() {
   return enabled.is_ok() && enabled.value().value_or(false);
 }
 
-}  // namespace
+}
 
 TEST(resolver_live_resolution_opt_in) {
   if (!network_tests_enabled()) {

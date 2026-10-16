@@ -1,5 +1,3 @@
-// src/tui/ops.cpp — see ops.h for the contract.
-
 #include "ops.h"
 
 #include <thread>
@@ -7,11 +5,11 @@
 namespace tui {
 
 namespace {
-// Long enough that an operation stopping is noticed promptly, short enough
-// that a shutdown never sleeps longer than it must.
+// Short enough that a shutdown never sleeps longer than it must, long enough
+// that an operation stopping is noticed promptly.
 constexpr auto kPollSlice = std::chrono::milliseconds(20);
-}  // namespace
 
+}
 std::shared_ptr<Op> OpRegistry::begin(std::string label) {
   auto op = std::make_shared<Op>();
   op->label = std::move(label);
@@ -75,4 +73,4 @@ bool wait_for_flag(const std::atomic<bool>& flag,
   }
 }
 
-}  // namespace tui
+}

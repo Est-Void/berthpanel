@@ -1,5 +1,3 @@
-// src/berth/net/protocol.cpp — see protocol.h for the contract.
-
 #include "protocol.h"
 
 #include <algorithm>
@@ -43,8 +41,7 @@ Result<void> parse_status_line(const std::string_view line, HttpReply* reply) {
   const std::optional<std::string_view> code = status_code_of(line);
   if (!code.has_value())
     return Error("parse_http_head: bad status line");
-  // status_code_of guarantees exactly three ASCII digits, so this cannot
-  // wrap (unlike atoi, which silently reads overflow as a different status).
+  // Exactly three ASCII digits, so this cannot wrap (unlike atoi).
   const std::string_view digits = code.value();
   const int status =
       (digits[0] - '0') * 100 + (digits[1] - '0') * 10 + (digits[2] - '0');
@@ -56,8 +53,7 @@ Result<void> parse_status_line(const std::string_view line, HttpReply* reply) {
 }
 
 Result<void> parse_header_line(const std::string_view line, HttpReply* reply) {
-  // obs-fold continuation is rejected, not unwrapped: a folded header is a
-  // request-smuggling shape, not a formatting quirk.
+  // obs-fold is rejected, not unwrapped: a folded header is a smuggling shape.
   if (line.front() == ' ' || line.front() == '\t') {
     return Error("parse_http_head: obs-fold continuation is rejected");
   }
@@ -70,8 +66,6 @@ Result<void> parse_header_line(const std::string_view line, HttpReply* reply) {
   return {};
 }
 
-// Consumes the header block starting after the status line. Returns the
-// offset just past "\r\n\r\n".
 Result<std::size_t> parse_headers(const std::string_view head,
                                   const std::size_t first_eol,
                                   HttpReply* reply) {
@@ -91,9 +85,7 @@ Result<std::size_t> parse_headers(const std::string_view head,
   return std::size_t{0};
 }
 
-// A chunk size line may be (a) not there yet, (b) present but malformed, or
-// (c) a number. Conflating (a) and (b) would turn a truncated body into a
-// silent retry loop, so the three cases stay distinct.
+// Malformed and not-yet-there stay distinct (else a truncated body retries).
 Result<std::optional<std::size_t>> parse_chunk_size(const std::string_view body,
                                                     std::size_t* pos) {
   const std::size_t eol = body.find("\r\n", *pos);
@@ -112,7 +104,6 @@ Result<std::optional<std::size_t>> parse_chunk_size(const std::string_view body,
       ::strtoull(std::string(size_line).c_str(), nullptr, 16)));
 }
 
-// A zero-size chunk is followed by optional trailers, then a blank line.
 Result<std::optional<std::string>> read_trailers(const std::string_view body,
                                                  std::size_t pos,
                                                  std::string out) {
@@ -132,8 +123,7 @@ enum class ChunkStep {
   kIncomplete,
 };
 
-// Appends one chunk's payload. kIncomplete means "the bytes are not here
-// yet"; Err means the framing itself is wrong, which no more bytes can fix.
+// kIncomplete: the bytes are not here yet; Err: the framing is wrong.
 Result<ChunkStep> append_chunk(const std::string_view body, std::size_t* pos,
                                const std::size_t size,
                                const std::size_t max_bytes, std::string* out) {
@@ -151,11 +141,7 @@ Result<ChunkStep> append_chunk(const std::string_view body, std::size_t* pos,
   return ChunkStep::kContinue;
 }
 
-}  // namespace
-
-// Header names are stored LOWERCASED, so the lookup is an exact compare
-// against an already-lowercased name — "X-RateLimit-Remaining" must NOT
-// match "x-ratelimit-remaining". Callers pass the canonical lowercase form.
+}
 const std::string* HttpReply::header(const std::string_view name) const {
   for (const auto& [key, value] : headers) {
     if (key == name)
@@ -291,4 +277,4 @@ RedirectDecision next_redirect(const HttpReply& reply, const RequestKind kind,
   return {RedirectAction::kFollow, target};
 }
 
-}  // namespace berth
+}

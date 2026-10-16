@@ -56,8 +56,7 @@ Result<std::string> make_local_repo(const std::filesystem::path& dir) {
   return trimmed(git({"-C", dir.string(), "rev-parse", "HEAD"}).value());
 }
 
-}  // namespace
-
+}
 TEST(gitclone_token_requires_exact_host_match) {
   CHECK(token_allowed_for_url("https://github.com/o/r.git", "github.com"));
   CHECK(!token_allowed_for_url("https://github.com.evil.io/o/r.git",

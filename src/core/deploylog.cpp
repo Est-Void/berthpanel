@@ -1,5 +1,3 @@
-// src/core/deploylog.cpp — see deploylog.h for the contract.
-
 #include "deploylog.h"
 
 #include <mutex>
@@ -20,12 +18,11 @@ std::string render_line(const std::string_view line) {
   return text;
 }
 
-}  // namespace
-
+}
 Result<void> deploylog_append(const Paths& paths, const std::string_view line) {
   const std::string text = render_line(line);
   const std::lock_guard<std::mutex> guard(g_deploylog_mutex);
   return append_log_line(paths.deploy_log, paths.state_dir, text);
 }
 
-}  // namespace berth
+}

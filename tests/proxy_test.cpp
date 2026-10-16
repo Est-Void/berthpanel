@@ -43,8 +43,7 @@ berth::ServiceRecord memos_record() {
   return r;
 }
 
-}  // namespace
-
+}
 TEST(proxy_domain_accepts_valid_hostnames) {
   CHECK(validate_proxy_domain("example.com").is_ok());
   CHECK(validate_proxy_domain("sub.example.com").is_ok());

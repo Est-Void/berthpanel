@@ -34,8 +34,7 @@ berth::NetSnapshot snapshot(const std::uint64_t allowed,
   return state;
 }
 
-}  // namespace
-
+}
 TEST(net_banner_counts_this_session_and_separates_refusals) {
   const std::string banner =
       tui::net_banner(snapshot(7, 2, "raw.githubusercontent.com"));

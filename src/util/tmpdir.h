@@ -1,9 +1,5 @@
 #pragma once
 
-// src/util/tmpdir.h — a private scratch directory with a random suffix,
-// removed when it goes out of scope. Every temporary path the project
-// creates carries a random suffix (§9); this is the one way to make one.
-
 #include <filesystem>
 #include <string_view>
 #include <utility>
@@ -37,4 +33,4 @@ class TempDir {
   std::filesystem::path path_;
 };
 
-}  // namespace berth
+}

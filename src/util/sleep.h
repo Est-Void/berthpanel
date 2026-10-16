@@ -1,9 +1,5 @@
 #pragma once
 
-// src/util/sleep.h — the only sleeps in the tree. Every wait is a deadline
-// plus a cancel flag (dev.md §5): nothing blocks long enough for a Ctrl-C
-// to look like a hang.
-
 #include <time.h>
 
 #include <atomic>
@@ -12,8 +8,8 @@
 
 namespace berth {
 
-// One uninterruptible-by-policy slice. EINTR is resumed with the remaining
-// time, so a signal never shortens the wait.
+// Resumes after EINTR with the remaining time, so a signal never shortens the
+// wait.
 inline void sleep_ms(const int ms) {
   struct timespec ts{static_cast<time_t>(ms / 1000),
                      static_cast<long>(ms % 1000) * 1000000L};
@@ -21,8 +17,8 @@ inline void sleep_ms(const int ms) {
   }
 }
 
-// Sleeps up to budget, giving up as soon as cancel is set. Returns true when
-// the full budget elapsed, false when it was cut short.
+// Returns true only if the full budget elapsed; false means cancel cut it
+// short.
 inline bool interruptible_sleep(
     const std::chrono::milliseconds budget,
     const std::atomic<bool>* cancel = nullptr,
@@ -39,4 +35,4 @@ inline bool interruptible_sleep(
   return true;
 }
 
-}  // namespace berth
+}

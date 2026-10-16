@@ -1,7 +1,5 @@
-// Tests for the System Scan port parser (stage 6.5). The parser is PURE, so
-// every case is a fixture string — including the ones /proc cannot be asked
-// for on this machine. The format is the kernel's, so the fixtures below are
-// verbatim rows from /proc/net/tcp and /proc/net/tcp6.
+// Fixtures are verbatim /proc rows, so cases /proc cannot be asked for on this
+// machine are still covered.
 
 #include "analyzer/ports.h"
 
@@ -17,10 +15,8 @@
 namespace {
 
 // Header + three rows: two LISTEN, one ESTABLISHED (which must NOT appear).
-// Raw strings because these are fixtures, not code: adjacent "literals" would
-// be concatenated into one line and the parser would read a single row out of
-// a three-row file — which is exactly the kind of test that passes for the
-// wrong reason.
+// Raw strings: adjacent "literals" would concatenate into one line and the
+// parser would read a single row out of a three-row fixture.
 constexpr const char* kTcp4 =
     R"(  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
    0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 24370 2 0000000009c7ec4f 100 0 0 10 0
@@ -28,7 +24,7 @@ constexpr const char* kTcp4 =
    2: 00000000:C1FA 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 12347 1 0000000000000000 100 0 0 10 0
 )";
 
-// ::1 (the last word holds the 01, which is what makes it ::1 and not
+// ::1 (the last word holds the 01, which is what makes it ::1, not
 // ::0100:0001) and :: listening.
 constexpr const char* kTcp6 =
     R"(  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
@@ -41,7 +37,7 @@ berth::Result<berth::ParsedPorts> v4(const std::string& text,
   return berth::parse_proc_net(text, false, owned);
 }
 
-}  // namespace
+}
 
 TEST(ports_only_listening_sockets_are_reported) {
   const berth::Result<berth::ParsedPorts> parsed = v4(kTcp4, {});
@@ -71,9 +67,7 @@ TEST(ports_ipv6_fixtures_decode_including_loopback_and_wildcard) {
       berth::parse_proc_net(kTcp6, true, {});
   CHECK(parsed.is_ok());
   CHECK(parsed.value().ports.size() == 2);
-  // The all-zero group is ::1 here, because the word order is little-endian
-  // per 32-bit word: getting this backwards yields "::100" and a plausible
-  // looking lie.
+  // Little-endian per 32-bit word: read backwards this is "::1" on 8080.
   CHECK(parsed.value().ports[0].address == "::1");
   CHECK(parsed.value().ports[0].port == 8080);
   CHECK(parsed.value().ports[0].loopback);
@@ -84,8 +78,7 @@ TEST(ports_ipv6_fixtures_decode_including_loopback_and_wildcard) {
 }
 
 TEST(ports_mark_the_ports_the_registry_already_claims) {
-  // `owned` is OUR OWN record (state.json), not attribution of a foreign
-  // listener: the parser is handed the numbers and never goes looking (§7).
+  // `owned` is OUR OWN record (state.json); the parser never goes looking (§7).
   const berth::Result<berth::ParsedPorts> parsed = v4(kTcp4, {8080, 49658});
   CHECK(parsed.is_ok());
   CHECK(parsed.value().ports[0].owned);
@@ -97,8 +90,7 @@ TEST(ports_mark_the_ports_the_registry_already_claims) {
 }
 
 TEST(ports_count_unreadable_lines_instead_of_pretending_they_are_empty) {
-  // A silently dropped row reads as "nothing is listening on that port", which
-  // is the kind of quiet wrong answer §11 is about.
+  // A dropped row would read as "nothing is listening on that port" (§11).
   const berth::Result<berth::ParsedPorts> parsed = v4(
       R"(  sl  local_address rem_address   st
    0: 0100007F:1F90 00000000:0000 0A
@@ -108,8 +100,7 @@ TEST(ports_count_unreadable_lines_instead_of_pretending_they_are_empty) {
 )",
       {});
   CHECK(parsed.is_ok());
-  // Both good rows survive; the garbage line and the non-hex port are counted
-  // as unreadable rather than quietly dropped.
+  // Garbage line and non-hex port are counted, never quietly dropped.
   CHECK(parsed.value().ports.size() == 2);
   CHECK(parsed.value().ports[0].port == 8080);
   CHECK(parsed.value().ports[1].port == 8081);
@@ -139,7 +130,7 @@ TEST(ports_reads_both_kernel_files_from_a_fixture_directory) {
   CHECK(report.is_ok());
   CHECK(report.value().ports.size() == 2);
   CHECK(report.value().unparsed == 0);
-  // No tcp6 in the fixture: that is a FACT the report carries, not a failure.
+  // No tcp6 in the fixture: a FACT the report carries, not a failure.
   CHECK(!report.value().ipv6_read);
   CHECK(!report.value().ipv6_error.empty());
 }
@@ -191,8 +182,7 @@ TEST(ports_a_missing_tcp_file_is_a_loud_error_not_an_empty_report) {
 }
 
 TEST(ports_are_sorted_even_when_tcp6_is_absent) {
-  // The tcp6 early return used to skip the sort, so a host without IPv6 got
-  // its IPv4 rows in /proc order.
+  // The tcp6 early return used to skip the sort.
   const TempDir tmp;
   const std::filesystem::path root = tmp.path() / "net";
   CHECK(berth::ensure_dir(root).is_ok());

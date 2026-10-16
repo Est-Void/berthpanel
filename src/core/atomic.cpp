@@ -31,9 +31,8 @@ std::string backup_name(const std::filesystem::path& original,
   return original.string() + suffix;
 }
 
-// Creating the temp with O_EXCL is the only thing that can fail for a
-// reason worth retrying; every other failure is reported as-is so the
-// caller never spins on a real problem.
+// Only an O_EXCL name collision is worth retrying; every other failure is
+// reported as-is so the caller never spins on a real problem.
 enum class TempStatus { kWritten, kNameTaken, kFailed };
 
 struct TempOutcome {
@@ -91,7 +90,6 @@ TempOutcome write_once(const std::filesystem::path& dest,
   return commit_temp(dest, tmp, FdGuard(raw), data, perms);
 }
 
-// Returns an empty path when the candidate name is already taken.
 Result<std::filesystem::path> free_backup_name(const std::string& candidate) {
   std::error_code ec;
   if (std::filesystem::exists(candidate, ec)) {
@@ -116,8 +114,7 @@ Result<std::filesystem::path> next_backup_name(
   return Error("backup_unique: no free backup name for " + original.string());
 }
 
-}  // namespace
-
+}
 Result<void> atomic_write(const std::filesystem::path& dest,
                           const std::string_view data,
                           const std::filesystem::perms perms) {
@@ -152,4 +149,4 @@ Result<std::filesystem::path> backup_unique(
   return candidate;
 }
 
-}  // namespace berth
+}

@@ -1,6 +1,5 @@
-// Tests for units.h (stage 4.6): rendering, per-argument quoting, the
-// mandatory resource limits, and the two §11 traps — a $HOME with a space
-// and list directives that must never be space-joined.
+// The §11 traps: a $HOME with a space, and list directives that must never be
+// space-joined.
 
 #include "berth/units.h"
 
@@ -41,8 +40,7 @@ UnitSpec base_spec() {
   return spec;
 }
 
-}  // namespace
-
+}
 TEST(units_exec_word_quoting_is_per_argument) {
   const auto plain = quote_exec_word("memos");
   CHECK(plain.is_ok());
@@ -122,8 +120,8 @@ TEST(units_refuses_invalid_service_name) {
 }
 
 TEST(units_refuses_a_description_that_could_inject_directives) {
-  // display_name is free text from a user recipe and lands in the unit file
-  // verbatim; a newline would add directives nobody chose (§11).
+  // Free text from a user recipe lands verbatim; a newline would add
+  // directives nobody chose (§11).
   UnitSpec spec = base_spec();
   spec.description = "Memos\nExecStart=/bin/sh -c evil";
   CHECK(render_unit(spec).is_err());
@@ -136,8 +134,7 @@ TEST(units_read_write_paths_are_one_directive_each) {
   spec.read_write_paths = {"/home/u/My Apps/data", "/home/u/state"};
   const auto unit = render_unit(spec);
   CHECK(unit.is_ok());
-  // Exactly two ReadWritePaths lines: a joined list would be one line with
-  // a space, and the namespace setup would fail (§11).
+  // Exactly two lines: a joined list would break the namespace setup (§11).
   const std::string needle = "ReadWritePaths=";
   std::size_t count = 0;
   for (std::size_t pos = unit.value().find(needle); pos != std::string::npos;
@@ -145,10 +142,9 @@ TEST(units_read_write_paths_are_one_directive_each) {
     ++count;
   }
   CHECK(count == 2);
-  // ReadWritePaths= is a LIST directive, so the space must be
-  // backslash-escaped: unquoted, systemd splits at the space and ignores the
-  // tail ("path is not absolute, ignoring: Apps/data"), leaving the work dir
-  // unwritable (dev.md §11).
+  // LIST directive: the space must be backslash-escaped, or systemd drops the
+  // tail ("path is not absolute, ignoring: Apps/data") and the dir stays
+  // unwritable (§11).
   CHECK(unit.value().find("ReadWritePaths=/home/u/My\\ Apps/data") !=
         std::string::npos);
 }
@@ -169,8 +165,8 @@ TEST(units_workspace_with_spaces_survives_rendering) {
 }
 
 TEST(units_path_directives_take_the_raw_path) {
-  // systemd parses path directives verbatim: quotes would become part of
-  // the path, but spaces are fine (verified against a live user manager).
+  // Path directives are verbatim: quotes would become part of the path, spaces
+  // are fine (verified against a live user manager).
   CHECK(raw_systemd_path("/home/u/data").value() == "/home/u/data");
   CHECK(raw_systemd_path("/home/u/My Apps").value() == "/home/u/My Apps");
   CHECK(raw_systemd_path("/a/../b").value() == "/a/../b");
@@ -208,7 +204,6 @@ TEST(units_write_unit_is_atomic_and_0644) {
   CHECK(body.is_ok());
   CHECK(body.value().find("ExecStart=") != std::string::npos);
 
-  // No temp leftovers; exactly one file.
   std::size_t files = 0;
   for (const auto& entry :
        std::filesystem::directory_iterator(paths.units_dir)) {
@@ -224,8 +219,7 @@ TEST(units_cleanup_units_render_and_write) {
       berth::render_cleanup_units("/home/user name/bin/berthpanel");
   CHECK(rendered.is_ok());
   CHECK(rendered.value().service.find("ExecStart=") != std::string::npos);
-  // The timer fires hourly: the oneshot must run quiet and still fail
-  // loudly on stderr, so the report never reaches the journal on success.
+  // Hourly timer: quiet on success, still loud on stderr in the journal.
   CHECK(rendered.value().service.find("__cleanup --quiet") !=
         std::string::npos);
   CHECK(rendered.value().service.find("\"/home/user name/bin/berthpanel\"") !=

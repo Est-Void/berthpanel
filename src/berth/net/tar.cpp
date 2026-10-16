@@ -1,5 +1,3 @@
-// src/berth/net/tar.cpp — see tar.h for the contract.
-
 #include "tar.h"
 
 #include <fcntl.h>
@@ -29,10 +27,10 @@ struct RawEntry {
   char typeflag = '0';
   std::string link_target;
   std::uint32_t mode = 0;
-  std::size_t data_offset = 0;  // into the archive bytes
+  std::size_t data_offset = 0;
 };
 
-// Per-file overrides a pax header may carry into the NEXT entry.
+// Per-file overrides a pax header carries into the NEXT entry.
 struct PaxOverrides {
   std::string path;
   std::string linkpath;
@@ -42,7 +40,7 @@ struct PaxOverrides {
   void clear() { *this = PaxOverrides{}; }
 };
 
-// The fixed part of a ustar header, already validated and split out.
+// The fixed ustar header part, already validated.
 struct Header {
   std::string name;
   std::uint64_t size = 0;
@@ -58,7 +56,7 @@ bool all_zero(const std::string_view block) {
                      [](const char c) { return c == '\0'; });
 }
 
-// Octal field: spaces and NULs pad; digits parse. All padding -> 0.
+// Spaces and NULs pad; an all-padding field is 0.
 Result<std::uint64_t> parse_octal(const std::string_view field,
                                   const std::string& what) {
   std::size_t start = 0;
@@ -80,8 +78,7 @@ Result<std::uint64_t> parse_octal(const std::string_view field,
   return value;
 }
 
-// NUL-terminated, space-padded field. Unlike strutil::trim this must stop at
-// the first NUL: tar fields are fixed-width buffers, not text.
+// Stops at the first NUL, unlike strutil::trim: fields are fixed-width.
 std::string_view trimmed(const std::string_view field) {
   const std::size_t nul = field.find('\0');
   std::string_view out =
@@ -149,7 +146,7 @@ Result<Header> parse_header_block(const std::string_view bytes,
   return header;
 }
 
-// Two zero blocks terminate the archive; anything after them is padding.
+// Two zero blocks end the archive; what follows is padding.
 bool ends_archive(const std::string_view bytes, const std::size_t pos) {
   const std::size_t next = pos + kBlockSize;
   return next + kBlockSize <= bytes.size() &&
@@ -174,9 +171,7 @@ Result<std::size_t> pax_record_length(const std::string_view records,
   return length;
 }
 
-// Applies "len key=value\n" pax records; path/linkpath/size matter and the
-// rest are ignored. A record we cannot parse fails the whole archive: a
-// silently dropped path override would extract to the wrong place.
+// A dropped path override would extract to the wrong place, so fail loudly.
 Result<PaxOverrides> parse_pax_records(const std::string_view records) {
   PaxOverrides out;
   std::size_t pos = 0;
@@ -384,8 +379,7 @@ Result<std::filesystem::path> extract_entry(const RawEntry& entry,
   }
 }
 
-}  // namespace
-
+}
 bool archive_path_safe(const std::string_view path) {
   if (path.empty())
     return false;
@@ -412,8 +406,7 @@ bool archive_path_safe(const std::string_view path) {
 
 namespace {
 
-// Resolves path components into a depth counter without touching the
-// filesystem: "a/../b" returns to the same depth, "b/.." to zero.
+// Pure depth counting, no filesystem: "a/../b" is the same depth as "a".
 std::size_t depth_of(std::string_view path, std::size_t depth) {
   std::size_t start = 0;
   while (start <= path.size()) {
@@ -435,8 +428,7 @@ std::size_t depth_of(std::string_view path, std::size_t depth) {
   return depth;
 }
 
-}  // namespace
-
+}
 bool link_target_escapes(const std::string_view from_dir,
                          const std::string_view target) {
   if (target.empty())
@@ -500,4 +492,4 @@ Result<std::size_t> tar_extract_gz(const std::string_view gzipped,
   return tar_extract(plain.value(), dest);
 }
 
-}  // namespace berth
+}

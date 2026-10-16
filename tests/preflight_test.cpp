@@ -42,8 +42,7 @@ bool has_blocker(const berth::PreflightReport& report, Blocker blocker) {
   return false;
 }
 
-}  // namespace
-
+}
 TEST(preflight_ready_recipe_passes) {
   const auto report = preflight_recipe(good_recipe(), go_present());
   CHECK(report.is_ok());

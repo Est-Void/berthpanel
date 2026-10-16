@@ -1,15 +1,7 @@
 #pragma once
 
-// src/core/docstore.h — the shape every versioned on-disk document has: a
-// JSON object {"version": N, "<array_field>": [ … ]} of records keyed by a
-// string field. state.json and deploy-journal.json are the same machinery
-// with different records, so load/quarantine/sort/upsert/remove exists once
-// here instead of twice in near-identical files.
-//
-// Corrupt input is quarantined and reported, NEVER read as an empty document
-// (§11): an empty registry would make the panel forget every service it
-// manages. Header-only because it is a template: instantiating it in a .cpp
-// would drag the record types into this module.
+// Corrupt input is quarantined and reported, never read as an empty document
+// (§11). Header-only because it is a template.
 
 #include <algorithm>
 #include <filesystem>
@@ -30,9 +22,8 @@ namespace berth {
 
 namespace detail {
 
-// A corrupt-document failure reports both what was wrong and what happened
-// to the bad bytes. A failed backup is reported too: losing the diagnosis
-// and the file would be worse than either.
+// A failed backup is never swallowed: losing the diagnosis and the file is
+// worse than either failure alone.
 [[nodiscard]] inline Error docstore_quarantine(
     const std::filesystem::path& file, const std::string& why) {
   const Result<std::filesystem::path> backup = quarantine_corrupt(file);
@@ -62,19 +53,18 @@ namespace detail {
   return "not a versioned document";
 }
 
-}  // namespace detail
-
+}
 template <typename T>
 class DocStore {
  public:
   using Encode = std::function<nlohmann::json(const T&)>;
-  // Decode signals a schema violation by throwing a nlohmann exception; the
-  // store turns that into a quarantine plus a loud error, never a default.
+  // Decode throws on a schema violation; the store turns that into a quarantine
+  // plus a loud error, never a default.
   using Decode = std::function<T(const nlohmann::json&)>;
   using KeyOf = std::function<std::string(const T&)>;
 
-  // `dir` is created on the first store: a deploy into a fresh XDG state dir
-  // must not need a separate ensure_dir call at every write site.
+  // `dir` is created on the first store, so a deploy into a fresh XDG state dir
+  // needs no ensure_dir at every write site.
   DocStore(std::filesystem::path file, std::filesystem::path dir,
            const int version, std::string_view array_field, Encode encode,
            Decode decode, KeyOf key_of)
@@ -88,7 +78,7 @@ class DocStore {
 
   [[nodiscard]] const std::filesystem::path& file() const { return file_; }
 
-  // Records sorted by key. A missing file is an empty list, not an error.
+  // Sorted by key; a missing file is an empty list, not an error.
   [[nodiscard]] Result<std::vector<T>> load() const {
     std::error_code ec;
     const bool exists = std::filesystem::exists(file_, ec);
@@ -142,7 +132,6 @@ class DocStore {
     return json_store(file_, doc);
   }
 
-  // Replaces the record with a matching key, appends otherwise.
   [[nodiscard]] Result<void> upsert(const T& record) const {
     Result<std::vector<T>> loaded = load();
     if (loaded.is_err())
@@ -199,4 +188,4 @@ class DocStore {
   KeyOf key_of_;
 };
 
-}  // namespace berth
+}

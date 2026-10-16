@@ -1,7 +1,6 @@
 #pragma once
 
-// src/util/errno.h — errno value to message text. Works with both the GNU
-// strerror_r (char*) and the XSI one (int); callers just print the result.
+// Handles both the GNU strerror_r (char*) and the XSI one (int).
 
 #include <string.h>
 
@@ -21,4 +20,4 @@ namespace berth {
 #endif
 }
 
-}  // namespace berth
+}

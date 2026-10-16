@@ -1,10 +1,5 @@
 #pragma once
 
-// src/util/sha256.h — SHA-256 over the vendored public-domain
-// implementation in third_party/sha2/. Exposes a streaming hasher and a
-// one-shot hex helper for content pins (toolbox downloads, catalog
-// plugins). Owns no I/O; callers feed bytes and consume hex strings.
-
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -15,8 +10,7 @@ extern "C" {
 
 namespace berth {
 
-// Streaming SHA-256. finish_hex() consumes the hasher; a second call is a
-// bug. Empty updates are no-ops, matching the one-shot helper.
+// finish_hex() consumes the hasher; a second call is a bug.
 class Sha256 {
  public:
   Sha256() { sha256_init(&ctx_); }
@@ -56,4 +50,4 @@ class Sha256 {
   return hasher.finish_hex();
 }
 
-}  // namespace berth
+}

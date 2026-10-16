@@ -22,8 +22,7 @@ std::string_view seed() {
                           sizeof(kRealGzip));
 }
 
-}  // namespace
-
+}
 TEST(gzip_inflates_a_real_stream) {
   const auto out = gunzip(seed(), 1024);
   CHECK(out.is_ok());

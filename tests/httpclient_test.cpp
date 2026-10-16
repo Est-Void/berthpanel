@@ -1,6 +1,5 @@
-// Tests for httpclient pure parts (stages 3.4–3.5). No sockets here.
-// The redirect tests DRIVE the loop decisions through the cap boundary —
-// the exact test the old implementation faked (dev.md §11, §6.2).
+// Pure parts only, no sockets. The redirect tests DRIVE the loop through the
+// cap boundary rather than asserting the constant (§11, §6.2).
 
 #include "berth/net/fetch.h"
 
@@ -32,8 +31,7 @@ HttpReply reply_with(const int status, const std::string& location = "") {
   return r;
 }
 
-}  // namespace
-
+}
 TEST(url_parse_full_and_defaults) {
   const auto r =
       parse_http_url("https://api.github.com/repos/x/y/tarball?ref=main");
@@ -76,8 +74,7 @@ TEST(url_parse_normalizes_and_rejects) {
 }
 
 TEST(url_parse_query_or_fragment_without_a_path) {
-  // "https://host?q" used to fold "?q" into the HOST, so the exact-match
-  // allowlist refused a perfectly valid URL.
+  // "?q" folded into the HOST once, and the exact-match allowlist refused it.
   const auto q = parse_http_url("https://api.github.com?per_page=1");
   CHECK(q.is_ok());
   CHECK(q.value().host == "api.github.com");
@@ -102,18 +99,15 @@ TEST(join_redirect_forms) {
   CHECK(join_redirect(current, "").empty());
   CHECK(join_redirect("garbage", "/x").empty());
 
-  // Query-only: keep the base PATH, replace its query (RFC 3986 §5.3). The
-  // old code resolved against the directory and dropped the last segment.
+  // Query-only: keep the base PATH, replace its query (RFC 3986 §5.3).
   CHECK(join_redirect("https://github.com/a/b?x=1", "?y=2") ==
         "https://github.com/a/b?y=2");
-  // A base with no path resolves relative refs against its root, not the "//"
-  // of the scheme.
+  // No path in the base: resolve against its root, not the scheme's "//".
   CHECK(join_redirect("https://github.com", "v2") == "https://github.com/v2");
 }
 
 TEST(redirect_loop_exercises_cap_boundary_for_real) {
-  // max_redirect_hops = 5 (also the hard cap). The loop must follow at
-  // hops_done 0..4 and stop at exactly 5 — both sides of the boundary.
+  // Follow at hops_done 0..4, stop at exactly 5: both sides of the boundary.
   const HttpReply redirect = reply_with(301, "https://github.com/next");
   for (int hops = 0; hops < 5; ++hops) {
     const auto d = next_redirect(redirect, berth::RequestKind::kApi,
@@ -131,8 +125,7 @@ TEST(redirect_loop_exercises_cap_boundary_for_real) {
                                  berth::effective_redirect_budget(2, false));
   CHECK(two.action == RedirectAction::kStopCap);
 
-  // A caller requesting more than the hard cap is clamped to it: at 5
-  // hops the loop stops even though the caller asked for 50.
+  // A caller asking for more than the hard cap is clamped to it.
   const auto greedy = next_redirect(
       redirect, berth::RequestKind::kApi, "https://github.com/start", 5,
       berth::effective_redirect_budget(50, false));

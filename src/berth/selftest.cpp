@@ -1,5 +1,3 @@
-// src/berth/selftest.cpp — see selftest.h for the contract.
-
 #include "selftest.h"
 
 #include <arpa/inet.h>
@@ -42,9 +40,7 @@ bool cancelled(std::atomic<bool>* flag) {
   return flag != nullptr && flag->load();
 }
 
-// A random-suffixed scratch dir under the real data dir, removed on every
-// exit path. NOT TempDir: TempDir is /tmp-only, and the unit's PrivateTmp=yes
-// makes a /tmp work dir invisible inside the unit namespace.
+// NOT TempDir: it is /tmp-only and PrivateTmp=yes hides it from the unit.
 class Scratch {
  public:
   Scratch() = default;
@@ -84,8 +80,7 @@ class Scratch {
   bool removed_ = false;
 };
 
-// Removes the unit the selftest created, on every path. Idempotent; never
-// polls a cancel flag (cleanup must run even after SIGINT).
+// Cleanup must run even after SIGINT: it never polls the cancel flag.
 class UnitGuard {
  public:
   UnitGuard(Paths paths, std::string name)
@@ -190,8 +185,7 @@ std::set<std::string> service_names(const std::vector<ServiceRecord>& records) {
   return names;
 }
 
-}  // namespace
-
+}
 bool SelftestReport::ok() const {
   for (const SelftestStep& step : steps) {
     if (!step.ok)
@@ -298,8 +292,6 @@ Result<SelftestReport> run_selftest(const Paths& paths,
     return with_context(std::move(journal_before).error(),
                         "selftest: reading the journal before the run");
 
-  // A name that is provably unused: the manager's namespace is shared, so
-  // this is the one thing that must be certain before anything is created.
   std::string suffix;
   std::string name;
   bool have_name = false;
@@ -518,4 +510,4 @@ std::string render_selftest_report(const SelftestReport& report) {
   return out;
 }
 
-}  // namespace berth
+}

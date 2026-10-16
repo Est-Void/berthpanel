@@ -1,5 +1,3 @@
-// src/berth/units.cpp — see units.h for the contract.
-
 #include "units.h"
 
 #include <algorithm>
@@ -22,14 +20,8 @@ namespace berth {
 
 namespace {
 
-// Hardening chosen to bound a runaway service: memory, tasks, filesystem
-// writes and syscall surface. None of it is a guarantee — the same user
-// runs the process either way (dev.md §6, "blast-radius reducer").
-// sandbox.cpp renders the SAME set as `systemd-run --property=`; a
-// hardening change must land in both, which is why they live in one array.
-// CTAD: the count follows the initializers, so a dropped entry can
-// never leave an empty slot behind (the 18/17 drift made the sandbox
-// build pass an empty --property= and systemd-run refused it).
+// Blast radius only, never a trust boundary. sandbox.cpp renders this SAME set;
+// CTAD means a dropped entry can never leave an empty slot behind.
 constexpr auto kHardening = std::to_array<std::string_view>({
     "NoNewPrivileges=yes",
     "PrivateTmp=yes",
@@ -70,8 +62,7 @@ constexpr std::string_view kUnitComment =
   return std::string(value);
 }
 
-}  // namespace
-
+}
 std::span<const std::string_view> hardening_directives() {
   return kHardening;
 }
@@ -106,8 +97,7 @@ Result<std::string> quote_unit_value(const std::string_view value) {
     return std::move(checked).error();
   std::string out = "\"";
   for (const char c : value) {
-    // systemd unit syntax: '"' and '\\' take a backslash escape, '%' is
-    // doubled (a backslash there would become part of the value).
+    // '%' is doubled, never backslashed: the backslash would join the value.
     if (c == '"' || c == '\\') {
       out += '\\';
       out += c;
@@ -208,8 +198,7 @@ Result<void> check_unit_spec(const UnitSpec& spec) {
   if (!validate_unit_name(spec.service_name)) {
     return Error("units: invalid service name: '" + spec.service_name + "'");
   }
-  // §8: memory_max and tasks_max are mandatory. A unit without them is a
-  // runaway waiting to grind the whole user session.
+  // §8: without them a unit is a runaway that grinds the whole user session.
   if (spec.limits.empty()) {
     return Error("units: refusing to render " + spec.service_name +
                  " without memory_max and tasks_max");
@@ -221,9 +210,7 @@ Result<void> check_unit_spec(const UnitSpec& spec) {
 }
 
 Result<void> append_unit_section(std::string* out, const UnitSpec& spec) {
-  // display_name is free text (user recipes carry it) and reaches the unit
-  // file: a newline would inject arbitrary directives. Reject it loudly rather
-  // than write a unit whose behavior nobody chose (§11).
+  // display_name is free user text: a newline there would inject directives.
   Result<std::string> description =
       no_control_chars(spec.description, "description");
   if (description.is_err())
@@ -256,10 +243,8 @@ void append_hardening_section(std::string* out, const UnitSpec& spec) {
     *out += directive;
     *out += "\n";
   }
-  // One directive per path — a space-joined list would become two
-  // nonexistent paths and the namespace would fail to set up (§11). And the
-  // path itself is escaped, because ReadWritePaths= IS a list: a work dir
-  // with a space would otherwise be split at that space and the tail dropped.
+  // One directive per path (a space-joined list becomes nonexistent paths), and
+  // ReadWritePaths= is a list, so the path is escaped as one.
   for (const std::filesystem::path& path : spec.read_write_paths) {
     *out += "ReadWritePaths=" + escape_path_list_value(path.string()) + "\n";
   }
@@ -297,8 +282,7 @@ Result<void> append_exec_start(std::string* out, const UnitSpec& spec) {
   return {};
 }
 
-}  // namespace
-
+}
 Result<std::string> render_unit(const UnitSpec& spec) {
   const Result<void> checked = check_unit_spec(spec);
   if (checked.is_err())
@@ -357,8 +341,7 @@ Result<RunOutput> systemctl_user_run(const std::vector<std::string>& args,
   return run(argv, limits);
 }
 
-}  // namespace
-
+}
 Result<int> systemctl_user_code(const std::vector<std::string>& args,
                                 const std::chrono::milliseconds timeout,
                                 std::atomic<bool>* cancel) {
@@ -417,11 +400,9 @@ Result<CleanupUnitTexts> render_cleanup_units(
   if (binary_path.empty() || !binary_path.is_absolute()) {
     return Error("units: cleanup service needs an absolute binary path");
   }
-  // The binary path is quoted PER ARGUMENT: a $HOME with a space stays
-  // one ExecStart word (§11). Names are our own fixed stems.
+  // Quoted PER ARGUMENT: a $HOME with a space stays one ExecStart word.
   if (!validate_unit_name(kCleanupUnitStem)) {
-    // Cannot happen without someone breaking the validator; a cleanup
-    // unit built from an invalid name would be an unremovable orphan.
+    // An invalid name here would be an unremovable orphan unit.
     std::fputs("berth: fatal: cleanup unit stem is invalid\n", stderr);
     std::abort();
   }
@@ -435,8 +416,7 @@ Result<CleanupUnitTexts> render_cleanup_units(
   texts.service += "Description=berthpanel cleanup of interrupted deploys\n\n";
   texts.service += "[Service]\n";
   texts.service += "Type=oneshot\n";
-  // --quiet: the timer fires hourly and must not spam the journal with
-  // "nothing to clean up" on every pass; failures still go to stderr.
+  // --quiet: the timer fires hourly and must not spam the journal.
   texts.service += "ExecStart=" + exec.value() + " __cleanup --quiet\n";
 
   texts.timer = std::string(kUnitComment);
@@ -474,4 +454,4 @@ Result<std::filesystem::path> write_cleanup_units(
   return timer;
 }
 
-}  // namespace berth
+}

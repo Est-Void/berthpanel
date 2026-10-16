@@ -1,8 +1,5 @@
-// Tests for tui/ops.h (stage 6.7). This is the whole quit path's foundation:
-// a flag nothing polls is the §11 bug, so the properties that matter are that
-// cancel_all() REACHES every live operation, that a finished one is forgotten
-// (so a later cancel cannot flip a flag nobody reads), and that the shutdown
-// wait is BOUNDED and honest about failing.
+// A flag nothing polls is the §11 bug: cancel_all() must REACH every live
+// operation, a finished one must be forgotten, and the wait must be BOUNDED.
 
 #include "tui/ops.h"
 
@@ -31,13 +28,11 @@ TEST(ops_register_and_forget_an_operation) {
 
   CHECK(ops.end(first));
   CHECK(ops.empty());
-  // Ending it twice is not a crash and not a silent lie either: it says no.
   CHECK(!ops.end(first));
 }
 
 TEST(ops_cancel_all_reaches_every_live_operation) {
-  // The invariant: q and Ctrl-C reach the workers. One flag per operation, so
-  // the deploy can be cancelled without touching a log refresh.
+  // One flag per operation: the deploy is cancelled without the log refresh.
   OpRegistry ops;
   const std::shared_ptr<Op> deploy = ops.begin("deploy berthpanel-memos");
   const std::shared_ptr<Op> scan = ops.begin("system scan");
@@ -45,13 +40,12 @@ TEST(ops_cancel_all_reaches_every_live_operation) {
   CHECK(ops.cancel_all() == 2);
   CHECK(deploy->cancel.load());
   CHECK(scan->cancel.load());
-  // Idempotent, because the quit path and the signal watcher both call it.
+  // Idempotent: the quit path and the signal watcher both call it.
   CHECK(ops.cancel_all() == 2);
 }
 
 TEST(ops_cancel_all_leaves_a_finished_operation_alone) {
-  // A cancelled-but-forgotten flag is harmless; a flag flipped on an op whose
-  // worker already returned would be a lie in the shutdown report.
+  // Flipping the flag of a worker that already returned would lie (§11).
   OpRegistry ops;
   const std::shared_ptr<Op> done = ops.begin("log tail");
   CHECK(ops.end(done));
@@ -69,8 +63,7 @@ TEST(ops_wait_returns_at_once_when_nothing_is_running) {
   OpRegistry ops;
   const auto started = std::chrono::steady_clock::now();
   CHECK(ops.wait_until_empty(std::chrono::milliseconds(2000)));
-  // It must not have slept the whole budget: "nothing to wait for" has to be
-  // fast or every idle quit costs two seconds.
+  // Not the whole budget: an idle quit must stay fast.
   CHECK(std::chrono::steady_clock::now() - started <
         std::chrono::milliseconds(500));
 }
@@ -90,8 +83,7 @@ TEST(ops_wait_notices_an_operation_that_stops) {
 }
 
 TEST(ops_wait_is_bounded_and_says_so_when_a_worker_ignores_the_cancel) {
-  // The case that must NOT hang the quit: a worker wedged in a syscall. The
-  // wait gives up and the caller reports a detached operation loudly (§11).
+  // A wedged worker must not hang the quit: give up and report it (§11).
   OpRegistry ops;
   const std::shared_ptr<Op> wedged = ops.begin("deploy berthpanel-memos");
   const auto started = std::chrono::steady_clock::now();
@@ -105,8 +97,7 @@ TEST(ops_wait_is_bounded_and_says_so_when_a_worker_ignores_the_cancel) {
 }
 
 TEST(ops_survive_concurrent_begin_and_end) {
-  // The registry is touched by every worker on its way in and out; the list
-  // must not be corrupted or leak entries under that.
+  // Every worker touches the registry in and out: no corruption, no leak.
   OpRegistry ops;
   constexpr int kThreads = 8;
   constexpr int kPerThread = 200;
@@ -132,8 +123,7 @@ TEST(ops_survive_concurrent_begin_and_end) {
 
 TEST(
     wait_for_flag_notices_a_flag_that_arrives_and_gives_up_on_one_that_does_not) {
-  // The deploy tail's handshake uses this, and so does anything else that has
-  // to wait for another thread without ever waiting forever.
+  // Wait for another thread, but never forever.
   std::atomic<bool> flag{false};
   const auto started = std::chrono::steady_clock::now();
   CHECK(!tui::wait_for_flag(flag, std::chrono::milliseconds(150)));
@@ -155,8 +145,7 @@ TEST(
 }
 
 TEST(ops_a_cancelled_flag_is_visible_to_a_polling_worker) {
-  // The worker half of the contract: a loop that polls its flag stops. This is
-  // what makes "the engine unwinds" true instead of aspirational.
+  // The worker half: a loop that polls its flag actually stops.
   OpRegistry ops;
   const std::shared_ptr<Op> worker = ops.begin("deploy berthpanel-memos");
   std::atomic<int> iterations{0};

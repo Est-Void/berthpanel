@@ -1,5 +1,3 @@
-// src/tui/view_deploy.cpp — see view_deploy.h for the contract.
-
 #include "view_deploy.h"
 
 #include <algorithm>
@@ -18,8 +16,8 @@ namespace tui {
 
 namespace {
 
-// The stage a log line announces, decided on its FIRST token. Exact matches
-// only: a line that merely mentions "build" is not the build stage.
+// Exact matches on the FIRST token: a line that merely mentions "build" is not
+// the build stage.
 DeployStage stage_of(const std::string_view first) {
   if (first == "fetch") {
     return DeployStage::kFetch;
@@ -33,28 +31,25 @@ DeployStage stage_of(const std::string_view first) {
   if (first == "done") {
     return DeployStage::kDone;
   }
-  // The registry write is the failure that must never read as a success: the
-  // unit is live and the panel does not know about it (§11).
+  // The one failure that must never read as a success: the unit is live and
+  // the panel does not know about it (§11).
   if (berth::starts_with(first, "REGISTRY")) {
     return DeployStage::kRegistryFailed;
   }
   return DeployStage::kOther;
 }
 
-// The service token: "fetch berthpanel-memos@<sha> port 8080" names it in the
-// second field, with the pin glued on. "REGISTRY WRITE FAILED <name>: <why>"
-// puts it in the fourth, after the three-word verb. A token carrying '@' is a
+// "fetch berthpanel-memos@<sha> port 8080" names the service in field 1,
+// "REGISTRY WRITE FAILED <name>: <why>" in field 3. A token carrying '@' is a
 // pinned reference, not a unit name.
 std::string service_of(const std::vector<std::string>& fields,
                        const DeployStage stage) {
-  // Fields consumed by the verb itself before the service name starts.
   const std::size_t index = stage == DeployStage::kRegistryFailed ? 3 : 1;
   if (fields.size() <= index) {
     return {};
   }
   std::string_view token = berth::trim(fields[index]);
-  // "berthpanel-memos: registry write refused" — the colon belongs to the log
-  // line's punctuation, not to the unit name.
+  // The colon belongs to the log line's punctuation, not to the unit name.
   if (!token.empty() && token.back() == ':') {
     token = token.substr(0, token.size() - 1);
   }
@@ -63,8 +58,7 @@ std::string service_of(const std::vector<std::string>& fields,
                                                   : token.substr(0, at));
 }
 
-}  // namespace
-
+}
 std::string_view deploy_stage_label(const DeployStage stage) {
   switch (stage) {
     case DeployStage::kFetch:
@@ -85,17 +79,16 @@ std::string_view deploy_stage_label(const DeployStage stage) {
 
 DeployLogLine parse_deploy_log_line(const std::string_view raw) {
   DeployLogLine line;
-  // Newlines are folded, never dropped: a line must not become two records on
-  // screen, and neither may it vanish (core/applog.h does this on the write
-  // side; the tail reader repeats it because a hand-edited file can differ).
+  // Folded, never dropped: a line must not become two records on screen, and
+  // neither may it vanish.
   std::string folded(raw);
   std::replace(folded.begin(), folded.end(), '\n', ' ');
   line.text = berth::trim(folded);
 
-  // deploylog_append stamps "<ISO-8601> " in front of every line. The stamp has
-  // no spaces, so the first space separates it — and a line without one is a
-  // hand-written line, which parses fine with an empty timestamp. `text` keeps
-  // the stamp: on the tail pane the timestamp is information, not noise.
+  // deploylog_append stamps "<ISO-8601> " in front of every line, and the
+  // stamp has no spaces, so the first space separates it. A line without one is
+  // hand-written and parses with an empty timestamp. `text` keeps the stamp:
+  // on the tail pane the timestamp is information, not noise.
   const std::size_t space = line.text.find(' ');
   std::string_view body = line.text;
   if (space != std::string::npos) {
@@ -124,10 +117,8 @@ DeployStage parse_deploy_stage(const std::string_view raw) {
 std::vector<std::string> deploy_stage_lines(const DeployStage current,
                                             const bool finished,
                                             const std::string& failure) {
-  // The canonical order. A stage at or before `current` is done; one after it
-  // is still pending. The screen shows the whole ladder because a deploy that
-  // hangs in "build" is only diagnosable if the user can see what it has NOT
-  // reached.
+  // The whole ladder is drawn so a deploy stuck in "build" also shows what it
+  // has NOT reached.
   constexpr std::array<DeployStage, 5> kLadder{
       DeployStage::kFetch, DeployStage::kBuild, DeployStage::kStart,
       DeployStage::kDone, DeployStage::kRegistryFailed};
@@ -136,8 +127,8 @@ std::vector<std::string> deploy_stage_lines(const DeployStage current,
   std::vector<std::string> lines;
   for (const DeployStage stage : kLadder) {
     const bool is_reached = static_cast<std::size_t>(stage) <= reached;
-    // REGISTRY WRITE FAILED is a verdict, not a rung: showing it on a
-    // successful deploy reads as a failure. Draw it only when it happened.
+    // A verdict, not a rung: drawn on a successful deploy it would read as a
+    // failure.
     if (stage == DeployStage::kRegistryFailed && !is_reached) {
       continue;
     }
@@ -358,16 +349,15 @@ std::vector<std::string> draft_review_lines(const berth::DraftResult& draft) {
                                   : "  — install it before this can build"));
   }
   for (const std::string& warning : draft.warnings) {
-    // Verbatim, not counted: "1 warning" says nothing about WHICH, and the
-    // whole point of the detector is that a human must read them (§11).
+    // Verbatim, not counted: "1 warning" says nothing about WHICH (§11).
     lines.push_back("  warning: " + warning);
   }
   lines.push_back("  heuristics, not truth — check these before deploying");
   return lines;
 }
 
-// The one-liner the review carries. The full question is a MODAL on d/s, and
-// rendering both would look like the screen already asked and is waiting.
+// One line only: the full question is a MODAL on d/s, and rendering both would
+// look like the screen already asked and is waiting.
 std::vector<std::string> draft_clash_notice_lines(
     const berth::DraftClash& clash);
 
@@ -491,4 +481,4 @@ DeployVerdict deploy_verdict(const bool finished, const bool cancelled,
   return verdict;
 }
 
-}  // namespace tui
+}

@@ -1,15 +1,5 @@
-// Tests for the release tooling (stage 8.3): scripts/keygen-release.sh and
-// scripts/release-local.sh. Both are asserted offline against a stub minisign
-// on PATH, exactly the shim pattern cancel_test uses for systemctl — the real
-// signing key never exists in a test, and PATH is per-invocation via run()'s
-// extra_env, so no process-wide environment is mutated.
-//
-// What matters here is the policy, not minisign itself:
-//   * keygen fails closed — it will not overwrite an existing key without
-//     --force, and it writes the secret 0600 and the public 0644;
-//   * release-local stages deterministic, sorted checksums over the artifact
-//     (and install.sh when present), and --sign only writes the detached
-//     signature.
+// The real signing key never exists in a test: a stub minisign on PATH is
+// run()'s per-call extra_env, so no process-wide environment is touched.
 
 #include <sys/stat.h>
 
@@ -113,8 +103,7 @@ berth::Result<berth::RunOutput> run_cmd(
   return berth::run(argv, limits);
 }
 
-}  // namespace
-
+}
 TEST(keygen_creates_a_keypair_and_prints_the_fingerprint) {
   const fs::path root = repo_root();
   CHECK(!root.empty());

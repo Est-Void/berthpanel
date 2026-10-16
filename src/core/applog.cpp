@@ -1,5 +1,3 @@
-// src/core/applog.cpp — see applog.h for the contract.
-
 #include "applog.h"
 
 #include <fcntl.h>
@@ -44,8 +42,8 @@ std::string one_line(const std::string_view field) {
 Result<void> append_log_line(const std::filesystem::path& file,
                              const std::filesystem::path& dir,
                              const std::string_view line) {
-  // Two attempts: the first ENOENT almost always means the XDG state dir
-  // does not exist yet, and that is worth fixing rather than reporting.
+  // One retry: the first ENOENT means the XDG state dir is missing — fix it
+  // rather than report it.
   for (int attempt = 0; attempt < 2; ++attempt) {
     const int raw =
         ::open(file.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
@@ -65,4 +63,4 @@ Result<void> append_log_line(const std::filesystem::path& file,
   return Error("applog: unreachable");
 }
 
-}  // namespace berth
+}

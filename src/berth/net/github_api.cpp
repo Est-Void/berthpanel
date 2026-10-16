@@ -1,5 +1,3 @@
-// src/berth/net/github_api.cpp — see github_api.h for the contract.
-
 #include "github_api.h"
 
 #include <string>
@@ -20,8 +18,7 @@ namespace {
 
 constexpr std::string_view kCodeloadHost = "codeload.github.com";
 
-// §6.6: a branch name here would deploy whatever HEAD points at now. Only a
-// pinned SHA and a well-formed owner/repo reach the network.
+// §6.6: only a pinned SHA and a well-formed owner/repo reach the network.
 Result<void> check_pinned(const std::string& owner_repo,
                           const std::string& sha) {
   const Result<void> repo = validate_owner_repo(owner_repo);
@@ -55,9 +52,7 @@ Result<HttpReply> get_ok(const std::string& url, const HttpGetOptions& options,
   return reply;
 }
 
-// A GitHub tarball carries exactly one top-level directory (owner-repo-sha).
-// More or fewer means the layout assumption is broken, and picking one
-// arbitrarily is exactly the kind of guess that must not happen here.
+// Exactly one top-level directory: guessing which one is not allowed here.
 Result<std::filesystem::path> single_top_dir(
     const std::filesystem::path& dest_dir) {
   std::vector<std::filesystem::path> top_dirs;
@@ -73,8 +68,7 @@ Result<std::filesystem::path> single_top_dir(
   return top_dirs.front();
 }
 
-}  // namespace
-
+}
 Result<std::vector<TreeFile>> parse_tree_response(const std::string_view body) {
   nlohmann::json doc;
   try {
@@ -85,11 +79,8 @@ Result<std::vector<TreeFile>> parse_tree_response(const std::string_view body) {
   if (!doc.is_object() || !doc.contains("tree") || !doc["tree"].is_array()) {
     return Error("trees api: no tree array");
   }
-  // Every present field is TYPE-CHECKED before it is read: nlohmann's
-  // value()/get<T>() throw type_error on a wrong-typed present field, and
-  // only parse_error is caught below, so a hostile tree row (e.g.
-  // "path":123) would otherwise abort the process instead of failing as a
-  // Result (§6.10).
+  // Every present field is type-checked: get<T>() throws type_error on a
+  // wrong-typed field and only parse_error is caught, so it aborts (§6.10).
   if (doc.contains("truncated") && !doc["truncated"].is_boolean()) {
     return Error("trees api: 'truncated' is not a boolean");
   }
@@ -100,8 +91,7 @@ Result<std::vector<TreeFile>> parse_tree_response(const std::string_view body) {
 
   std::vector<TreeFile> out;
   for (const nlohmann::json& item : doc["tree"]) {
-    // trees/commits are not files, and a row without a string path is not
-    // ours.
+    // A row that is not a blob with a string path is skipped.
     if (!item.is_object() || !item.contains("path") ||
         !item["path"].is_string() || !item.contains("type") ||
         !item["type"].is_string() ||
@@ -222,4 +212,4 @@ Result<std::filesystem::path> fetch_and_extract(
   return single_top_dir(dest_dir);
 }
 
-}  // namespace berth
+}

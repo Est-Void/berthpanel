@@ -22,8 +22,7 @@ void write_file(const std::filesystem::path& path, const std::string& body) {
   out << body;
 }
 
-}  // namespace
-
+}
 TEST(fs_removes_nested_tree) {
   const TempDir tmp;
   const auto root = tmp.path() / "service";

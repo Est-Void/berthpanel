@@ -1,9 +1,7 @@
 #pragma once
 
-// src/berth/preflight.h — the prerequisite gate a deploy may not skip.
-// Pure logic over a structural view of a recipe, so it is testable
-// without spawning anything and cannot drift from recipes.cpp: the
-// RecipeLike struct IS the contract. A report with any item is not ready.
+// Pure logic over a structural view, so it cannot drift from recipes.cpp:
+// RecipeLike is the contract.
 
 #include <cstdint>
 #include <string>
@@ -54,4 +52,4 @@ struct PreflightReport {
 
 [[nodiscard]] std::string render_preflight(const PreflightReport& report);
 
-}  // namespace berth
+}

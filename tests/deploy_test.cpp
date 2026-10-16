@@ -95,9 +95,7 @@ class FakeOps final : public DeployOps {
                         const DeployOptions& options) override {
     static_cast<void>(recipe);
     static_cast<void>(paths);
-    // The checkout must be handed to the prefetch, not a directory of the
-    // caller's choosing: a fake that ignores the argument would let the real
-    // "go mod download in the wrong directory" bug straight through.
+    // A fake ignoring work_dir would pass the wrong-directory bug.
     last_prefetch_dir = work_dir;
     static_cast<void>(options);
     calls.push_back("prefetch");
@@ -147,8 +145,7 @@ class FakeOps final : public DeployOps {
       return berth::Error("unit never became active");
     return {};
   }
-  // The real probe reads /proc/net; the fake returns a controlled verdict so
-  // run_deploy stays testable without touching real /proc (dev.md §9).
+  // Fake verdict: the real probe reads /proc/net, which tests must not touch.
   Result<void> verify_listening(const std::string& service_name,
                                 std::uint16_t port, const berth::Paths& paths,
                                 std::atomic<bool>* cancel) override {
@@ -174,7 +171,7 @@ class FakeOps final : public DeployOps {
     calls.push_back("stop:" + unit_stem);
     if (fail_stop)
       return berth::Error("fake stop failure");
-    return false;  // fake units are never running
+    return false;
   }
 };
 
@@ -192,8 +189,7 @@ void put_executable(const std::filesystem::path& dir, const std::string& name) {
   CHECK(::chmod(file.c_str(), 0755) == 0);
 }
 
-}  // namespace
-
+}
 TEST(deploy_happy_path_runs_steps_in_order_and_registers) {
   const TempDir tmp;
   const berth::Paths p = test_paths(tmp.path());
@@ -229,8 +225,7 @@ TEST(deploy_registry_failure_is_not_a_successful_deploy) {
   CHECK(outcome.is_err());
   CHECK(outcome.error().ctx().find("REGISTRY WRITE FAILED") !=
         std::string::npos);
-  // The journal entry survives: lock free + entry present == interrupted,
-  // which is exactly what __cleanup reconciles (§6.7).
+  // Journal entry survives: lock free + entry present == interrupted (§6.7).
   const auto journal = berth::journal_load(p);
   CHECK(journal.is_ok());
   CHECK(journal.value().size() == 1);
@@ -280,9 +275,7 @@ TEST(deploy_unit_that_never_comes_up_is_not_a_success) {
 }
 
 TEST(deploy_active_but_not_listening_on_the_recorded_port_is_not_a_success) {
-  // The fixed-port app that binds somewhere else: the unit stays up, so the
-  // settle window is happy, but the registry is about to record a port nobody
-  // serves. That is the §11 silent wrong answer the listen check exists for.
+  // The unit stays up, so only the listen check catches the wrong-port deploy.
   const TempDir tmp;
   const berth::Paths p = test_paths(tmp.path());
   FakeOps ops;
@@ -349,8 +342,6 @@ TEST(deploy_takes_the_deploy_lock_for_the_whole_run) {
   CHECK(ops.calls.empty());
 }
 
-// --- stage 4.17: journal reconciliation ---------------------------------
-
 namespace {
 
 berth::JournalEntry stale_entry(const berth::Paths& p,
@@ -366,35 +357,28 @@ berth::JournalEntry stale_entry(const berth::Paths& p,
   return entry;
 }
 
-// A unit that reports active and then leaves it is CRASH-LOOPING, and
-// `Type=simple` calls a unit active the moment it has spawned the process. The
-// deploy that reported success on a wrong start_cmd is the §11 failure reached
-// through a different door, so the verdict is its own tested function.
+// Type=simple is active the moment the process spawns, so active-then-gone
+// is the crash-loop a wrong start_cmd produces.
 TEST(settle_accepts_only_a_unit_that_stays_active) {
   CHECK(berth::settle_active("berthpanel-x", {"active", "active", "active"})
             .is_ok());
-  // The reported case: up, then gone (Restart=on-failure auto-restart).
+  // The reported case: up, then gone after a Restart=on-failure auto-restart.
   const auto left =
       berth::settle_active("berthpanel-x", {"active", "active", "activating"});
   CHECK(left.is_err());
   CHECK(left.error().ctx().find("left 'active'") != std::string::npos);
   CHECK(left.error().ctx().find("activating") != std::string::npos);
-  // The error must name the usual cause, or the user goes to the unit logs for
-  // a flag typo that the detector warned about on the screen.
+  // Must name the flag source, or the user hunts journalctl for a typo.
   CHECK(left.error().ctx().find("start_cmd") != std::string::npos);
-  // A unit that failed outright is the same verdict with a different state.
   CHECK(berth::settle_active("berthpanel-x", {"failed"}).is_err());
   CHECK(berth::settle_active("berthpanel-x", {"active", "failed"}).is_err());
-  // No observations at all is NOT evidence of serving: vacuous truth would let
-  // a settle window that never polled claim a success.
+  // Vacuous truth is not evidence of serving: no poll, no success.
   const auto none = berth::settle_active("berthpanel-x", {});
   CHECK(none.is_err());
   CHECK(none.error().ctx().find("never confirmed") != std::string::npos);
 }
 
-// The panel must show the app's OWN error, not send the user to journalctl, so
-// the unit's captured verdict/output is composed into the failure message. The
-// function stays pure: the evidence is passed in, never gathered here.
+// The panel shows the app's OWN error, so the verdict rides along verbatim.
 TEST(
     settle_failure_message_carries_the_unit_evidence_and_points_at_the_editor) {
   const std::string evidence =
@@ -405,18 +389,16 @@ TEST(
   CHECK(left.is_err());
   const std::string message = left.error().ctx();
   CHECK(message.find("left 'active'") != std::string::npos);
-  // Point at the edit feature, not the stale "edit the recipe file" wording.
+  // Must point at __recipe-edit, not the stale "edit the file" wording.
   CHECK(message.find("__recipe-edit berthpanel-ascii-live") !=
         std::string::npos);
   CHECK(message.find("'E' in the panel") != std::string::npos);
-  // The captured evidence itself rides along, verbatim.
   CHECK(message.find("Result=exit-code ExecMainStatus=2") != std::string::npos);
   CHECK(message.find("flag provided but not defined: -addr") !=
         std::string::npos);
 }
 
-// `systemctl show` prints its own order; the parser must not depend on it and
-// must emit the properties in a fixed order.
+// Our own fixed property order, not systemctl's.
 TEST(systemctl_show_parses_the_failure_properties) {
   const std::string show =
       "ActiveState=activating\nSubState=start\nResult=exit-code\n"
@@ -450,8 +432,6 @@ TEST(journal_tail_is_bounded_by_lines_and_bytes) {
   CHECK(berth::bound_journal_tail(many, 3, 1024) == "line7\nline8\nline9");
 }
 
-// --- listen verdict: pure decision over a PortReport (no /proc) -----------
-
 berth::ListeningPort listening_at(const std::string& address,
                                   const std::uint16_t port) {
   berth::ListeningPort p;
@@ -476,15 +456,13 @@ TEST(listen_verdict_accepts_the_loopback_listener_on_the_recorded_port) {
 }
 
 TEST(listen_verdict_counts_ipv6_loopback_as_loopback) {
-  // ::1 is loopback too: the app bound loopback over IPv6.
   const berth::PortReport report = report_with({listening_at("::1", 8090)});
   CHECK(berth::verify_loopback_listener(report, 8090, "berthpanel-x").is_ok());
 }
 
 TEST(listen_verdict_rejects_a_missing_port_and_names_the_remedy) {
-  // The concrete bug: the app hardcodes 8090 while recipe.port is 8080. The
-  // verdict must name both and point at `port`/start_cmd, or the user cannot
-  // connect the deploy success to the observed mismatch.
+  // Must name expected and observed port, or the deploy cannot be matched up
+  // with the mismatch.
   const berth::PortReport report =
       report_with({listening_at("127.0.0.1", 8080)});
   const auto verdict =
@@ -499,8 +477,7 @@ TEST(listen_verdict_rejects_a_missing_port_and_names_the_remedy) {
 }
 
 TEST(listen_verdict_rejects_a_wildcard_only_bind_as_exposure) {
-  // 0.0.0.0 on the recorded port is the exposure the loopback invariant
-  // forbids: it must fail loudly and say so.
+  // Wildcard bind is the exposure the loopback invariant forbids.
   const berth::PortReport report = report_with({listening_at("0.0.0.0", 8090)});
   const auto verdict =
       berth::verify_loopback_listener(report, 8090, "berthpanel-x");
@@ -529,7 +506,6 @@ TEST(listen_verdict_rejects_an_empty_or_observably_absent_report) {
   CHECK(verdict.error().ctx().find("8090") != std::string::npos);
   CHECK(verdict.error().ctx().find("(none)") != std::string::npos);
 
-  // A listener on a DIFFERENT port is not the recorded port either.
   const berth::PortReport other = report_with({listening_at("0.0.0.0", 9999)});
   CHECK(berth::verify_loopback_listener(other, 8090, "berthpanel-x").is_err());
 }
@@ -542,14 +518,12 @@ TEST(listen_verdict_accepts_a_loopback_listener_among_other_ports) {
   CHECK(berth::verify_loopback_listener(report, 8090, "berthpanel-x").is_ok());
 }
 
-}  // namespace
-
+}
 TEST(deploy_sweeps_stale_journal_entries_before_starting) {
   const TempDir tmp;
   const berth::Paths p = test_paths(tmp.path());
   CHECK(berth::journal_upsert(p, stale_entry(p, "berthpanel-old", "building"))
             .is_ok());
-  // Leftovers from the interrupted deploy: work dir and a written unit.
   CHECK(berth::ensure_dir(p.services_dir / "berthpanel-old").is_ok());
   CHECK(berth::atomic_write(p.services_dir / "berthpanel-old" / "artifact",
                             "stale")
@@ -562,8 +536,6 @@ TEST(deploy_sweeps_stale_journal_entries_before_starting) {
   DeployOptions options;
   const auto outcome = run_deploy(p, prebuilt_recipe(), 0, ops, options);
   CHECK(outcome.is_ok());
-  // The sweep runs first, stopping both the app unit and the orphaned
-  // build unit, before any deploy step runs.
   const std::vector<std::string> expected = {
       "stop:berthpanel-old",
       "stop:berthpanel-build-berthpanel-old",
@@ -594,12 +566,10 @@ TEST(deploy_refuses_to_start_when_its_own_stale_entry_cannot_be_cleaned) {
   CHECK(outcome.is_err());
   CHECK(outcome.error().ctx().find("could not be cleaned up") !=
         std::string::npos);
-  // The app unit stop failed, so the sweep stopped there: no build-unit
-  // stop, no work-dir removal, and no deploy step ran.
+  // The app unit stop failed, so the sweep halted before the build unit.
   CHECK(ops.calls.size() == 1);
   CHECK(called(ops, "stop:berthpanel-memos"));
   CHECK(!called(ops, "fetch"));
-  // The entry stays: the interrupted deploy is still not reconciled.
   CHECK(berth::journal_load(p).value().size() == 1);
 }
 
@@ -617,7 +587,7 @@ TEST(deploy_continues_when_another_service_cannot_be_cleaned) {
 
   const auto journal = berth::journal_load(p);
   CHECK(journal.is_ok());
-  CHECK(journal.value().size() == 1);  // the stuck entry survived
+  CHECK(journal.value().size() == 1);
   CHECK(journal.value().front().service_name == "berthpanel-other");
 
   const auto logged = berth::read_file(p.deploy_log);
@@ -705,7 +675,7 @@ TEST(sweep_removes_the_enable_symlink_left_by_an_interrupted_deploy) {
   CHECK(report.is_ok());
   CHECK(report.value().swept.size() == 1);
   CHECK(!std::filesystem::exists(p.units_dir / "berthpanel-memos.service"));
-  // The symlink itself must be gone, dangling or not.
+  // Dangling or not, the symlink itself must be gone.
   CHECK(!std::filesystem::is_symlink(wants));
   CHECK(std::filesystem::symlink_status(wants).type() ==
         std::filesystem::file_type::not_found);
@@ -725,9 +695,9 @@ TEST(sweep_refuses_a_work_dir_outside_the_services_layout) {
   CHECK(report.value().failed.empty());
   CHECK(report.value().skipped_outside.size() == 1);
   CHECK(report.value().skipped_outside.front() == "berthpanel-memos");
-  CHECK(ops.calls.empty());  // nothing was stopped, nothing was deleted
+  CHECK(ops.calls.empty());
   CHECK(berth::journal_load(p).value().size() == 1);  // entry kept, loud
-  CHECK(std::filesystem::exists("/etc"));             // untouched, obviously
+  CHECK(std::filesystem::exists("/etc"));
 }
 
 TEST(sweep_refuses_a_work_dir_equal_to_the_services_dir) {
@@ -768,7 +738,6 @@ TEST(sweep_refuses_a_work_dir_that_symlinks_out_of_the_layout) {
   CHECK(report.value().swept.empty());
   CHECK(report.value().skipped_outside.size() == 1);
   CHECK(ops.calls.empty());
-  // Neither the symlink nor its target was touched.
   CHECK(std::filesystem::is_symlink(p.services_dir / "berthpanel-memos"));
   CHECK(std::filesystem::exists(escape / "data"));
 }
@@ -822,10 +791,9 @@ TEST(sweep_drops_a_stale_entry_when_the_service_is_in_the_registry) {
   CHECK(report.value().failed.empty());
   CHECK(report.value().skipped_registry.size() == 1);
   CHECK(report.value().skipped_registry.front() == "berthpanel-memos");
-  CHECK(ops.calls.empty());  // a live service is never stopped by cleanup
+  CHECK(ops.calls.empty());  // cleanup never stops a live service
   CHECK(std::filesystem::exists(p.services_dir / "berthpanel-memos" / "data"));
   CHECK(std::filesystem::exists(p.units_dir / "berthpanel-memos.service"));
-  // The entry was the stale part: dropped loudly, nothing else touched.
   CHECK(berth::journal_load(p).value().empty());
   const auto logged = berth::read_file(p.deploy_log);
   CHECK(logged.is_ok());
@@ -842,9 +810,7 @@ TEST(sweep_refuses_to_run_when_the_registry_is_unreadable) {
   CHECK(
       berth::atomic_write(p.units_dir / "berthpanel-memos.service", "[Unit]\n")
           .is_ok());
-  // Without a readable registry no entry can be proven unregistered, so
-  // the sweep must refuse rather than delete unguarded (§11: a corrupt
-  // state never reads as empty).
+// Unreadable registry proves nothing: corrupt state never reads as empty.
   CHECK(
       berth::atomic_write(p.state_json, "{oops", berth::kPermPrivate).is_ok());
 
@@ -856,8 +822,6 @@ TEST(sweep_refuses_to_run_when_the_registry_is_unreadable) {
   CHECK(std::filesystem::exists(p.units_dir / "berthpanel-memos.service"));
   CHECK(berth::journal_load(p).value().size() == 1);
 }
-
-// --- start_cmd argv: the exec interpreter must be absolute ----------------
 
 TEST(deploy_resolves_a_bare_start_interpreter_through_path) {
   const TempDir tmp;
@@ -874,8 +838,7 @@ TEST(deploy_resolves_a_bare_start_interpreter_through_path) {
   const auto argv =
       berth::resolve_start_argv(r, tmp.path() / "wd", 3001, binary);
   CHECK(argv.is_ok());
-  // The interpreter becomes its absolute PATH hit; the unit then does not
-  // depend on systemd's PATH (which lacks ~/.bun/bin) to start.
+  // Absolute hit: systemd's unit PATH lacks ~/.bun/bin.
   CHECK(binary == (tmp.path() / "bin" / "bun").string());
   CHECK(argv.value().size() == 3);
   CHECK(argv.value()[0] ==

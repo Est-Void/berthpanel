@@ -30,6 +30,7 @@ TEST(paths_defaults_from_home) {
   CHECK(r.value().services_dir == "/home/u/.local/share/berthpanel/services");
   CHECK(r.value().config_dir == "/home/u/.config/berthpanel");
   CHECK(r.value().recipes_dir == "/home/u/.config/berthpanel/recipes");
+  CHECK(r.value().stacks_dir == "/home/u/.config/berthpanel/stacks");
   CHECK(r.value().secrets_dir == "/home/u/.local/state/berthpanel/secrets");
   CHECK(r.value().state_json == "/home/u/.local/state/berthpanel/state.json");
   CHECK(r.value().deploy_journal ==

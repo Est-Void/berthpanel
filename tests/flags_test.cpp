@@ -12,8 +12,8 @@ using berth::env_flag;
 
 namespace {
 const char* kFlag = "BERTHPANEL_TEST_FLAG";
-}  // namespace
 
+}
 TEST(flags_unset_is_nullopt) {
   std::lock_guard lock(berth::env_test_lock());
   ScopedEnv f(kFlag);

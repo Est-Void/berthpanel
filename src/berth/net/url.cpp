@@ -1,5 +1,3 @@
-// src/berth/net/url.cpp — see url.h for the contract.
-
 #include "url.h"
 
 #include <cstdlib>
@@ -94,8 +92,7 @@ Result<std::pair<std::string, std::string_view>> split_scheme(
   return std::make_pair(scheme, url.substr(end + 3));
 }
 
-}  // namespace
-
+}
 std::uint16_t HttpUrl::port_number() const {
   return static_cast<std::uint16_t>(::strtol(port.c_str(), nullptr, 10));
 }
@@ -144,8 +141,7 @@ Result<HttpUrl> parse_http_url(const std::string_view url) {
     path = "/";
   } else {
     path = std::string(rest.substr(path_start));
-    // The path can start at '?' or '#' (a query with no explicit path); the
-    // request target must be origin-form, so it needs a leading '/'.
+    // A query with no explicit path still needs a leading '/'.
     if (path.front() != '/')
       path.insert(path.begin(), '/');
   }
@@ -180,9 +176,7 @@ std::string join_redirect(const std::string_view current_url,
            std::string(location);
   }
 
-  // Query- or fragment-only reference: the base PATH is kept, but the base's
-  // own query/fragment is replaced (RFC 3986 §5.3). Blindly appending to the
-  // directory after the last '/' dropped the last path segment.
+  // RFC 3986 §5.3: the base path is kept, its query/fragment replaced.
   if (location.front() == '?' || location.front() == '#') {
     const std::size_t authority_start = scheme_end + 3;
     const std::size_t cut = current_url.find_first_of("?#", authority_start);
@@ -191,9 +185,7 @@ std::string join_redirect(const std::string_view current_url,
     return std::string(current_url.substr(0, keep)) + std::string(location);
   }
 
-  // Relative to the current document's directory. A base with no path at all
-  // (https://host) resolves against its root, not against the "//" of the
-  // scheme — the old rfind('/') produced "https://v2" for "v2".
+  // A base with no path resolves against its root, not the scheme's "//".
   const std::size_t path_start = current_url.find('/', scheme_end + 3);
   if (path_start == std::string_view::npos) {
     return std::string(current_url) + "/" + std::string(location);
@@ -206,4 +198,4 @@ std::string join_redirect(const std::string_view current_url,
          std::string(location);
 }
 
-}  // namespace berth
+}

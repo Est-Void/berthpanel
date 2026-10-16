@@ -134,8 +134,7 @@ berth::StatusSnapshot fake_snapshot() {
   return snapshot;
 }
 
-}  // namespace
-
+}
 TEST(status_json_is_versioned_and_sorted) {
   const nlohmann::json doc = berth::status_json(fake_snapshot());
   CHECK(doc.at("schema").get<int>() == berth::kJsonSchema);

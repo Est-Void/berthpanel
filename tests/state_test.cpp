@@ -33,8 +33,7 @@ berth::ServiceRecord memos() {
   return r;
 }
 
-}  // namespace
-
+}
 TEST(state_fresh_install_is_empty_not_error) {
   const TempDir tmp;
   const berth::Paths p = test_paths(tmp.path());

@@ -1,5 +1,3 @@
-// src/analyzer/scan.cpp — see scan.h for the contract.
-
 #include "scan.h"
 
 #include <string>
@@ -11,9 +9,7 @@ namespace berth {
 
 namespace {
 
-// The one endpoint the probe touches, and the purpose it is logged under.
-// github.com is on the allowlist (dev.md §6.1) and a GET of its root is the
-// least surprising possible reachability question.
+// On the allowlist, and the least surprising reachability question there is.
 constexpr std::string_view kProbeUrl = "https://github.com/";
 constexpr std::string_view kProbePurpose = "system-scan";
 
@@ -21,8 +17,7 @@ bool cancelled(const std::atomic<bool>* cancel) {
   return cancel != nullptr && cancel->load(std::memory_order_relaxed);
 }
 
-}  // namespace
-
+}
 Result<bool> probe_network_once(const Paths& paths, std::atomic<bool>* cancel,
                                 const std::chrono::milliseconds timeout,
                                 std::string* detail) {
@@ -32,9 +27,7 @@ Result<bool> probe_network_once(const Paths& paths, std::atomic<bool>* cancel,
   HttpGetOptions options;
   options.kind = RequestKind::kApi;
   options.purpose = std::string(kProbePurpose);
-  // A probe, not a fetch: no redirect chasing and NO second attempt. An
-  // unbounded retry is the §11 frozen-screen bug; a probe that retries twice is
-  // a screen that takes twice as long to say "offline".
+  // A probe, not a fetch: no redirect chasing, no retry (§11 frozen screen).
   options.max_redirect_hops = 0;
   options.per_attempt_timeout = timeout;
   options.max_attempts = 1;
@@ -49,8 +42,7 @@ Result<bool> probe_network_once(const Paths& paths, std::atomic<bool>* cancel,
     return false;
   }
   if (detail != nullptr) {
-    // 403 is a REACHABLE network with a rate limit, not an outage (§11: never
-    // let a status code look like a network failure).
+    // 403 is a reachable network with a rate limit, not an outage (§11).
     *detail = "status=" + std::to_string(reply.value().status);
   }
   return true;
@@ -61,7 +53,6 @@ Result<ScanReport> run_system_scan(const Paths& paths,
                                    const std::filesystem::path& proc_net_root) {
   ScanReport report;
 
-  // (a) prerequisites: which build tools the catalog needs are on PATH.
   Result<std::vector<ToolStatus>> tools = check_tools(catalog_tools(), cancel);
   if (tools.is_err()) {
     report.prereqs.error = tools.error().ctx();
@@ -74,8 +65,7 @@ Result<ScanReport> run_system_scan(const Paths& paths,
     return report;
   }
 
-  // (b) listening ports. From /proc/net — read on this worker, never on the
-  // render thread.
+  // The /proc/net read happens here, never on the render thread.
   Result<PortReport> ports = listening_ports(paths, proc_net_root);
   if (ports.is_err()) {
     report.ports.error = ports.error().ctx();
@@ -84,7 +74,6 @@ Result<ScanReport> run_system_scan(const Paths& paths,
     report.ports.report = std::move(ports).value();
   }
 
-  // (c) the deployed services: registry + one bounded is-active per row.
   Result<std::vector<ServiceRow>> rows = service_rows(paths, cancel);
   if (rows.is_err()) {
     report.services.error = rows.error().ctx();
@@ -97,8 +86,7 @@ Result<ScanReport> run_system_scan(const Paths& paths,
     return report;
   }
 
-  // (d) the network. ONE GET, one attempt, two seconds. It runs LAST because it
-  // is the only step that can wait on something outside this machine.
+  // Runs LAST: the only step that can wait on something outside this machine.
   const auto started = std::chrono::steady_clock::now();
   std::string detail;
   const Result<bool> reachable = probe_network_once(
@@ -119,4 +107,4 @@ Result<ScanReport> run_system_scan(const Paths& paths,
   return report;
 }
 
-}  // namespace berth
+}

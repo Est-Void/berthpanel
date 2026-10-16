@@ -1,5 +1,3 @@
-// src/berth/wizard.cpp — see wizard.h for the contract.
-
 #include "wizard.h"
 
 #include <optional>
@@ -20,22 +18,17 @@ namespace berth {
 
 namespace {
 
-// The one progress sink, or nothing at all: `progress` is empty for a caller
-// that does not render progress.
 void say(const DraftProgress& progress, const std::string& line) {
   if (progress) {
     progress(line);
   }
 }
 
-}  // namespace
-
+}
 Result<DraftResult> prepare_draft(const Paths& paths,
                                   const DraftRequest& request,
                                   std::atomic<bool>* cancel,
                                   const DraftProgress& progress) {
-  // Front-door egress policy (§6.1, stage 4.23): https, host exactly
-  // github.com. Anything else is refused before a byte moves.
   Result<std::string> owner_repo = github_owner_repo_from_url(request.url);
   if (owner_repo.is_err()) {
     return std::move(owner_repo).error();
@@ -48,10 +41,7 @@ Result<DraftResult> prepare_draft(const Paths& paths,
   const std::string owner = owner_repo.value().substr(0, slash);
   const std::string name = owner_repo.value().substr(slash + 1);
 
-  // The pin, resolved NOW: a draft freezes one commit, it never tracks a
-  // branch (§6.6). An explicit 40-hex SHA is taken as given; everything else
-  // goes through api.github.com (repos/ for the default branch, commits/ for a
-  // named one). Public repos only — no token is attached (§6.3).
+  // Resolved NOW: a draft freezes one commit, never a branch (§6.6). No token.
   std::string commit(request.ref);
   if (commit.empty() || validate_commit_sha(commit).is_err()) {
     say(progress, "resolving " + owner_repo.value() + "@" +
@@ -65,11 +55,7 @@ Result<DraftResult> prepare_draft(const Paths& paths,
     commit = resolved.value();
   }
 
-  // Scratch checkout with a random suffix (§9), removed however detection ends
-  // (TempDir RAII). The clone lands in a NESTED dir on purpose:
-  // clone_pinned manages its destination's parent (chmod included), and the
-  // only parent a TempDir owns is the TempDir itself — the wizard must not
-  // point it at /tmp.
+  // NESTED: clone_pinned chmods the parent, which must stay the TempDir.
   Result<TempDir> scratch = TempDir::create("draft");
   if (scratch.is_err()) {
     return std::move(scratch).error();
@@ -79,9 +65,7 @@ Result<DraftResult> prepare_draft(const Paths& paths,
   say(progress,
       "cloning " + owner_repo.value() + "@" + commit.substr(0, 7) + "...");
 
-  // §6.1: a git clone is an outbound request that does NOT run through
-  // httpclient, so the attempt is logged here — BEFORE git runs, so the line
-  // exists even if the process dies mid-clone.
+  // §6.1: a clone does NOT go through httpclient, so log it BEFORE git runs.
   const Result<void> logged = netlog_append(
       paths,
       NetlogEntry{.host = kTokenHost,
@@ -106,8 +90,6 @@ Result<DraftResult> prepare_draft(const Paths& paths,
     return std::move(cloned).error();
   }
 
-  // §6.5: detection only READS this tree. It never runs repository code and
-  // never downloads anything.
   const DetectRequest detected{
       .dir = dir, .owner = owner, .name = name, .commit = commit};
   Result<RecipeDraft> draft = detect_recipe(detected);
@@ -115,8 +97,7 @@ Result<DraftResult> prepare_draft(const Paths& paths,
     return std::move(draft).error();
   }
 
-  // toolcheck verifies the detected tools. A missing tool is a WARNING, not a
-  // failure: install it and deploy, and preflight gates the deploy anyway.
+  // A missing tool is a WARNING: install it; preflight gates the deploy.
   Result<std::vector<ToolStatus>> tools =
       check_tools(draft.value().recipe.tools, cancel);
   if (tools.is_err()) {
@@ -135,9 +116,7 @@ Result<DraftResult> prepare_draft(const Paths& paths,
 
 Result<DraftClash> find_recipe_clash(const Paths& paths,
                                      const std::string_view service_name) {
-  // Same order, same sources as user_recipe_store()'s duplicate policy: a
-  // stored file first, then the builtin table. Two policies would disagree
-  // about what "taken" means (§8).
+  // Same order and sources as user_recipe_store's policy; the two must agree.
   Result<std::optional<Recipe>> stored = user_recipe_get(paths, service_name);
   if (stored.is_err()) {
     return std::move(stored).error();
@@ -181,8 +160,7 @@ std::string render_draft_report(const DraftResult& result,
     out += "  warning: " + warning + "\n";
   }
   if (clash.exists) {
-    // The question comes BEFORE the store, so the report says what a store
-    // would replace rather than what it did.
+    // The question comes BEFORE the store: it says what a store WOULD replace.
     out += "  a recipe for " + clash.service_name + " already exists" +
            (clash.in_catalog ? " in the builtin catalog" : " (user recipe)") +
            "";
@@ -194,4 +172,4 @@ std::string render_draft_report(const DraftResult& result,
   return out;
 }
 
-}  // namespace berth
+}

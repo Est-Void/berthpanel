@@ -1,5 +1,3 @@
-// src/analyzer/ports.cpp — see ports.h for the contract.
-
 #include "ports.h"
 
 #include <algorithm>
@@ -13,13 +11,9 @@ namespace berth {
 
 namespace {
 
-// /proc/net/tcp state column: 0A is TCP_LISTEN. Everything else (01
-// ESTABLISHED, 06 TIME_WAIT, ...) is a connection, not a listening socket.
 constexpr std::string_view kStateListen = "0A";
 
-// One hex byte, or -1. Hand-rolled because std::stoi would throw (exceptions
-// are for programmer error, and malformed kernel output is not that) and
-// strtol would accept leading junk.
+// Hand-rolled: stoi throws and strtol accepts leading junk.
 int hex_byte(const char digit) {
   if (digit >= '0' && digit <= '9') {
     return digit - '0';
@@ -33,9 +27,7 @@ int hex_byte(const char digit) {
   return -1;
 }
 
-// Two lowercase hex digits, zero padded. Hand-rolled because a byte is not a
-// string: std::to_string(10) is "10", which silently changes the width of every
-// address built from it.
+// A byte is not a string: std::to_string(10) is "10" and shifts every width.
 std::string to_hex(const int value) {
   static constexpr char kDigits[] = "0123456789abcdef";
   std::string out(2, '0');
@@ -44,8 +36,7 @@ std::string to_hex(const int value) {
   return out;
 }
 
-// The port part of "0100007F:1F90". 0 means "no port", which /proc/net/tcp
-// uses only for a listening socket with no bound port — not a thing.
+// 0 is the not-a-port sentinel; a bound listener never has port 0.
 std::uint16_t parse_port(const std::string_view hex) {
   if (hex.size() != 4) {
     return 0;
@@ -61,9 +52,8 @@ std::uint16_t parse_port(const std::string_view hex) {
   return static_cast<std::uint16_t>(value);
 }
 
-// IPv4 in /proc is ONE 32-bit word printed from memory, so the byte pairs come
-// out in reverse: "0100007F" is 127.0.0.1, not 1.0.0.127. Reading them in the
-// written order is the bug that makes the whole section quietly wrong.
+// /proc prints one 32-bit word from memory, so the bytes come out reversed:
+// "0100007F" is 127.0.0.1, not 1.0.0.127.
 std::string parse_ipv4(const std::string_view hex) {
   if (hex.size() != 8) {
     return {};
@@ -85,14 +75,12 @@ std::string parse_ipv4(const std::string_view hex) {
   return out;
 }
 
-// IPv6 is four 32-bit words, each printed from memory, so the bytes come out
-// reversed INSIDE each word: the last word of ::1 is "01000000". Only the
-// compressed forms the screen needs: ::1, :: and the general case.
+// Reversed INSIDE each 32-bit word too; only ::1, :: and the general case.
 std::string parse_ipv6(const std::string_view hex) {
   if (hex.size() != 32) {
     return {};
   }
-  std::string bytes;  // two hex digits per byte, 32 characters
+  std::string bytes;
   for (int word = 0; word < 4; ++word) {
     const std::string_view chunk =
         hex.substr(static_cast<std::size_t>(word) * 8, 8);
@@ -127,8 +115,7 @@ bool is_loopback(const std::string& address) {
   return address == "::1" || address.rfind("127.", 0) == 0;
 }
 
-}  // namespace
-
+}
 Result<ParsedPorts> parse_proc_net(
     const std::string_view content, const bool v6,
     const std::vector<std::uint16_t>& owned_ports) {
@@ -137,22 +124,19 @@ Result<ParsedPorts> parse_proc_net(
   for (const std::string& raw : berth::split(content, "\n")) {
     ++line_number;
     if (line_number == 1) {
-      continue;  // the column header the kernel prints
+      continue;
     }
     const std::string_view line = berth::trim(raw);
     if (line.empty()) {
       continue;
     }
     const std::vector<std::string> fields = berth::split(line, " ");
-    //   sl  local_address rem_address st tx:rx tr:when retrnsmt uid timeout
-    // A row that does not have at least local_address + rem_address + st is
-    // not a row this parser understands.
+    // Layout: sl local_address rem_address st tx:rx tr:when retrnsmt uid
     if (fields.size() < 4) {
       ++parsed.unparsed;
       continue;
     }
-    // split() keeps empty fields, so consecutive spaces yield "". Drop them
-    // before indexing: the kernel pads with spaces and we index by position.
+    // split() keeps the kernel's padding as "" fields — drop them first.
     std::vector<std::string> columns;
     columns.reserve(fields.size());
     for (const std::string& field : fields) {
@@ -164,8 +148,6 @@ Result<ParsedPorts> parse_proc_net(
       ++parsed.unparsed;
       continue;
     }
-    // The state column must LOOK like a state: two hex digits. A row we cannot
-    // even identify is counted rather than treated as "not listening", because
     // "not listening" and "not understood" are different claims.
     if (columns[3].size() != 2 || hex_byte(columns[3][0]) < 0 ||
         hex_byte(columns[3][1]) < 0) {
@@ -199,16 +181,11 @@ Result<ParsedPorts> parse_proc_net(
 
 Result<PortReport> listening_ports(const Paths& paths,
                                    const std::filesystem::path& proc_net_root) {
-  // Our own ports, from our own registry: this is the ONE thing the port
-  // section is allowed to know about a listener, and it knows it from
-  // state.json rather than by asking the kernel who owns it (§7).
+  // Our own registry is the only thing we know about a listener (§7).
   std::vector<std::uint16_t> owned;
   Result<std::vector<ServiceRecord>> registered = registry_list(paths);
   if (registered.is_err()) {
-    // A registry that cannot be read is NOT an empty registry (§11): quietly
-    // marking every port "not yours" is the exact quiet wrong answer the
-    // `owned` flag exists to avoid. state.json is already quarantined loudly
-    // by registry_list; surface the error here too.
+    // An unreadable registry is NOT an empty one (§11 quiet wrong answer).
     return with_context(std::move(registered).error(),
                         "scan: reading the service registry");
   }
@@ -242,9 +219,7 @@ Result<PortReport> listening_ports(const Paths& paths,
   report.ports = std::move(v4.ports);
   report.unparsed = v4.unparsed;
 
-  // No IPv6 on this host is a fact to state, not a failure: the screen shows
-  // the section and says the file was not there. The IPv4 rows are still
-  // sorted before the early return.
+  // No IPv6 here is a fact to state, not a failure; rows are still sorted.
   const Result<std::string> tcp6 = read_file(proc_net_root / "tcp6");
   if (tcp6.is_err()) {
     report.ipv6_error = tcp6.error().ctx();
@@ -266,4 +241,4 @@ Result<PortReport> listening_ports(const Paths& paths,
   return report;
 }
 
-}  // namespace berth
+}

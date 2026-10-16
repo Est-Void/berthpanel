@@ -21,9 +21,7 @@ namespace berth {
 Result<std::string> escape_module_path(const std::string_view module) {
   if (module.empty())
     return Error("goenv: empty module path");
-  // The escaped module becomes a path component under the module cache, so a
-  // '..' component or a leading '/' would escape it. The Go proxy path never
-  // needs either.
+  // The escaped module becomes a path component: no leading '/' and no '..'.
   if (module.front() == '/' || module.find("..") != std::string_view::npos) {
     return Error("goenv: module path may not be absolute or contain '..': " +
                  std::string(module));
@@ -150,8 +148,7 @@ Result<std::filesystem::path> install_go_toolchain(
     const Paths& paths, std::atomic<bool>* cancel) {
   const std::filesystem::path staging =
       paths.state_dir / "toolbox" / (archive.name + ".staging");
-  // Removes the staging dir on every early return, not only on success: a
-  // failed extraction used to leave up to a gigabyte behind.
+  // Removes the staging dir on every early return: it once leaked ~1 GB.
   struct StagingGuard {
     std::filesystem::path dir;
     ~StagingGuard() {
@@ -235,8 +232,7 @@ Result<void> seed_module(
     Result<void> ok = verify_sha256_file(staging, expected);
     if (ok.is_err())
       return std::move(ok).error();
-    // The verified bytes are already in `reply`; the staging copy has no
-    // further use and must not accumulate (one per module per deploy).
+    // The staging copy has no further use; it must not accumulate per deploy.
     static_cast<void>(remove_tree(staging));
     *want.body = std::move(reply).value().body;
   }
@@ -264,4 +260,4 @@ std::vector<std::string> go_build_env(const std::filesystem::path& go_root,
   };
 }
 
-}  // namespace berth
+}

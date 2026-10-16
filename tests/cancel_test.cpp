@@ -1,9 +1,4 @@
-// Tests for cancel.h (stage 4.17): exit signalling converts SIGINT/SIGTERM
-// into the cooperative flag, build_unit_name composes a valid stoppable
-// unit name, and the terminator stops orphaned units with a bounded
-// SIGTERM → SIGKILL escalation. The terminator is exercised against a
-// fake `systemctl` on PATH (dev.md §9: no live systemd in unit tests;
-// PATH is environment, so each test runs under env_test_lock).
+// The systemctl shim lives on PATH; every test below holds env_test_lock.
 
 #include "berth/cancel.h"
 #include "berth/units.h"
@@ -33,9 +28,7 @@ using berth::SystemdUnitTerminator;
 
 namespace {
 
-// Writes a `systemctl` shim whose is-active verdict comes from a state
-// file, and whose stop/kill write configurable verdicts back. The log
-// records every invocation for assertions.
+// Shim: is-active reads a state file, stop/kill write verdicts; log every call.
 class FakeSystemctl {
  public:
   explicit FakeSystemctl(const std::filesystem::path& dir,
@@ -50,8 +43,7 @@ class FakeSystemctl {
     script += "STATE=" + state_.string() + "\n";
     script += "LOG=" + log_.string() + "\n";
     script += "printf '%s\\n' \"$*\" >> \"$LOG\"\n";
-    // Our invocations look like: systemctl --user <cmd> [flags] <unit...>
-    // so the leading global flag must be skipped before the subcommand.
+    // Skip the leading global flag to reach the subcommand.
     script += "cmd=$1\n";
     script += "case \"$cmd\" in --*) shift; cmd=$1 ;; esac\n";
     script += "shift\n";
@@ -106,8 +98,7 @@ class ScopedSignals {
   ~ScopedSignals() { berth::uninstall_exit_signalling(); }
 };
 
-}  // namespace
-
+}
 TEST(build_unit_name_is_prefixed_and_valid) {
   const Result<std::string> name = berth::build_unit_name("berthpanel-memos");
   CHECK(name.is_ok());
@@ -121,12 +112,11 @@ TEST(build_unit_name_refuses_an_invalid_service_name) {
 }
 
 TEST(build_unit_name_refuses_a_name_past_the_length_cap) {
-  // 112 chars: legal by itself, but 17 more for "berthpanel-build-"
-  // would push the build name past the cap.
+  // Legal alone, but the "berthpanel-" prefix would push it past the cap.
   const std::string long_service = "berthpanel-" + std::string(101, 'a');
   CHECK(berth::validate_unit_name(long_service));
   const Result<std::string> name = berth::build_unit_name(long_service);
-  CHECK(name.is_err());  // no room for a valid build unit name
+  CHECK(name.is_err());
 }
 
 TEST(install_exit_signalling_rejects_a_null_flag) {
@@ -152,8 +142,7 @@ TEST(terminator_stops_a_running_unit) {
   const FakeSystemctl ctl(tmp.path(), "active", "stopped", "stopped");
   std::lock_guard lock(berth::env_test_lock());
   ScopedEnv path_env("PATH");
-  // The shim must be the first `systemctl` on PATH, but the shim itself
-  // still needs the system's /usr/bin:/bin for cat and friends.
+  // Shim first on PATH, but it still needs the system's /usr/bin:/bin.
   path_env.set(ctl.bin_dir().string() + ":/usr/bin:/bin");
 
   SystemdUnitTerminator terminator(fast_policy());
@@ -168,11 +157,8 @@ TEST(terminator_stops_a_running_unit) {
 }
 
 TEST(terminator_stops_an_activating_auto_restart_unit) {
-  // Regression: `systemctl is-active` exits 3 for a unit that is
-  // "activating" (a crash-loop / auto-restart), which is NOT the same as
-  // "inactive". The terminator must still STOP it — an interrupted deploy
-  // that died at 'registering' leaves exactly this shape, and treating it
-  // as "nothing to stop" left the live unit retrying forever after cleanup.
+  // is-active exits 3 for "activating" (a crash-loop), which is NOT "inactive":
+  // cleanup must still stop such a unit.
   const TempDir tmp;
   const FakeSystemctl ctl(tmp.path(), "activating", "stopped", "stopped");
   std::lock_guard lock(berth::env_test_lock());
@@ -182,7 +168,7 @@ TEST(terminator_stops_an_activating_auto_restart_unit) {
   SystemdUnitTerminator terminator(fast_policy());
   const Result<bool> stopped = terminator.stop("berthpanel-memos", nullptr);
   CHECK(stopped.is_ok());
-  CHECK(stopped.value());  // it was live and is now confirmed inactive
+  CHECK(stopped.value());
 
   const std::string log = ctl.log();
   CHECK(log.find("is-active berthpanel-memos.service") != std::string::npos);
@@ -195,8 +181,7 @@ TEST(terminator_escalates_to_sigkill_when_sigterm_is_ignored) {
   const FakeSystemctl ctl(tmp.path(), "active", "active", "stopped");
   std::lock_guard lock(berth::env_test_lock());
   ScopedEnv path_env("PATH");
-  // The shim must be the first `systemctl` on PATH, but the shim itself
-  // still needs the system's /usr/bin:/bin for cat and friends.
+  // Shim first on PATH, but it still needs the system's /usr/bin:/bin.
   path_env.set(ctl.bin_dir().string() + ":/usr/bin:/bin");
 
   SystemdUnitTerminator terminator(fast_policy());
@@ -215,8 +200,7 @@ TEST(terminator_fails_when_the_unit_survives_sigkill) {
   const FakeSystemctl ctl(tmp.path(), "active", "active", "active");
   std::lock_guard lock(berth::env_test_lock());
   ScopedEnv path_env("PATH");
-  // The shim must be the first `systemctl` on PATH, but the shim itself
-  // still needs the system's /usr/bin:/bin for cat and friends.
+  // Shim first on PATH, but it still needs the system's /usr/bin:/bin.
   path_env.set(ctl.bin_dir().string() + ":/usr/bin:/bin");
 
   SystemdUnitTerminator terminator(fast_policy());
@@ -231,8 +215,7 @@ TEST(terminator_is_a_noop_for_an_inactive_unit) {
   const FakeSystemctl ctl(tmp.path(), "inactive", "stopped", "stopped");
   std::lock_guard lock(berth::env_test_lock());
   ScopedEnv path_env("PATH");
-  // The shim must be the first `systemctl` on PATH, but the shim itself
-  // still needs the system's /usr/bin:/bin for cat and friends.
+  // Shim first on PATH, but it still needs the system's /usr/bin:/bin.
   path_env.set(ctl.bin_dir().string() + ":/usr/bin:/bin");
 
   SystemdUnitTerminator terminator(fast_policy());
@@ -247,18 +230,15 @@ TEST(terminator_refuses_an_invalid_unit_name) {
   const FakeSystemctl ctl(tmp.path(), "active", "stopped", "stopped");
   std::lock_guard lock(berth::env_test_lock());
   ScopedEnv path_env("PATH");
-  // The shim must be the first `systemctl` on PATH, but the shim itself
-  // still needs the system's /usr/bin:/bin for cat and friends.
+  // Shim first on PATH, but it still needs the system's /usr/bin:/bin.
   path_env.set(ctl.bin_dir().string() + ":/usr/bin:/bin");
 
   SystemdUnitTerminator terminator(fast_policy());
   CHECK(terminator.stop("memos", nullptr).is_err());  // missing prefix
 }
 
-// The fake-systemctl tests above prove the protocol; this one proves the
-// kill lands on a REAL orphan under a REAL systemd user manager (stage
-// 4.17 kill scenario). Opt-in like the sandbox live test: needs a user
-// session, never runs in CI.
+// Opt-in like the sandbox live test, never in CI: a REAL orphan under a REAL
+// systemd user manager.
 TEST(terminator_kills_a_real_orphan_unit_opt_in) {
   std::lock_guard lock(berth::env_test_lock());
   ScopedEnv flag("BERTHPANEL_RUN_SANDBOX_TESTS");
@@ -271,8 +251,8 @@ TEST(terminator_kills_a_real_orphan_unit_opt_in) {
       berth::build_unit_name("berthpanel-killtest");
   CHECK(stem.is_ok());
 
-  // Orphan shape: a transient unit outliving its launcher, holding a
-  // process that would run for another minute if nobody stopped it.
+  // A transient unit outliving its launcher, holding a process that would run
+  // for another minute if nobody stopped it.
   const Result<std::string> systemd_run =
       berth::resolve_executable("systemd-run");
   CHECK(systemd_run.is_ok());
@@ -287,10 +267,9 @@ TEST(terminator_kills_a_real_orphan_unit_opt_in) {
   SystemdUnitTerminator terminator(fast_policy());
   const Result<bool> stopped = terminator.stop(stem.value(), nullptr);
   CHECK(stopped.is_ok());
-  CHECK(stopped.value());  // the unit ran and is confirmed inactive now
+  CHECK(stopped.value());
 
-  // The orphan is really gone, not just believed gone: is-active exits
-  // nonzero for anything but a live unit.
+  // is-active exits nonzero for anything but a live unit: really gone.
   const Result<int> verdict =
       berth::systemctl_user_code({"is-active", stem.value() + ".service"},
                                  std::chrono::milliseconds(5000), nullptr);

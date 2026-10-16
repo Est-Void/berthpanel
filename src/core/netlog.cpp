@@ -1,5 +1,3 @@
-// src/core/netlog.cpp — see netlog.h for the contract.
-
 #include "netlog.h"
 
 #include <mutex>
@@ -35,17 +33,14 @@ std::string render_entry(const NetlogEntry& entry) {
   return line;
 }
 
-}  // namespace
-
+}
 Result<void> netlog_append(const Paths& paths, const NetlogEntry& entry) {
-  // Counted BEFORE the write, so the NET banner can be ahead of the log but
-  // never behind it (§6.1: the attempt happened whether or not we got to say
-  // so). netstatus.cpp is the whole implementation — see netstatus.h.
+  // Counted before the write: the NET banner may be ahead of the log, never
+  // behind it.
   netstatus_record(entry.host, entry.allowed);
   const std::string line = render_entry(entry);
-  // One mutex across both sinks: a line must never interleave with another.
   const std::lock_guard<std::mutex> guard(g_netlog_mutex);
   return append_log_line(paths.net_log, paths.state_dir, line);
 }
 
-}  // namespace berth
+}

@@ -40,8 +40,7 @@ inline int run_all() {
   return failed == 0 ? 0 : 1;
 }
 
-}  // namespace test
-
+}
 #define CHECK(cond)                                          \
   do {                                                       \
     if (!(cond)) {                                           \

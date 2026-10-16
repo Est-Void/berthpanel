@@ -1,5 +1,3 @@
-// src/berth/net/resolver.cpp — see resolver.h for the contract.
-
 #include "resolver.h"
 
 #include <arpa/inet.h>
@@ -28,7 +26,6 @@ bool is_duplicate(const std::vector<ResolvedIp>& known, const std::string& ip) {
                      [&](const ResolvedIp& r) { return r.ip == ip; });
 }
 
-// Formats one addrinfo entry, or nullopt when it is not an A/AAAA address.
 std::optional<std::string> address_text(const addrinfo* ai, bool* ipv6) {
   char text[INET6_ADDRSTRLEN] = {0};
   if (ai->ai_family == AF_INET) {
@@ -76,9 +73,7 @@ Result<std::vector<ResolvedIp>> resolve_system(const std::string& host) {
   return out;
 }
 
-// getaddrinfo has no cancellation; bound it from outside with a helper
-// thread. On timeout the thread detaches — the caller's error is prompt
-// (dev.md §5: every wait is interruptible).
+// getaddrinfo cannot be cancelled: a helper thread detaches on timeout.
 Result<std::vector<ResolvedIp>> resolve_system_bounded(
     const std::string& host, const std::chrono::milliseconds budget,
     const std::atomic<bool>* cancel) {
@@ -114,8 +109,7 @@ Result<void> log_resolver(const Paths& paths, const std::string& host,
                                           .allowed = true});
 }
 
-}  // namespace
-
+}
 Result<std::vector<ResolvedIp>> resolve_host(
     const std::string& host, const std::chrono::milliseconds deadline,
     const Paths& paths, const std::atomic<bool>* cancel,
@@ -156,4 +150,4 @@ Result<std::vector<ResolvedIp>> resolve_host(
   return doh;
 }
 
-}  // namespace berth
+}

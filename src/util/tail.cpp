@@ -1,5 +1,3 @@
-// src/util/tail.cpp — see tail.h for the contract.
-
 #include "tail.h"
 
 #include <cerrno>
@@ -16,7 +14,7 @@ namespace berth {
 namespace {
 
 // Reads at most kTailWindowBytes from `offset` to the end. Short reads are not
-// errors: a log is appended to concurrently and a partial read is simply an
+// errors: the log is appended to concurrently, and a partial read is simply an
 // older view of it.
 Result<std::string> read_window(const std::filesystem::path& path,
                                 std::size_t offset, std::size_t budget) {
@@ -45,8 +43,7 @@ Result<std::string> read_window(const std::filesystem::path& path,
   return out;
 }
 
-}  // namespace
-
+}
 std::vector<std::string> split_log_lines(const std::string_view text) {
   std::vector<std::string> lines = berth::split(text, "\n");
   // Every append ends with "\n", so the split leaves one empty field at the
@@ -62,8 +59,8 @@ Tail tail_from_text(const std::string_view text, const std::size_t wanted,
   Tail tail;
   std::vector<std::string> lines = split_log_lines(text);
   if (window_started_mid_line && !lines.empty()) {
-    // The window begins inside a line, so its first entry is a fragment.
-    // Dropping it beats showing half a log entry as if it were whole.
+    // The window begins inside a line, so its first entry is a fragment:
+    // dropping it beats showing half a log entry as if it were whole.
     lines.erase(lines.begin());
   }
   tail.truncated = window_started_mid_line;
@@ -80,15 +77,15 @@ Tail tail_from_text(const std::string_view text, const std::size_t wanted,
 Result<Tail> tail_lines(const std::filesystem::path& path,
                         const std::size_t wanted) {
   Tail tail;
-  // ENOENT is the documented "no log yet" state, not a failure — see the
-  // header. Any other stat failure is real.
+  // ENOENT is the documented "no log yet" state, not a failure; any other stat
+  // failure is real.
   std::error_code ec;
   const std::filesystem::file_status status = std::filesystem::status(path, ec);
   if (ec || !std::filesystem::exists(status)) {
     if (ec && ec != std::errc::no_such_file_or_directory) {
       return Error("tail: cannot stat " + path.string() + ": " + ec.message());
     }
-    return tail;  // exists == false, lines == {}
+    return tail;
   }
   if (!std::filesystem::is_regular_file(status)) {
     return Error("tail: " + path.string() +
@@ -112,11 +109,9 @@ Result<Tail> tail_lines(const std::filesystem::path& path,
     return std::move(window).error();
   }
 
-  // One pass over the window: drop the fragment the window starts inside, then
-  // keep the newest `wanted`.
   Tail parsed = tail_from_text(window.value(), wanted, tail.truncated);
   parsed.existed = true;
   return parsed;
 }
 
-}  // namespace berth
+}

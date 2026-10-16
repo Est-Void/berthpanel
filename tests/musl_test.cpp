@@ -1,18 +1,6 @@
-// Tests for the musl release build policy (stage 8.2). scripts/musl-build.sh
-// is the only place a container image reference is consumed for a release, so
-// its rules are asserted here, offline and without a container runtime:
-//
-//   * a missing image, and any image referenced by TAG, are refused — a
-//     floating tag in a signed-artifact pipeline is the whole attack
-//     (dev.md §3, §11);
-//   * with a digest and a stub runtime, the script invokes the runtime with
-//     an explicit argv (never a shell string), mounts the source read-only,
-//     forwards SOURCE_DATE_EPOCH into the container, and accepts only a
-//     statically linked artifact.
-//
-// The stub runtime is a shell script on PATH, exactly the shape cancel_test
-// uses for its fake systemctl; PATH is per-invocation via run()'s extra_env,
-// so no process-wide environment is mutated.
+// A floating tag in a signed-artifact pipeline is the whole attack, so
+// musl-build.sh refuses every image without a digest (§3, §11). The stub
+// runtime on PATH is run()'s per-call extra_env: the env stays untouched.
 
 #include <sys/stat.h>
 
@@ -74,8 +62,7 @@ berth::Result<berth::RunOutput> run_script(
   return berth::run(argv, limits);
 }
 
-}  // namespace
-
+}
 TEST(musl_build_refuses_a_missing_image) {
   const fs::path root = repo_root();
   CHECK(!root.empty());
@@ -111,8 +98,8 @@ TEST(musl_build_accepts_a_digest_and_streams_a_static_artifact) {
   fs::create_directories(out);
   const fs::path log = tmp.path() / "runtime.log";
 
-  // The stub runtime records its argv and emits artifact bytes on stdout,
-  // exactly as the real build writes only the binary to stdout.
+  // The stub runtime records its argv and emits the artifact on stdout, as
+  // the real build writes only the binary there.
   write_executable(bin / "stub-runtime",
                    "#!/bin/sh\n"
                    "printf '%s\\n' \"$*\" >> \"" +

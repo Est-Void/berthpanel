@@ -1,5 +1,3 @@
-// src/berth/egress.cpp — see egress.h for the contract.
-
 #include "egress.h"
 
 #include <string>
@@ -64,4 +62,4 @@ std::string render_egress_report(
   return out;
 }
 
-}  // namespace berth
+}

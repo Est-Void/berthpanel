@@ -1,5 +1,3 @@
-// src/berth/proxy.cpp — see proxy.h for the contract and the egress boundary.
-
 #include "proxy.h"
 
 #include <algorithm>
@@ -26,9 +24,7 @@ namespace berth {
 
 namespace {
 
-// Pinned Caddy v2.11.7 release assets. Both live under github.com, which the
-// allowlist already covers; toolbox follows the allowlisted redirect to
-// release-assets.githubusercontent.com. The SHA is verified before install.
+// Under github.com, so allowlisted; toolbox follows the allowlisted redirect.
 constexpr std::string_view kCaddyVersion = "2.11.7";
 constexpr std::string_view kCaddyAmd64Url =
     "https://github.com/caddyserver/caddy/releases/download/v2.11.7/"
@@ -55,8 +51,6 @@ bool is_label_char(const char c) {
   return is_alpha(c) || is_digit(c) || c == '-';
 }
 
-// A Caddyfile double-quoted string: escape backslash and quote, refuse a
-// control character a token cannot represent.
 Result<std::string> caddyfile_quote(const std::string_view value) {
   for (const char c : value) {
     if (c == '\n' || c == '\r' || c == '\0') {
@@ -112,8 +106,8 @@ ProxyRoute decode_route(const nlohmann::json& doc) {
                                                nullptr);
   }
   route.port = static_cast<std::uint16_t>(port);
-  // A hand-edited store must not smuggle an invalid name or domain back into
-  // a unit path or a Caddyfile (§11: validate at the source).
+  // A hand-edited store must not smuggle an invalid name or domain into a unit
+  // path or a Caddyfile (§11).
   if (!validate_unit_name(route.service_name)) {
     throw nlohmann::json::type_error::create(
         302, "invalid service_name '" + route.service_name + "'", nullptr);
@@ -143,7 +137,7 @@ Result<void> write_caddyfile(const Paths& paths,
   Result<void> data = ensure_dir(caddy_data_dir(paths));
   if (data.is_err())
     return std::move(data).error();
-  // The Caddyfile holds no secrets: domains and loopback ports only.
+  // Domains and loopback ports only, so 0644.
   Result<void> written =
       atomic_write(caddyfile_path(paths), text.value(), kPermShared);
   if (written.is_err())
@@ -151,17 +145,7 @@ Result<void> write_caddyfile(const Paths& paths,
   return {};
 }
 
-}  // namespace
-
-Result<void> validate_proxy_domain(const std::string_view domain) {
-  if (domain.empty())
-    return Error("proxy: domain is empty");
-  if (domain.size() > 253)
-    return Error("proxy: domain is longer than 253 characters");
-  if (domain.back() == '.')
-    return Error("proxy: domain must not end with a dot: '" +
-                 std::string(domain) + "'");
-
+Result<void> validate_domain_chars(const std::string_view domain) {
   for (const char raw : domain) {
     const unsigned char c = static_cast<unsigned char>(raw);
     if (c >= 0x80) {
@@ -177,7 +161,10 @@ Result<void> validate_proxy_domain(const std::string_view domain) {
                    "' has an invalid character '" + std::string(1, raw) + "'");
     }
   }
+  return {};
+}
 
+Result<void> validate_domain_labels(const std::string_view domain) {
   std::size_t labels = 0;
   std::string_view last;
   std::size_t start = 0;
@@ -207,13 +194,26 @@ Result<void> validate_proxy_domain(const std::string_view domain) {
   if (last.size() < 2)
     return Error("proxy: domain '" + std::string(domain) +
                  "' has a too-short final label");
-  // A final label that is all digits is an IPv4 literal, which ACME cannot
-  // issue for; refuse it rather than fail later at challenge time.
   if (std::all_of(last.begin(), last.end(), is_digit)) {
     return Error("proxy: domain '" + std::string(domain) +
                  "' looks like an IP address, not a name");
   }
   return {};
+}
+
+}
+Result<void> validate_proxy_domain(const std::string_view domain) {
+  if (domain.empty())
+    return Error("proxy: domain is empty");
+  if (domain.size() > 253)
+    return Error("proxy: domain is longer than 253 characters");
+  if (domain.back() == '.')
+    return Error("proxy: domain must not end with a dot: '" +
+                 std::string(domain) + "'");
+  const Result<void> chars = validate_domain_chars(domain);
+  if (chars.is_err())
+    return std::move(chars).error();
+  return validate_domain_labels(domain);
 }
 
 std::string normalize_proxy_domain(const std::string_view domain) {
@@ -255,8 +255,8 @@ Result<std::string> render_caddyfile(const std::vector<ProxyRoute>& routes,
   if (storage.is_err())
     return std::move(storage).error();
 
-  // admin off: no unauthenticated localhost config API. Cert storage is
-  // pinned here so ProtectHome=read-only cannot break ACME (§6 hardening).
+  // admin off: no unauthenticated localhost config API. Cert storage pinned so
+  // ProtectHome=read-only cannot break ACME.
   std::string out =
       "{\n\tadmin off\n\tstorage file_system " + storage.value() + "\n}\n";
 
@@ -297,7 +297,6 @@ Result<std::vector<ProxyRoute>> upsert_proxy_route(
       return Error("proxy: domain '" + std::string(domain) +
                    "' is already routed to '" + route.service_name + "'");
     }
-    // Idempotent update: same service+domain refreshes the port.
     route.port = port;
     return routes;
   }
@@ -343,8 +342,7 @@ Result<UnitSpec> caddy_unit_spec(const Paths& paths) {
   spec.exec_args = {"run", "--config", caddyfile_path(paths).string(),
                     "--adapter", "caddyfile"};
   spec.limits = UnitLimits{.memory_max = "384M", .tasks_max = 512};
-  // ProtectSystem=strict makes everything read-only; Caddy needs its cert
-  // store and its config dir writable.
+  // ProtectSystem=strict: Caddy still needs its cert store and config writable.
   spec.read_write_paths = {caddy_data_dir(paths), caddy_config_dir(paths)};
   return spec;
 }
@@ -379,8 +377,7 @@ Result<void> proxy_sync(const Paths& paths, std::atomic<bool>* cancel) {
   if (wrote.is_err())
     return std::move(wrote).error();
 
-  // Nothing to run and nothing installed: a bare `proxy remove` on a host
-  // that never had Caddy must not trigger a download.
+  // Nothing to run and nothing installed: `proxy remove` must not download.
   if (routes.value().empty() && !caddy_installed(paths))
     return {};
 
@@ -484,4 +481,4 @@ Result<bool> proxy_remove(const Paths& paths, const std::string_view domain,
   return true;
 }
 
-}  // namespace berth
+}

@@ -23,8 +23,7 @@ std::string numbered_lines(const std::size_t count) {
   return out;
 }
 
-}  // namespace
-
+}
 TEST(tail_of_a_missing_file_is_empty_and_not_an_error) {
   // The documented decision: ENOENT is the "no log yet" state. An error box
   // over a crash.log that has never existed would be drama about nothing.

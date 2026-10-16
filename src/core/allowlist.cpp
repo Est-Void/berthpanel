@@ -1,5 +1,3 @@
-// src/core/allowlist.cpp — see allowlist.h for the contract.
-
 #include "allowlist.h"
 
 #include <array>
@@ -10,9 +8,8 @@ namespace berth {
 
 namespace {
 
-// THE SECURITY TABLE (dev.md §6). Every addition or removal lands in the
-// same commit as a matching change to tests/netlog_test.cpp, with a public
-// justification in the commit message.
+// THE SECURITY TABLE (dev.md §6): every edit lands in the same commit as a
+// matching change to tests/netlog_test.cpp.
 constexpr std::array<std::string_view, 10> kAllowedEndpoints = {
     "api.github.com",
     "cdn.jsdelivr.net",
@@ -32,7 +29,6 @@ constexpr std::array<std::string_view, 3> kLoopbackHosts = {
     "localhost",
 };
 
-// Lowercase, without the brackets of an IPv6 literal.
 std::string normalize_host(const std::string_view host) {
   std::string out;
   out.reserve(host.size());
@@ -44,8 +40,7 @@ std::string normalize_host(const std::string_view host) {
   return out;
 }
 
-}  // namespace
-
+}
 std::vector<std::string_view> allowed_endpoints() {
   return {kAllowedEndpoints.begin(), kAllowedEndpoints.end()};
 }
@@ -77,4 +72,4 @@ bool endpoint_permitted(const EndpointClass cls, const RequestKind kind) {
   return false;
 }
 
-}  // namespace berth
+}

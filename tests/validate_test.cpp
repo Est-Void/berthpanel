@@ -27,8 +27,7 @@ bool matches(const std::string_view line, const std::string& rule) {
   return std::find(got.begin(), got.end(), rule) != got.end();
 }
 
-}  // namespace
-
+}
 TEST(denylist_is_not_empty) {
   CHECK(denylist_size() >= 5);
 }

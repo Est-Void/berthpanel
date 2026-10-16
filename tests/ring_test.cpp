@@ -15,8 +15,7 @@ std::vector<std::string> contents(const tui::RingBuffer<std::string>& ring) {
   return ring.snapshot();
 }
 
-}  // namespace
-
+}
 TEST(ring_starts_empty_and_reports_its_capacity) {
   const tui::RingBuffer<std::string> ring(4);
   CHECK(ring.empty());

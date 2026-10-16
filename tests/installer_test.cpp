@@ -1,21 +1,5 @@
-// Tests for install.sh (stage 8.4): the installer/uninstaller's safety
-// properties, asserted offline with a stub minisign and a stub systemctl —
-// the shim pattern cancel_test established. No real key, no live user
-// manager, and no process-wide environment is mutated (PATH is per-call via
-// run()'s extra_env).
-//
-// Covered:
-//   * verify-first, fail-closed: a bad signature or a checksum mismatch
-//     installs nothing;
-//   * only the artifacts a binary install actually fetches are checksummed
-//     (a real SHA256SUMS also lists install.sh and the source tarball);
-//   * a SHA256SUMS with no line for the binary is a loud failure;
-//   * --allow-checksum-only is the explicit opt-out of the signature step;
-//   * a good signature installs the binary into <prefix>/bin;
-//   * the uninstaller stops/removes only `berthpanel-` units and unit files,
-//     never anything else, and is idempotent;
-//   * the script is pipe-safe: piped through `sh` with no script file on disk
-//     (`curl | sh` shape) it still prints usage and installs nothing.
+// Offline: stub minisign and stub systemctl, so no real key or user manager
+// is touched and PATH stays per-call (run()'s extra_env, never process-wide).
 
 #include <sys/stat.h>
 
@@ -84,8 +68,7 @@ berth::Result<berth::RunOutput> run_cmd(
   return berth::run(argv, limits);
 }
 
-// A source directory with a well-formed release layout. `correct_checksum`
-// controls whether SHA256SUMS matches the artifact.
+// `correct_checksum` decides whether SHA256SUMS matches the artifact.
 fs::path make_source(const fs::path& dir, const std::string& bytes,
                      bool correct_checksum) {
   fs::create_directories(dir);
@@ -100,8 +83,7 @@ fs::path make_source(const fs::path& dir, const std::string& bytes,
   return dir;
 }
 
-}  // namespace
-
+}
 TEST(installer_refuses_a_bad_signature_and_installs_nothing) {
   const fs::path root = repo_root();
   CHECK(!root.empty());
@@ -111,7 +93,6 @@ TEST(installer_refuses_a_bad_signature_and_installs_nothing) {
   const fs::path src = make_source(tmp.path() / "src", "BIN", true);
   const fs::path prefix = tmp.path() / "prefix";
   fs::create_directories(bin);
-  // A minisign that rejects every signature.
   write_executable(bin / "minisign", "#!/bin/sh\nexit 1\n");
 
   const std::vector<std::string> env{
@@ -181,8 +162,8 @@ TEST(installer_verifies_only_the_artifacts_it_fetches) {
   const TempDir tmp;
   const fs::path src = make_source(tmp.path() / "src", "BIN", true);
   const fs::path prefix = tmp.path() / "prefix";
-  // A real release's SHA256SUMS also lists install.sh and the source tarball,
-  // neither of which a binary install fetches. They must not be required.
+  // A real SHA256SUMS also lists install.sh and the source tarball; neither is
+  // fetched by a binary install, so neither may be required.
   {
     std::ofstream out(src / "SHA256SUMS", std::ios::app);
     out << std::string(64, 'a') << "  install.sh\n"
@@ -250,9 +231,8 @@ TEST(installer_pipe_safe_from_stdin) {
   const fs::path src = make_source(tmp.path() / "src", "BIN", true);
   const fs::path prefix = tmp.path() / "prefix";
   const std::string script = (root / "install.sh").string();
-  // The child's stdin is /dev/null (subprocess.h), so `cat` takes the file as
-  // an argument and the inner `sh -s` reads the script from the pipe: this is
-  // the `curl | sh` shape, where no script file is on the inner shell's disk.
+  // stdin is /dev/null, so `cat` reads the file and the inner `sh -s` takes the
+  // script from the pipe: the `curl | sh` shape, no script file on disk.
   const std::vector<std::string> env{"PATH=/usr/bin:/bin"};
 
   const std::string help_cmd = "cat '" + script + "' | sh -s -- --prefix '" +
@@ -264,8 +244,7 @@ TEST(installer_pipe_safe_from_stdin) {
   CHECK(help.value().out.find("Usage:") != std::string::npos);
   CHECK(!fs::exists(prefix / "bin" / "berthpanel"));
 
-  // Dry run through the pipe still resolves and checksums locally and installs
-  // nothing (and never touches the network).
+  // Dry run through the pipe installs nothing and never touches the network.
   const std::string dry_cmd = "cat '" + script + "' | sh -s -- --source '" +
                               src.string() + "' --prefix '" + prefix.string() +
                               "' --allow-checksum-only --dry-run";
@@ -291,7 +270,6 @@ TEST(uninstaller_only_touches_the_prefix) {
   const fs::path log = tmp.path() / "systemctl.log";
 
   write_text(prefix / "bin" / "berthpanel", "BIN");
-  // Unit files on disk, only some of them ours.
   write_text(cfg / "systemd" / "user" / "berthpanel-memos.service", "u");
   write_text(cfg / "systemd" / "user" / "other.service", "u");
 
@@ -329,7 +307,6 @@ TEST(uninstaller_only_touches_the_prefix) {
   const std::string recorded = read_file(log);
   CHECK(recorded.find("berthpanel-memos.service") != std::string::npos);
   CHECK(recorded.find("berthpanel-cleanup.timer") != std::string::npos);
-  // The foreign units are never disabled.
   CHECK(recorded.find("disable --now other.service") == std::string::npos);
   CHECK(recorded.find("demo-x.service") == std::string::npos);
 

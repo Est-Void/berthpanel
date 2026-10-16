@@ -1,9 +1,5 @@
-// Tests for detect.h (stage 4.20): stack heuristics → recipe DRAFT.
-// Detection only reads fixture trees, never executes anything. Several
-// stack families at once is a loud Err, npm lockfiles are refused (not
-// guessed), and every draft must pass validate_recipe as-is — quick-accept
-// (4.21) must be honest — so each test asserts the validator agrees with
-// the heuristic.
+// Detection reads fixture trees only; it never executes anything. Quick-accept
+// must be honest, so each test asserts validate_recipe agrees with it.
 
 #include "berth/detect.h"
 
@@ -31,8 +27,7 @@ DetectRequest request_for(const std::filesystem::path& dir) {
                        .commit = "2b2192d4e153bd04f1d325b60fd880cf00d68b01"};
 }
 
-}  // namespace
-
+}
 TEST(detect_go_module_produces_a_valid_draft) {
   const TempDir tmp;
   CHECK(berth::atomic_write(tmp.path() / "go.mod", kGoMod).is_ok());
@@ -60,10 +55,8 @@ TEST(detect_go_module_without_a_module_line_falls_back_to_the_name) {
 }
 
 TEST(detect_go_draft_leaves_bind_undeclared_and_still_validates) {
-  // The default Go template spells loopback and {port} into start_cmd, so the
-  // relaxed bind rules leave the draft exactly as valid as before — `bind`
-  // stays "" (the start_cmd is what declares loopback). This is the no-
-  // regression guard for the anti-wildcard invariant.
+  // start_cmd already spells loopback, so `bind` stays ""; guard for the
+  // anti-wildcard invariant.
   const TempDir tmp;
   CHECK(berth::atomic_write(tmp.path() / "go.mod", kGoMod).is_ok());
   const auto draft = berth::detect_recipe(request_for(tmp.path()));
@@ -139,8 +132,8 @@ TEST(detect_python_requirements_produce_a_valid_venv_draft) {
   CHECK(draft.value().recipe.tools == std::vector<std::string>{"python3"});
   CHECK(draft.value().recipe.binary_name == "venv/bin/python");
   CHECK(draft.value().recipe.build_steps.size() == 2);
-  // The pip step runs through the venv interpreter; the tool-coverage
-  // alias (python → python3) is what makes this validate (§8).
+  // The pip step runs through the venv interpreter; the python → python3 tool
+  // alias is what makes it validate (§8).
   CHECK(berth::validate_recipe(draft.value().recipe).is_ok());
   CHECK(draft.value().recipe.start_cmd.find("{self} {project}/main.py") !=
         std::string::npos);
@@ -165,8 +158,7 @@ TEST(detect_refuses_an_ambiguous_stack) {
       berth::atomic_write(tmp.path() / "requirements.txt", "flask\n").is_ok());
   const auto draft = berth::detect_recipe(request_for(tmp.path()));
   CHECK(draft.is_err());
-  // The heuristic must not silently pick a family; the message names the
-  // markers so the user can disambiguate (plan 4.20).
+  // No silent family choice: the message names the markers to disambiguate.
   CHECK(draft.error().ctx().find("ambiguous stack") != std::string::npos);
   CHECK(draft.error().ctx().find("go.mod + package.json") != std::string::npos);
 }
@@ -179,8 +171,7 @@ TEST(detect_refuses_an_npm_lockfile) {
   CHECK(berth::atomic_write(tmp.path() / "package-lock.json", "{}").is_ok());
   const auto draft = berth::detect_recipe(request_for(tmp.path()));
   CHECK(draft.is_err());
-  // Not a silent bun guess: npm is not in the v1 toolchain, and building
-  // the tree with the wrong package manager is not our decision to make.
+  // npm is not in the v1 toolchain; guessing a package manager is not ours.
   CHECK(draft.error().ctx().find("npm is not in the v1 toolchain") !=
         std::string::npos);
 }
@@ -209,8 +200,7 @@ TEST(detect_prefetch_steps_download_without_executing) {
 TEST(detect_a_dependency_free_go_module_gets_no_prefetch) {
   const TempDir tmp;
   CHECK(berth::atomic_write(tmp.path() / "go.mod", kGoMod).is_ok());
-  // No go.sum: 'go mod download' would exit 1 with "no modules specified"
-  // (the http-echo demo failure), so the draft must not add it.
+  // No go.sum: 'go mod download' would exit 1 with "no modules specified".
   const auto go = berth::detect_recipe(request_for(tmp.path()));
   CHECK(go.is_ok());
   CHECK(go.value().recipe.prefetch_steps.empty());
@@ -226,8 +216,7 @@ TEST(detect_cmd_exec_form_hints_loopback_flags) {
             .is_ok());
   const auto draft = berth::detect_recipe(request_for(tmp.path()));
   CHECK(draft.is_ok());
-  // argv[0] is replaced by {self}; the rest becomes the flag section, and
-  // {port} is appended so the deploy can substitute the picked port.
+  // argv[0] becomes {self}, {port} is appended for the deploy to substitute.
   CHECK(draft.value().recipe.start_cmd ==
         "{self} -text hi -addr 127.0.0.1 --port {port}");
   bool mentions_cmd = false;

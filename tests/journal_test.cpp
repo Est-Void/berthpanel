@@ -37,8 +37,7 @@ JournalEntry memos_entry(const std::string& stage) {
   return e;
 }
 
-}  // namespace
-
+}
 TEST(journal_missing_file_is_empty_not_error) {
   const TempDir tmp;
   const berth::Paths p = test_paths(tmp.path());
@@ -127,4 +126,60 @@ TEST(journal_file_is_private) {
   CHECK(journal_upsert(p, memos_entry("building")).is_ok());
   CHECK(std::filesystem::status(p.deploy_journal).permissions() ==
         berth::kPermPrivate);
+}
+
+TEST(journal_stack_tag_round_trips) {
+  const TempDir tmp;
+  const berth::Paths p = test_paths(tmp.path());
+  JournalEntry e = memos_entry("building");
+  e.stack = "berthpanel-group";
+  CHECK(journal_upsert(p, e).is_ok());
+
+  const auto loaded = journal_load(p);
+  CHECK(loaded.is_ok());
+  CHECK(loaded.value().front().stack == "berthpanel-group");
+}
+
+TEST(journal_upsert_many_writes_the_whole_group_at_once) {
+  const TempDir tmp;
+  const berth::Paths p = test_paths(tmp.path());
+  JournalEntry db = memos_entry("cloning");
+  db.service_name = "berthpanel-group-db";
+  db.stack = "berthpanel-group";
+  JournalEntry app = memos_entry("cloning");
+  app.service_name = "berthpanel-group-app";
+  app.stack = "berthpanel-group";
+  CHECK(berth::journal_upsert_many(p, {db, app}).is_ok());
+
+  const auto loaded = journal_load(p);
+  CHECK(loaded.is_ok());
+  CHECK(loaded.value().size() == 2);
+
+  // A second batch replaces only the matching key, leaving the sibling.
+  app.stage = "building";
+  CHECK(berth::journal_upsert_many(p, {app}).is_ok());
+  const auto after = journal_load(p);
+  CHECK(after.is_ok());
+  CHECK(after.value().size() == 2);
+  for (const JournalEntry& e : after.value()) {
+    if (e.service_name == "berthpanel-group-app")
+      CHECK(e.stage == "building");
+    else
+      CHECK(e.stage == "cloning");
+  }
+}
+
+TEST(journal_rejects_an_invalid_stack_tag_in_file) {
+  const TempDir tmp;
+  const berth::Paths p = test_paths(tmp.path());
+  CHECK(berth::ensure_dir(p.state_dir).is_ok());
+  const std::string body = R"({"version": 1, "entries": [{"service_name":
+    "berthpanel-group-db", "work_dir": "/tmp/w", "repo": "o/r", "commit": "c",
+    "stage": "cloning", "started_at_unix": 1, "stack": "no-prefix"}]})";
+  CHECK(
+      berth::atomic_write(p.deploy_journal, body, berth::kPermPrivate).is_ok());
+
+  const auto loaded = journal_load(p);
+  CHECK(loaded.is_err());
+  CHECK(loaded.error().ctx().find("stack") != std::string::npos);
 }

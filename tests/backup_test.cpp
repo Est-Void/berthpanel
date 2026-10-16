@@ -68,8 +68,7 @@ TarFile t_symlink(std::string name, std::string target) {
                  .link_target = std::move(target)};
 }
 
-}  // namespace
-
+}
 TEST(backup_tar_create_lists_back) {
   const std::string bytes =
       berth::tar_create({t_file("data/hello.txt", "hi"), t_dir("data/dir/"),

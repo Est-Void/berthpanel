@@ -79,6 +79,7 @@ LIB_SRC := \
  	src/berth/recipes.cpp \
  	src/berth/userrecipes.cpp \
  	src/berth/recipe_edit.cpp \
+ 	src/berth/stacks.cpp \
  	src/berth/detect.cpp \
 	src/berth/wizard.cpp \
  	src/berth/catalog.cpp \
@@ -167,9 +168,11 @@ TEST_SRC := \
  	tests/catalog_test.cpp \
  	tests/userrecipes_test.cpp \
  	tests/recipe_edit_test.cpp \
+ 	tests/stacks_test.cpp \
  	tests/detect_test.cpp \
 	tests/wizard_test.cpp \
  	tests/deploy_test.cpp \
+ 	tests/deploy_stack_test.cpp \
  	tests/cancel_test.cpp \
  	tests/gzip_test.cpp \
 	tests/ring_test.cpp \
@@ -415,6 +418,7 @@ check:
 	@command -v python3 >/dev/null 2>&1 || { echo >&2 "berthpanel: make check: python3 is required to generate compile_commands.json"; exit 1; }
 	$(MAKE) $(COMPILE_DB)
 	$(CLANG_TIDY) -p $(BUILD) --quiet --warnings-as-errors='*' --checks='$(TIDY_CHECKS)' $(TIDY_FILES)
+	python3 scripts/comment-lint.py
 	$(MAKE) test
 
 # --- format: clang-format rewrites; deliberately NOT a CI gate (dev.md §12.7) ---

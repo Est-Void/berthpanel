@@ -1,5 +1,3 @@
-// src/berth/port.cpp — see port.h for the contract.
-
 #include "port.h"
 
 #include <arpa/inet.h>
@@ -41,8 +39,7 @@ Result<std::uint16_t> pick_free_port(const std::vector<std::uint16_t>& avoid) {
     const std::uint16_t port = ntohs(assigned.sin_port);
     ::close(fd);
 
-    // Privileged ports can never serve a user unit; avoid-listed ports
-    // would collide with an already-registered service.
+    // Privileged ports cannot serve a user unit; avoid-listed ones collide.
     if (port < 1024)
       continue;
     const bool taken =
@@ -55,4 +52,4 @@ Result<std::uint16_t> pick_free_port(const std::vector<std::uint16_t>& avoid) {
                std::to_string(kMaxAttempts) + " attempts");
 }
 
-}  // namespace berth
+}

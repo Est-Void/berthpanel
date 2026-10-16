@@ -1,5 +1,3 @@
-// src/core/names.cpp — see names.h for the contract.
-
 #include "names.h"
 
 #include <string>
@@ -31,10 +29,8 @@ Result<std::string> build_unit_name(const std::string_view service_name) {
   }
   const std::string stem =
       std::string(kBuildUnitInfix) + std::string(service_name);
-  // The build name is a DIFFERENT string than the service name and gets its
-  // own validation: a legal service name can still push the build name past
-  // the length cap, and a build we cannot name is a build cleanup could
-  // never stop (§11: validate every value that reaches a path).
+  // Validated separately: a legal service name can still overflow the cap; an
+  // unnameable build is one cleanup could never stop (§11).
   if (!validate_unit_name(stem)) {
     return Error("names: service name '" + std::string(service_name) +
                  "' does not leave room for a valid build unit name '" + stem +
@@ -43,4 +39,4 @@ Result<std::string> build_unit_name(const std::string_view service_name) {
   return stem;
 }
 
-}  // namespace berth
+}

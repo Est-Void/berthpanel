@@ -1,5 +1,3 @@
-// src/tui/view_edit.cpp — see view_edit.h for the contract.
-
 #include "view_edit.h"
 
 #include <cstdio>
@@ -19,9 +17,8 @@ namespace {
   std::abort();
 }
 
-// A tasks_max is a positive count: systemd's TasksMax has no zero and no
-// negative form. Deliberately not strtol: a trailing character ("20O") must be
-// an Err, never the silent prefix strtol would return (§11).
+// A tasks_max is a positive count. Deliberately not strtol: a trailing
+// character ("20O") must be an Err, not strtol's silent prefix (§11).
 berth::Result<std::uint32_t> parse_tasks_field(const std::string_view field) {
   const std::string_view typed = berth::trim(field);
   if (typed.empty()) {
@@ -47,8 +44,7 @@ berth::Result<std::uint32_t> parse_tasks_field(const std::string_view field) {
   return static_cast<std::uint32_t>(value);
 }
 
-}  // namespace
-
+}
 std::string_view edit_field_label(const EditField field) {
   switch (field) {
     case EditField::kStartCmd:
@@ -142,9 +138,8 @@ berth::Result<berth::RecipeEdits> assemble_recipe_edits(
   edits.description = fields.description;
   edits.memory_max = fields.memory_max;
 
-  // The port reuses the deploy screen's parser verbatim: empty means "free at
-  // deploy time" and anything that is not 1-65535 is refused by name. Two port
-  // parsers that disagree is the §11 trap.
+  // Reuses the deploy parser verbatim — two port parsers that disagree is the
+  // §11 trap.
   berth::Result<std::uint16_t> port = parse_port_field(fields.port);
   if (port.is_err()) {
     return std::move(port).error();
@@ -195,4 +190,4 @@ std::vector<KeyHint> edit_key_hints(const EditField focus, const bool running) {
           {"q", "quit"}};
 }
 
-}  // namespace tui
+}

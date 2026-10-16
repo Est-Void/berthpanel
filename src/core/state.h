@@ -1,10 +1,7 @@
 #pragma once
 
-// src/core/state.h — the service registry: what the panel has deployed.
-// state.json is a versioned list of ServiceRecord keyed by service_name;
-// the storage discipline (quarantine on corrupt, sort by key) is
-// docstore.h's, and the name policy is core/names.h's. This header owns only
-// the record shape and the registry operations.
+// A versioned list of ServiceRecord keyed by service_name; storage discipline
+// is docstore.h's, name policy is names.h's.
 
 #include <cstdint>
 #include <optional>
@@ -48,9 +45,9 @@ struct Registry {
 [[nodiscard]] Result<void> registry_unregister(const Paths& paths,
                                                std::string_view service_name);
 
-// The `--json` document for the registry (plan 5.3): the versioned envelope
-// plus a `services` array sorted by service_name, so the bytes are stable.
+// Versioned envelope plus a `services` array sorted by service_name, so the
+// bytes are stable.
 [[nodiscard]] nlohmann::json services_json(
     const std::vector<ServiceRecord>& services);
 
-}  // namespace berth
+}

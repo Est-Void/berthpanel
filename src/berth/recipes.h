@@ -1,13 +1,8 @@
 #pragma once
 
-// src/berth/recipes.h — the recipe schema (dev.md §8) and THE validator.
-//
-// The catalog contract tests of §8 became this function: resource limits,
-// tools-covering-build-steps, loopback-only binding, pinned commit, pinned
-// content hashes and the dangerous-command denylist are all enforced HERE,
-// at load time, so a bad recipe cannot reach a deploy. One validator,
-// used by the builtin catalog and (stage 4B) by user recipes alike — two
-// validators that disagree is the §11 trap.
+// THE validator (§8): limits, tools-covering build steps, loopback-only
+// binding, pinned commit and content hashes, the dangerous-command denylist —
+// enforced at load, by ONE validator for builtin and user recipes.
 
 #include <cstdint>
 #include <optional>
@@ -31,8 +26,7 @@ struct ContentPin {
   std::string sha256;
 };
 
-// A release asset fetched through toolbox (prebuilt recipes: no compiler
-// on the host, so the toolchain requirement disappears).
+// A release asset fetched through toolbox: no compiler on the host.
 struct PrebuiltBinary {
   std::string url;
   std::string sha256;
@@ -53,13 +47,11 @@ struct Recipe {
   std::vector<std::vector<std::string>> prefetch_steps;
   std::vector<ContentPin> plugins;
   std::optional<PrebuiltBinary> prebuilt;
-  std::string binary_name;  // file the build produces inside the work dir
+  std::string binary_name;
   std::string
       start_cmd;  // placeholders {bin} {venv} {python} {project} {port} {self}
-  // The author's explicit declaration of the address the app binds ITSELF
-  // when start_cmd carries no bind token. "" = not declared; only
-  // "127.0.0.1" is a valid declaration (the validator refuses anything
-  // else), so loopback is always stated, never a silent default (§8).
+  // The author's declaration of the address the app binds ITSELF when start_cmd
+  // has no bind token. Only "127.0.0.1" is valid, never a silent default (§8).
   std::string bind;
   std::string health_path = "/";
   std::uint16_t port = 0;  // 0 = pick a free one at deploy time
@@ -69,26 +61,21 @@ struct Recipe {
   [[nodiscard]] std::string owner_repo() const { return owner + "/" + name; }
 };
 
-// Splits a command TEMPLATE into argv tokens. Only the template is split,
-// before substitution, because a substituted path may legitimately contain
-// a space: splitting afterwards would destroy that information (§11).
+// Only the TEMPLATE is split: a substituted path may contain a space (§11).
 [[nodiscard]] Result<std::vector<std::string>> split_command_template(
     std::string_view tmpl);
 
 [[nodiscard]] Result<void> validate_recipe(const Recipe& recipe);
 
-// The interface every build step's program must satisfy: present in
-// `tools`. Exposed so preflight and the catalog tests agree.
+// Every build step's program must be present in `tools`.
 [[nodiscard]] bool tool_covers_step(const Recipe& recipe,
                                     const std::vector<std::string>& step);
 
-// The tool names a step requires from `tools` (the venv interpreter IS
-// python3; a sh wrapper IS sh). Exposed so detect can heal its own drafts
-// instead of ever handing out an invalid one (stage 4.20).
+// The venv interpreter IS python3 and a sh wrapper IS sh.
 [[nodiscard]] std::vector<std::string> tools_required_by(
     const std::vector<std::string>& step);
 
 [[nodiscard]] Result<Recipe> recipe_from_json(const nlohmann::json& doc);
 [[nodiscard]] nlohmann::json recipe_to_json(const Recipe& recipe);
 
-}  // namespace berth
+}

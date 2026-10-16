@@ -1,5 +1,3 @@
-// src/berth/cancel.cpp — see cancel.h for the contract.
-
 #include "cancel.h"
 
 #include <csignal>
@@ -18,10 +16,8 @@ namespace berth {
 
 namespace {
 
-// Touched from the signal handler only: a flag pointer plus a counter. The
-// atomic must be lock-free (checked at install time) so the store is
-// async-signal-safe; the counter is a volatile sig_atomic_t, the type the
-// standard sanctions for exactly this.
+// Handler state only. The atomic must be lock-free (checked at install) and the
+// counter a volatile sig_atomic_t: the only two types sanctioned here.
 std::atomic<bool>* g_exit_cancel = nullptr;
 volatile std::sig_atomic_t g_signals_seen = 0;
 
@@ -31,8 +27,7 @@ extern "C" void berth_exit_signal_handler(int sig) {
     g_exit_cancel->store(true, std::memory_order_relaxed);
   }
   if (g_signals_seen >= 2) {
-    // The user insists: restore the default disposition so the NEXT signal
-    // kills the process instead of being swallowed by a stuck shutdown.
+    // The user insists: the NEXT signal kills instead of being swallowed.
     ::signal(sig, SIG_DFL);
   }
 }
@@ -45,14 +40,9 @@ Error cancelled_error(const std::string& unit) {
   return Error("cancel: cancelled while stopping " + unit);
 }
 
-// is-active's nonzero exit means "not active", which is DATA here, not a
-// failure — hence the _output variant. But the exit code alone cannot tell
-// a stopped unit from one that is crash-looping: `is-active` exits nonzero
-// for BOTH "inactive" and "activating (auto-restart)". A unit mid-restart
-// still holds its resources and will come back, so it MUST be stopped, not
-// treated as absent — otherwise a deploy that died at 'registering' leaves
-// an orphan that cleanup removes the unit file for but systemd keeps
-// restarting. Only a genuinely stopped state is Ok(false).
+// is-active exits nonzero for BOTH "inactive" and "activating (auto-restart)",
+// so the code cannot tell a stopped unit from one that still holds its
+// resources. Only a genuinely stopped state is Ok(false).
 Result<bool> is_active(const std::string& unit, const StopPolicy& policy,
                        std::atomic<bool>* cancel) {
   Result<RunOutput> out =
@@ -60,15 +50,14 @@ Result<bool> is_active(const std::string& unit, const StopPolicy& policy,
   if (out.is_err())
     return std::move(out).error();
   if (out.value().exit_code == 0)
-    return true;  // "active"
+    return true;
   const std::string_view state = trim(out.value().out);
   if (state == "activating" || state == "reloading" || state == "deactivating")
     return true;
   return false;
 }
 
-// Polls until the unit is inactive or the budget runs out. Ok(false) means
-// "still alive", which is what makes the caller escalate.
+// Ok(false) means "still alive", which is what makes the caller escalate.
 Result<bool> wait_inactive(const std::string& unit, const StopPolicy& policy,
                            std::chrono::milliseconds budget,
                            std::atomic<bool>* cancel) {
@@ -87,10 +76,9 @@ Result<bool> wait_inactive(const std::string& unit, const StopPolicy& policy,
   }
 }
 
-// A timeout on the stop call is tolerated on purpose: the request has
-// reached systemd either way, and the is-active poll — not systemctl's own
-// exit — is the verdict. A cancellation aborts immediately: a user-issued
-// Ctrl-C must never degrade into more systemctl round trips (§11).
+// A stop timeout is tolerated: the is-active poll, not systemctl's exit, is
+// the verdict. Cancellation aborts at once: Ctrl-C must not add more round
+// trips.
 Result<void> request_stop(const std::string& unit, const StopPolicy& policy,
                           std::atomic<bool>* cancel) {
   static_cast<void>(
@@ -110,8 +98,7 @@ Result<bool> escalate_to_sigkill(const std::string& unit,
   return wait_inactive(unit, policy, policy.kill_grace, cancel);
 }
 
-}  // namespace
-
+}
 Result<void> install_exit_signalling(std::atomic<bool>* cancel) {
   if (cancel == nullptr) {
     return Error("cancel: install_exit_signalling: null flag");
@@ -165,9 +152,6 @@ Result<bool> SystemdUnitTerminator::stop(const std::string& unit_stem,
   if (gone.value())
     return true;
 
-  // Still alive: SIGKILL the cgroup, then one final bounded verdict.
-  // Reaching the error below keeps the journal entry, so the next sweep
-  // retries with fresh budgets instead of declaring victory.
   Result<bool> killed = escalate_to_sigkill(unit, policy_, cancel);
   if (killed.is_err())
     return std::move(killed).error();
@@ -179,4 +163,4 @@ Result<bool> SystemdUnitTerminator::stop(const std::string& unit_stem,
                "ms; leaving it for the next cleanup pass");
 }
 
-}  // namespace berth
+}

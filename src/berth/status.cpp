@@ -1,5 +1,3 @@
-// src/berth/status.cpp — see status.h for the contract.
-
 #include "status.h"
 
 #include <algorithm>
@@ -85,8 +83,7 @@ std::vector<StatusDeploy> sorted_deploys(
   return out;
 }
 
-}  // namespace
-
+}
 nlohmann::json status_json(const StatusSnapshot& snapshot) {
   nlohmann::json doc = json_document("serve-status");
   if (!snapshot.error.empty())
@@ -208,4 +205,4 @@ RequestHandler make_status_handler(std::function<StatusSnapshot()> provider) {
   };
 }
 
-}  // namespace berth
+}

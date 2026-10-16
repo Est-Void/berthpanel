@@ -1,12 +1,5 @@
 #pragma once
 
-// src/util/result.h — the one error type for recoverable failures
-// (dev.md §4, §12.1). Every recoverable failure returns berth::Result<T>;
-// every error carries a context chain built with with_context(); discarding
-// a Result is a compile error via [[nodiscard]]. Invariant violations abort
-// and never travel through this type. Exceptions never cross module
-// boundaries. Owns no I/O and no global state.
-
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -26,13 +19,11 @@ class Error {
   Error& operator=(Error&&) = default;
   ~Error() = default;
 
-  // Adds an outer context layer. Call at each boundary that adds
-  // information; see with_context().
   void add_context(std::string context) {
     layers_.push_back(std::move(context));
   }
 
-  // Full chain, outermost context first, root cause last:
+  // Outermost context first, root cause last:
   // "registering service: reading state.json: enoent".
   [[nodiscard]] std::string ctx() const {
     std::string out;
@@ -44,7 +35,6 @@ class Error {
     return out;
   }
 
-  // The root cause without any context layers.
   [[nodiscard]] const std::string& root() const { return root_; }
 
  private:
@@ -134,8 +124,8 @@ class [[nodiscard]] Result<void> {
   std::variant<std::monostate, Error> data_;
 };
 
-// Wraps an error with one more context layer. Use at every boundary that
-// adds information; the bare error three frames deep is worthless (§4).
+// Use at every boundary that adds information; a bare error three frames deep
+// is worthless (§4).
 [[nodiscard]] inline Error with_context(Error e, std::string context) {
   e.add_context(std::move(context));
   return e;
@@ -161,4 +151,4 @@ template <typename T>
   return r;
 }
 
-}  // namespace berth
+}

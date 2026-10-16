@@ -29,4 +29,4 @@ Result<TempDir> TempDir::create(const std::string_view prefix) {
   return TempDir(dir);
 }
 
-}  // namespace berth
+}

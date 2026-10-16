@@ -1,5 +1,3 @@
-// src/tui/view_services.cpp — see view_services.h for the contract.
-
 #include "view_services.h"
 
 #include <cstddef>
@@ -22,8 +20,7 @@ void pad_to(std::string& out, const std::string_view text,
   }
 }
 
-}  // namespace
-
+}
 std::string services_header_line() {
   std::string head;
   pad_to(head, "SERVICE", kNameWidth);
@@ -42,9 +39,8 @@ std::vector<std::string> services_row_lines(
     std::string line;
     pad_to(line, row.service_name, kNameWidth);
     std::string state(berth::service_state_label(row.state));
-    // is-active still answers "active" for a SIGSTOPped service, so the freeze
-    // has to be visible here or the table claims a service is serving when it
-    // is not answering at all.
+    // is-active still answers "active" for a SIGSTOPped service, so the
+    // freeze has to be visible here.
     if (row.frozen && row.state == berth::ServiceState::kActive) {
       state = "frozen";
     }
@@ -70,10 +66,8 @@ std::vector<std::string> services_empty_lines() {
   };
 }
 
-// The kill confirmation. It MUST say what SIGKILL means — a killed service
-// loses whatever it had not flushed, and it stays down unless the unit itself
-// says Restart= — because a confirmation that hides the cost of saying yes is
-// not a confirmation.
+// It MUST say what SIGKILL costs; a confirmation that hides the cost of saying
+// yes is not a confirmation.
 std::vector<std::string> confirm_kill_lines(const berth::ServiceRow& row) {
   return {
       "kill " + row.service_name + "?",
@@ -139,9 +133,9 @@ std::size_t cursor_after_rows_refresh(
       }
     }
   }
-  // The selected service is gone (uninstalled, or the registry no longer lists
-  // it): keep the index if it still points somewhere, else start over.
+  // Gone from the list: keep the index if it still points somewhere, else
+  // start over.
   return cursor < new_rows.size() ? cursor : 0;
 }
 
-}  // namespace tui
+}

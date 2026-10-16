@@ -1,8 +1,3 @@
-// Tests for the FTXUI-free half of tui/ (stage 6.1, 6.2, 6.4): the chrome
-// data and the two view models. These modules exist precisely so the strings
-// and the layout rules are assertable without a terminal — the renderer in
-// tui/app.cpp is the only part that needs FTXUI, and it is not in this binary.
-
 #include "tui/chrome.h"
 #include "tui/view_catalog.h"
 #include "tui/view_services.h"
@@ -17,8 +12,7 @@
 
 namespace {
 
-// Doubled visual centre (first + last) of the non-space part of a line, so
-// no integer division has to be argued about.
+// Doubled centre (first + last): sidesteps integer division.
 std::size_t doubled_centre(const std::string& line) {
   const std::size_t first = line.find_first_not_of(' ');
   const std::size_t last = line.find_last_not_of(' ');
@@ -35,7 +29,7 @@ bool contains(const std::vector<std::string>& haystack,
   return false;
 }
 
-// The structured hints: `needle` may name either the key or the words.
+// `needle` may name either the key or the words.
 bool hint_contains(const std::vector<tui::KeyHint>& hints,
                    const std::string_view needle) {
   for (const tui::KeyHint& hint : hints) {
@@ -66,10 +60,7 @@ berth::Recipe sample_recipe() {
   return r;
 }
 
-// The My Services cursor is a SLOT in a table a refresh can change under it.
-// The failure this pins down: the highlight had already moved to
-// berthpanel-ascii-live while the dialog still named berthpanel-memos, so the
-// screen asked to delete a service nobody was looking at.
+// The cursor is a slot in a table a refresh can change under it.
 TEST(services_cursor_follows_its_service_across_a_refresh) {
   const auto row = [](const std::string& name) {
     berth::ServiceRow made;
@@ -82,30 +73,23 @@ TEST(services_cursor_follows_its_service_across_a_refresh) {
   const berth::ServiceRow other = row("berthpanel-other");
   const std::vector<berth::ServiceRow> before{ascii, memos};
 
-  // Unrelated change: the cursor stays on the service it was on.
   const std::vector<berth::ServiceRow> after{memos, ascii, other};
   CHECK(tui::cursor_after_rows_refresh(1, before, after) == 0);
   CHECK(tui::cursor_after_rows_refresh(0, before, after) == 1);
 
-  // The selected service was uninstalled: the index moves only as far as it
-  // still reaches, otherwise it starts over.
+  // Selected service uninstalled: move only as far as it still reaches.
   const std::vector<berth::ServiceRow> only_ascii{ascii};
   CHECK(tui::cursor_after_rows_refresh(1, before, only_ascii) == 0);
 
-  // Nothing left at all: 0, not an out-of-range index the table would then
-  // draw past its own end.
+  // Nothing left: 0, never an index the table draws past its own end.
   CHECK(tui::cursor_after_rows_refresh(1, before, {}) == 0);
   CHECK(tui::cursor_after_rows_refresh(0, {}, {}) == 0);
 
-  // An index that was already past the end (a cursor frozen by an open dialog)
-  // is repaired, not trusted.
+  // An index past the end (cursor frozen by a dialog) is repaired.
   CHECK(tui::cursor_after_rows_refresh(7, before, only_ascii) == 0);
 }
 
-}  // namespace
-
-// --- chrome ---------------------------------------------------------------
-
+}
 TEST(chrome_tabs_are_in_the_agreed_order_with_their_glyphs) {
   const std::span<const tui::TabSpec> specs = tui::tabs();
   CHECK(specs.size() == tui::kTabCount);
@@ -137,8 +121,7 @@ TEST(chrome_sign_lines_share_one_visual_centre) {
 }
 
 TEST(chrome_sign_has_a_left_margin_but_sign_lines_are_unchanged) {
-  // The mark is not flush against the border. The margin is applied by the
-  // renderer, so sign_lines() keeps its own columns (asserted above).
+  // The margin is the renderer's; sign_lines() keeps its own columns.
   CHECK(tui::kSignLeftMargin == 2);
 }
 
@@ -157,8 +140,7 @@ TEST(chrome_footer_names_the_keys_and_the_words) {
 }
 
 TEST(chrome_the_version_is_printed_verbatim) {
-  // `git describe` already emits the "v" of a tag; a second one in the
-  // tagline prefix read as "vv0.1.0" (§11: text claims drift from code).
+  // `git describe` already emits the tag's v; a second one read as "vv0.1.0".
   const std::string tagline = tui::tagline_line();
   CHECK(tagline == std::string(tui::kTaglinePrefix) + BERTH_VERSION);
   CHECK(tagline.find("vv") == std::string::npos);
@@ -170,14 +152,9 @@ TEST(chrome_the_version_is_printed_verbatim) {
   CHECK(tui::kTaglinePrefix.back() == ' ');
 }
 
-// --- catalog view model ----------------------------------------------------
-
 TEST(catalog_rows_exclude_the_header_and_the_cursor_indexes_recipes) {
-  // The list is a header plus one selectable row per recipe, and the screen's
-  // cursor indexes `recipes`. They MUST be separate: when the header was line 0
-  // of one vector, the highlight sat one row too high, so with two recipes the
-  // user could never reach the second one and Enter deployed a different recipe
-  // than the one shown.
+  // Header row and cursor index MUST stay separate, or Enter deploys a recipe
+  // other than the one shown.
   tui::Catalog catalog;
   catalog.recipes.push_back(sample_recipe());  // Memos
   berth::Recipe second = sample_recipe();
@@ -204,7 +181,7 @@ TEST(catalog_detail_lines_show_the_pin_the_tools_the_steps_and_the_command) {
   const std::vector<std::string> lines = tui::catalog_detail_lines(catalog, 0);
   CHECK(contains(lines, "2b2192d4e153bd04f1d325b60fd880cf00d68b01"));
   CHECK(contains(lines, "usememos/memos"));
-  CHECK(contains(lines, "go, git"));  // tools
+  CHECK(contains(lines, "go, git"));
   CHECK(contains(lines, "go build -o memos ./cmd/memos"));
   CHECK(contains(lines, "git fetch --depth 1"));
   CHECK(contains(lines, "berthpanel __deploy berthpanel-memos"));
@@ -223,9 +200,8 @@ TEST(catalog_detail_marks_a_user_recipe_as_such) {
 }
 
 TEST(catalog_render_step_keeps_arguments_together) {
-  // A path with a space must survive as ONE argument in the display text —
-  // nothing parses this back, but a display that lies about the argv is
-  // still a lie about the deploy.
+  // A path with a space stays ONE argument: a display that lies about the argv
+  // lies about the deploy.
   CHECK(tui::render_step({"sh", "-c", "echo hello world"}) ==
         "sh -c echo hello world");
   CHECK(tui::render_step({"cp", "/tmp/with space/bin", "/tmp/out"}) ==
@@ -270,8 +246,6 @@ TEST(catalog_removal_confirmation_says_recipe_not_the_deployed_service) {
   CHECK(contains(lines, "n  no, keep it"));
 }
 
-// --- services view model ---------------------------------------------------
-
 TEST(services_table_names_the_unit_the_state_the_port_and_the_pin) {
   std::vector<berth::ServiceRow> rows;
   berth::ServiceRow row;
@@ -298,8 +272,7 @@ TEST(services_table_names_the_unit_the_state_the_port_and_the_pin) {
 }
 
 TEST(services_uninstall_confirmation_says_the_data_stays) {
-  // §11: a silent data delete is forbidden, and so is hiding it behind a
-  // dialog. The confirmation MUST name the work dir and say it remains.
+  // A silent data delete is forbidden; the dialog MUST name the survivor.
   berth::ServiceRow row;
   row.service_name = "berthpanel-memos";
   const std::vector<std::string> lines = tui::confirm_uninstall_lines(row);
@@ -328,16 +301,13 @@ TEST(services_key_hints_name_every_action) {
   CHECK(hint_contains(hints, "u"));
   CHECK(hint_contains(hints, "uninstall"));
   CHECK(hint_contains(hints, "refresh"));
-  // The hint has to say what freeze really is: a SIGSTOPped service keeps its
-  // port, and calling that a pause would be a lie the user pays for.
+  // Freeze is SIGSTOP: calling it a pause would hide that it keeps its port.
   CHECK(hint_contains(hints, "keeps its port"));
   CHECK(hint_contains(hints, "not a suspend"));
 }
 
 TEST(services_table_shows_a_frozen_service_as_frozen) {
-  // is-active still answers "active" for a SIGSTOPped unit. A table that shows
-  // active for a process that cannot answer a request is the quiet wrong answer
-  // §11 is about, so the freeze has to be visible.
+  // is-active still answers active for a SIGSTOPped unit; freeze must show.
   berth::ServiceRow row;
   row.service_name = "berthpanel-memos";
   row.state = berth::ServiceState::kActive;
@@ -348,8 +318,7 @@ TEST(services_table_shows_a_frozen_service_as_frozen) {
   CHECK(contains({lines[0]}, "frozen"));
   CHECK(!contains({lines[0]}, "active"));
 
-  // Unfrozen, or frozen while systemd says otherwise, reads as the state
-  // systemd reports — the freeze flag only annotates an ACTIVE unit.
+  // The flag only annotates an ACTIVE unit; it never overrides systemd.
   row.frozen = false;
   CHECK(contains({tui::services_row_lines({row})[0]}, "active"));
   berth::ServiceRow dead = row;
@@ -369,8 +338,7 @@ TEST(services_kill_confirmation_says_what_sigkill_costs) {
   CHECK(contains(lines, "does NOT come back on its own"));
   // The reversible alternative is named, because it usually is what was meant.
   CHECK(contains(lines, "freeze it with p"));
-  // Shift-K, because 'k' is the panel-wide cursor key — the hint has to show
-  // the real key or the user presses k and nothing happens.
+  // 'k' is the panel-wide cursor key, so the real key must be shown.
   CHECK(hint_contains(tui::services_key_hints(), "K"));
   CHECK(hint_contains(tui::services_key_hints(), "kill"));
   CHECK(contains(lines, "y  yes, kill it"));

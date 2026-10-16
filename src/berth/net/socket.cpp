@@ -1,5 +1,3 @@
-// src/berth/net/socket.cpp — see socket.h for the contract.
-
 #include "socket.h"
 
 #include <netdb.h>
@@ -75,8 +73,7 @@ Result<addrinfo*> numeric_addrs(const std::string& ip,
   return res;
 }
 
-}  // namespace
-
+}
 std::chrono::milliseconds remaining_ms(
     const std::chrono::steady_clock::time_point deadline) {
   const auto left = deadline - std::chrono::steady_clock::now();
@@ -139,4 +136,4 @@ Result<int> tcp_connect(const std::string& ip, const std::string& port,
                " failed: " + last_error);
 }
 
-}  // namespace berth
+}

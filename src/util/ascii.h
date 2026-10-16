@@ -1,9 +1,7 @@
 #pragma once
 
-// src/util/ascii.h — single-byte character classes for untrusted text.
-// <cctype> is deliberately not used: its answers depend on the active
-// locale, and every caller here validates bytes that arrived from a recipe
-// file, a journal or a unit name.
+// <cctype> is deliberately unused: its answers are locale-dependent, and
+// every caller here validates untrusted bytes.
 
 #include <string_view>
 
@@ -42,13 +40,12 @@ namespace berth {
   return is_alnum(c) || c == '-' || c == '.' || c == '_' || c == '/';
 }
 
-// The stem of a systemd unit name, after the mandatory prefix. '@' is what
-// separates an instance name, so it stays legal inside the stem.
+// '@' stays legal inside a unit stem: it is what separates the instance name.
 [[nodiscard]] constexpr bool is_unit_stem_char(const char c) {
   return is_alnum(c) || c == '-' || c == '_' || c == '.' || c == '@';
 }
 
-// An EnvironmentFile key: POSIX-portable identifier, no leading digit.
+// EnvironmentFile key: POSIX-portable identifier, no leading digit.
 [[nodiscard]] constexpr bool is_env_key_first(const char c) {
   return is_alpha(c) || c == '_';
 }
@@ -67,4 +64,4 @@ template <typename Pred>
   return true;
 }
 
-}  // namespace berth
+}

@@ -1,5 +1,3 @@
-// src/berth/serve.cpp — see serve.h for the contract.
-
 #include "serve.h"
 
 #include <arpa/inet.h>
@@ -26,11 +24,8 @@ namespace berth {
 namespace {
 
 constexpr std::size_t kRecvChunk = 2048;
-// A static reply is held in memory; a larger file is refused rather than
-// risking an unbounded allocation. Static assets are small by design.
 constexpr std::uintmax_t kMaxFileBytes = std::uintmax_t{64} * 1024 * 1024;
-// Overflow guard while parsing Content-Length; anything above the max body
-// bound is a 413, so this only has to be comfortably larger than that.
+// Overflow guard for the Content-Length parse; must exceed the body bound.
 constexpr unsigned long long kContentLengthParseCap = 1ull << 40;
 
 int hex_digit(const char c) {
@@ -60,8 +55,7 @@ std::string trim_ascii(const std::string_view in) {
   return std::string(in.substr(begin, end - begin));
 }
 
-// One percent-decode. Returns false on a dangling or non-hex escape, which
-// the caller turns into a refusal rather than guessing at the byte.
+// A dangling or non-hex escape is a refusal, not a guessed byte.
 bool percent_decode(const std::string_view in, std::string* out) {
   out->clear();
   out->reserve(in.size());
@@ -83,8 +77,7 @@ bool percent_decode(const std::string_view in, std::string* out) {
   return true;
 }
 
-// Component-wise containment: the component version of the prefix check.
-// "/tmp/root" must not match "/tmp/root-evil" (dev.md §11 prefix traps).
+// "/tmp/root" must not match "/tmp/root-evil" (§11 prefix traps).
 bool path_within(const std::filesystem::path& root,
                  const std::filesystem::path& candidate) {
   auto r = root.begin();
@@ -209,10 +202,7 @@ struct ReadResult {
   ParsedRequestHead request;
 };
 
-// Reads the request head, bounded by max_head_bytes and the client timeout,
-// then the (unusual) body, bounded by max_body_bytes. Returns ok=false when
-// the connection should simply be dropped (EOF, timeout, cancel, or a reply
-// already sent).
+// ok=false means drop the connection (EOF, timeout, cancel, replied).
 ReadResult read_request(const int fd, const ServerConfig& config,
                         const std::atomic<bool>& cancel) {
   ReadResult result;
@@ -322,8 +312,7 @@ HttpResponse static_reply(const std::filesystem::path& root,
   return reply;
 }
 
-}  // namespace
-
+}
 const std::string* HttpRequest::header(const std::string_view name) const {
   for (const auto& h : headers) {
     if (h.first == name)
@@ -598,8 +587,7 @@ StaticResolution resolve_static_path(const std::filesystem::path& root,
   if (filename == "." || filename == "..")
     return {StaticStatus::kForbidden, {}};
 
-  // A missing path is DATA here; some std::filesystem implementations report
-  // it through ec as ENOENT, so only a different error is a refusal.
+  // A missing path is DATA: only a different error is a refusal.
   std::error_code ec;
   const std::filesystem::file_status candidate_status =
       std::filesystem::status(candidate, ec);
@@ -617,8 +605,7 @@ StaticResolution resolve_static_path(const std::filesystem::path& root,
       return {StaticStatus::kForbidden, {}};
     ec.clear();
     if (!std::filesystem::is_regular_file(index_status)) {
-      // No listing, ever: a directory request that has no index is refused
-      // rather than turned into a directory browse.
+      // No listing, ever: a directory without an index is refused.
       return {StaticStatus::kForbidden, {}};
     }
   }
@@ -697,4 +684,4 @@ std::string_view content_type_for(const std::string_view path) {
   return "application/octet-stream";
 }
 
-}  // namespace berth
+}

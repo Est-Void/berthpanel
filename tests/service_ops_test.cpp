@@ -1,8 +1,3 @@
-// Tests for service_ops.h (stage 6.2): the pure part — name validation and
-// the unit path the uninstaller builds — plus one opt-in live case against a
-// real systemd user manager. No network, no FTXUI: the screen that uses this
-// module is tested through its own view model, not through here.
-
 #include "berth/service_ops.h"
 
 #include <string>
@@ -50,12 +45,9 @@ berth::ServiceRecord memos() {
   return r;
 }
 
-// proc_stat_state is the instrument a freeze is confirmed with, and it has to
-// survive the two things /proc throws at it: a process name with spaces and
-// parentheses in it, and a line that is not what we expected.
+// /proc traps: comm may hold spaces and parens, and the line may not parse.
 TEST(proc_stat_state_reads_the_state_after_the_last_paren) {
   using berth::proc_stat_state;
-  // The ordinary case.
   CHECK(proc_stat_state("1234 (memos) S 1234 1 0 0 -1 4194560") == 'S');
   // comm with a space AND parentheses: everything up to the LAST ')' is comm.
   CHECK(proc_stat_state("99 (weird (name) here) T 99 1 0 0 -1 0") == 'T');
@@ -67,15 +59,12 @@ TEST(proc_stat_state_reads_the_state_after_the_last_paren) {
   CHECK(proc_stat_state("no parens here S 1") == '\0');
   CHECK(proc_stat_state("1234 (truncated") == '\0');
   CHECK(proc_stat_state("1234 (memos) ? 1 2") == '\0');
-  // A line that ends exactly at the space after ')' has no state character;
-  // indexing close+2 there is one past the end (the old '>' guard let it
-  // through).
+  // Ending at the space after ')' leaves no state char; close+2 is past end.
   CHECK(proc_stat_state("7 (a) ") == '\0');
   CHECK(proc_stat_state("7 (a)") == '\0');
 }
 
-}  // namespace
-
+}
 TEST(service_ops_unit_file_stays_inside_units_dir) {
   const TempDir tmp;
   const berth::Paths p = test_paths(tmp.path());
@@ -86,9 +75,8 @@ TEST(service_ops_unit_file_stays_inside_units_dir) {
 }
 
 TEST(service_ops_refuses_names_that_could_escape_units_dir) {
-  // §11: the unit CREATOR validates, so the remover must too, or a
-  // hand-edited registry entry deletes outside the unit directory. Every one
-  // of these is a traversal attempt or a missing prefix.
+  // The remover must validate too: a hand-edited registry entry would otherwise
+  // delete outside the unit directory (§11).
   const TempDir tmp;
   const berth::Paths p = test_paths(tmp.path());
 
@@ -102,11 +90,8 @@ TEST(service_ops_refuses_names_that_could_escape_units_dir) {
 }
 
 TEST(service_ops_accepted_names_cannot_add_a_path_component) {
-  // The complement of the refusal test, and the reason the '.service' suffix
-  // is appended rather than the name being used as a directory: '.' is a
-  // legal stem character, so "berthpanel-." is a legal name — and it must
-  // still resolve to a file DIRECTLY inside units_dir, not a component above
-  // it.
+  // '.' is legal in a stem, so "berthpanel-." is a legal name that must still
+  // resolve to a file DIRECTLY inside units_dir, never a component above it.
   const TempDir tmp;
   const berth::Paths p = test_paths(tmp.path());
 
@@ -120,9 +105,7 @@ TEST(service_ops_accepted_names_cannot_add_a_path_component) {
 }
 
 TEST(service_ops_start_and_stop_refuse_invalid_names_before_spawning) {
-  // The validation must happen in this module, not only inside units.cpp:
-  // an action on a bad name is a refusal with an explanation, never a
-  // systemctl call with a name we did not check.
+  // Validation lives here, not only in units.cpp: never systemctl a bad name.
   for (const char* bad : {"../evil", "memos", ""}) {
     CHECK(berth::service_start(bad).is_err());
     CHECK(berth::service_stop(bad).is_err());
@@ -131,9 +114,7 @@ TEST(service_ops_start_and_stop_refuse_invalid_names_before_spawning) {
 }
 
 TEST(service_ops_rows_report_the_registry_with_short_commits) {
-  // No unit exists for a TempDir registry, so every row comes back
-  // "unknown" rather than vanishing — a registry that cannot be queried is
-  // not a registry that is empty (§11).
+  // No unit for a TempDir registry: rows come back unknown, never vanish (§11).
   const TempDir tmp;
   const berth::Paths p = test_paths(tmp.path());
   CHECK(berth::registry_register(p, memos()).is_ok());
@@ -164,9 +145,7 @@ TEST(service_ops_uninstall_leaves_the_work_dir_and_removes_the_unit_file) {
   const berth::Paths p = test_paths(tmp.path());
   CHECK(berth::registry_register(p, memos()).is_ok());
 
-  // A unit file and a work dir that both exist. The work dir holds the
-  // user's data: uninstall must not touch it (§11 — a silent data delete is
-  // forbidden; a separate explicit purge policy is future work).
+  // The work dir holds the user's data; a silent delete is forbidden (§11).
   const std::filesystem::path unit = p.units_dir / "berthpanel-memos.service";
   CHECK(berth::ensure_dir(p.units_dir).is_ok());
   CHECK(berth::atomic_write(unit, "[Service]\n", berth::kPermShared).is_ok());
@@ -176,10 +155,8 @@ TEST(service_ops_uninstall_leaves_the_work_dir_and_removes_the_unit_file) {
             .is_ok());
 
   const auto removed = berth::service_uninstall(p, "berthpanel-memos");
-  // The live half (systemctl disable) needs a user manager; the file and
-  // registry half is what this test can assert without one. Either the whole
-  // call succeeded, or it failed at the systemctl step and nothing was
-  // deleted — never the other way round.
+  // The systemctl half needs a user manager: either all of it ran, or it
+  // failed there and nothing was deleted — never the other way round.
   if (removed.is_ok()) {
     CHECK(!std::filesystem::exists(unit));
     CHECK(std::filesystem::exists(work / "memos.db"));
@@ -193,10 +170,8 @@ TEST(service_ops_uninstall_leaves_the_work_dir_and_removes_the_unit_file) {
 }
 
 TEST(service_ops_live_status_and_stop_opt_in) {
-  // Opt-in only (dev.md §9): touches a real systemd user manager, so it is
-  // never in CI. The unit is a TRANSIENT one with a test-only name, created
-  // here and stopped here — no unit file, no registry entry and no live
-  // service of the user's is involved.
+  // Opt-in only, never in CI (§9): touches a real systemd user manager.
+  // is a transient, test-only one created and stopped here.
   std::lock_guard lock(berth::env_test_lock());
   ScopedEnv flag("BERTHPANEL_RUN_SANDBOX_TESTS");
   const auto enabled = berth::env_flag("BERTHPANEL_RUN_SANDBOX_TESTS");
@@ -210,8 +185,8 @@ TEST(service_ops_live_status_and_stop_opt_in) {
   probe.service_name = "berthpanel-svcop-probe";
   CHECK(berth::registry_register(p, probe).is_ok());
 
-  // The transient unit IS the record's service unit, so the row's is-active
-  // query finds it (build_unit_name would namespace it apart).
+  // The transient unit IS the record's unit, so the row's is-active query
+  // finds it (build_unit_name would namespace it apart).
   const berth::Result<std::string> systemd_run =
       berth::resolve_executable("systemd-run");
   CHECK(systemd_run.is_ok());
@@ -233,8 +208,7 @@ TEST(service_ops_live_status_and_stop_opt_in) {
   rows = berth::service_rows(p, &cancel);
   CHECK(rows.is_ok());
   // `--collect` unloads a transient unit once it stops, so is-active answers
-  // "unknown" rather than "inactive" — which is exactly the distinction
-  // ServiceState exists for. The contract is "not active".
+  // "unknown" rather than "inactive" — the contract is only "not active".
   CHECK(rows.value()[0].state != berth::ServiceState::kActive);
   const berth::Result<int> verdict =
       berth::systemctl_user_code({"is-active", probe.service_name + ".service"},
@@ -244,11 +218,8 @@ TEST(service_ops_live_status_and_stop_opt_in) {
 }
 
 TEST(service_ops_live_uninstall_opt_in) {
-  // Opt-in only. The unit file goes into the REAL units_dir under a
-  // test-only name, because that is the only way systemd finds it; the
-  // registry and the work dir stay inside the TempDir, and the uninstall
-  // removes the unit file it created. No live service of the user's is
-  // touched — the name cannot collide with a deployed one.
+  // Opt-in only. The unit file must land in the REAL units_dir or systemd never
+  // finds it; the test-only name cannot collide with a deployed service.
   std::lock_guard lock(berth::env_test_lock());
   ScopedEnv flag("BERTHPANEL_RUN_SANDBOX_TESTS");
   const auto enabled = berth::env_flag("BERTHPANEL_RUN_SANDBOX_TESTS");
@@ -289,7 +260,6 @@ TEST(service_ops_live_uninstall_opt_in) {
   const auto listed = berth::registry_list(p);
   CHECK(listed.is_ok());
   CHECK(listed.value().empty());
-  // The stop really happened: the unit is gone from the manager too.
   const berth::Result<int> verdict =
       berth::systemctl_user_code({"is-active", probe.service_name + ".service"},
                                  std::chrono::milliseconds(5000), nullptr);

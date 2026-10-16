@@ -1,8 +1,7 @@
 #pragma once
 
-// src/util/strutil.h — pure string helpers with explicit delimiters.
-// Splitting or joining on whitespace is banned project-wide (dev.md §11);
-// every delimiter here is explicit. Owns nothing else.
+// Delimiters are always explicit: splitting or joining on whitespace is
+// banned project-wide (§11), spaces in paths are why.
 
 #include <cstdio>
 #include <cstdlib>
@@ -19,11 +18,9 @@ inline void abort_empty_delimiter() {
   std::abort();
 }
 
-}  // namespace detail
-
-// Splits on every occurrence of delim, keeping empty fields:
-// split("a,,b", ",") -> {"a", "", "b"}; split("", ",") -> {""}.
-// Never trims; whitespace is data, not a delimiter.
+// Keeps empty fields (split("a,,b", ",") -> {"a", "", "b"}) and never trims:
+// whitespace is data, not a delimiter.
+}
 inline std::vector<std::string> split(std::string_view text,
                                       std::string_view delim) {
   if (delim.empty())
@@ -55,7 +52,7 @@ inline std::string join(const std::vector<std::string>& parts,
   return out;
 }
 
-// Trims ASCII whitespace from both ends. Whitespace inside is preserved.
+// Whitespace inside is preserved.
 inline std::string_view trim(std::string_view s) {
   constexpr std::string_view kWhitespace = " \t\n\v\f\r";
   const std::size_t begin = s.find_first_not_of(kWhitespace);
@@ -65,9 +62,8 @@ inline std::string_view trim(std::string_view s) {
   return s.substr(begin, end - begin + 1);
 }
 
-// Exact-prefix/exact-suffix checks. For URLs the rule is stricter still
-// (§6.3: exact host match, never substring) — starts_with is the tool for
-// that, `find` is not.
+// URLs need an exact host match, never a substring (§6.3) — these are the
+// tool for that, `find` is not.
 [[nodiscard]] inline bool starts_with(std::string_view s,
                                       std::string_view prefix) {
   return s.starts_with(prefix);
@@ -78,4 +74,4 @@ inline std::string_view trim(std::string_view s) {
   return s.ends_with(suffix);
 }
 
-}  // namespace berth
+}

@@ -17,8 +17,8 @@ Result<std::string> gunzip(const std::string_view compressed,
       reinterpret_cast<Bytef*>(const_cast<char*>(compressed.data()));
   stream.avail_in = static_cast<uInt>(compressed.size());
 
-  // 16 + MAX_WBITS: gzip wrapper. The 32 variant would also accept zlib
-  // streams; we want gzip only, so a wrong container is a loud error.
+  // 16 + MAX_WBITS: gzip only. The 32 variant would also accept zlib streams,
+  // and a wrong container must be a loud error.
   const int init = ::inflateInit2(&stream, 16 + MAX_WBITS);
   if (init != Z_OK)
     return Error("gzip: inflateInit2 failed: " + std::to_string(init));
@@ -59,4 +59,4 @@ Result<std::string> gunzip(const std::string_view compressed,
   return out;
 }
 
-}  // namespace berth
+}

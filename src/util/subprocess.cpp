@@ -25,14 +25,13 @@ namespace berth {
 
 namespace {
 
-// Cancellation and the deadline are only observed between poll calls, so
-// poll never sleeps longer than one slice (dev.md §5: every wait is
-// interruptible).
+// Cancellation and the deadline are only observed between poll calls, so poll
+// never sleeps longer than one slice (§5: every wait is interruptible).
 constexpr int kPollSliceMs = 200;
 constexpr int kWaitSliceMs = 10;
 
-// The child's four pipe ends. The write ends are closed the moment the child
-// exists, so poll sees EOF when it exits instead of hanging forever.
+// The write ends are closed the moment the child exists, so poll sees EOF when
+// it exits instead of hanging forever.
 struct ChildPipes {
   FdGuard out_read;
   FdGuard out_write;
@@ -40,8 +39,6 @@ struct ChildPipes {
   FdGuard err_write;
 };
 
-// Owns the spawn action list from the moment it is initialised, so an early
-// return while wiring the pipes cannot leak it.
 class SpawnActions {
  public:
   SpawnActions() = default;
@@ -54,10 +51,9 @@ class SpawnActions {
 
   [[nodiscard]] posix_spawn_file_actions_t* get() { return &actions_; }
 
-  // `cwd` is applied INSIDE wire() on purpose: the list is init'd here, and
-  // posix_spawn_file_actions_init() discards anything added before it — a
-  // chdir added by the caller first is silently lost, which is exactly the kind
-  // of bug that looks like the child ignored the argument.
+  // `cwd` is applied INSIDE wire() on purpose: posix_spawn_file_actions_init()
+  // discards anything added before it, so a chdir added by the caller first
+  // is silently lost — a bug that looks like the child ignored the argument.
   [[nodiscard]] Result<void> wire(const int out_fd, const int err_fd,
                                   const std::filesystem::path* cwd);
 
@@ -110,9 +106,8 @@ Result<std::vector<char*>> child_argv(const std::vector<std::string>& argv) {
   return out;
 }
 
-// Merges extra_env over the inherited environment. An entry without '=' or
-// with an empty name is refused rather than passed through: the child would
-// ignore it, or read the rest as the value (§11: empty means unset).
+// An entry without '=' or with an empty name is refused rather than passed
+// through: the child would ignore it, or read the rest as the value (§11).
 Result<std::vector<std::string>> merged_env(const RunLimits& limits) {
   std::vector<std::string> storage;
   if (limits.extra_env == nullptr || limits.extra_env->empty())
@@ -144,8 +139,7 @@ Result<std::vector<std::string>> merged_env(const RunLimits& limits) {
   return storage;
 }
 
-// Fills `out` with pointers into `storage`. The caller owns `out`: the
-// pointers stay valid only while it is alive.
+// `out` holds pointers into `storage`; they stay valid only while it is alive.
 void env_pointers(std::vector<std::string>& storage, std::vector<char*>* out) {
   out->reserve(storage.size() + 1);
   for (std::string& entry : storage) {
@@ -161,8 +155,8 @@ Result<void> add_dup2(posix_spawn_file_actions_t* actions, const int from,
   return {};
 }
 
-// chdir BEFORE the dup2s: posix_spawn applies the file actions in order, and
-// the pipe ends must be in place before the child starts talking.
+// chdir BEFORE the dup2s: file actions apply in order, and the pipe ends must
+// be in place before the child starts talking.
 Result<void> add_chdir(posix_spawn_file_actions_t* actions,
                        const std::filesystem::path& cwd) {
   if (::posix_spawn_file_actions_addchdir_np(actions, cwd.c_str()) != 0) {
@@ -212,8 +206,8 @@ Result<pid_t> spawn_child(const std::string& path,
   return pid;
 }
 
-// Owns the child between spawn and reap: every early return below goes
-// through kill(), so no failure path can leave a process behind.
+// Every early return after spawn must go through kill(); nothing else reaps
+// the child.
 class ChildGuard {
  public:
   ChildGuard(const pid_t pid, std::string path)
@@ -240,8 +234,6 @@ class ChildGuard {
   std::string path_;
 };
 
-// Everything the two wait loops below share: who to kill, how long to keep
-// waiting, and where the stderr tail for the failure message comes from.
 struct Wait {
   const ChildGuard* child = nullptr;
   const RunLimits* limits = nullptr;
@@ -264,7 +256,7 @@ std::string tail_of(const std::string& s, const std::size_t max_len) {
   return s.substr(s.size() - max_len);
 }
 
-// The single abort point for both loops. Returns an Error that has already
+// The single abort point for both loops; the returned Error has already
 // killed the child.
 Result<void> check_alive(const Wait& wait) {
   if (cancelled(*wait.limits)) {
@@ -277,8 +269,8 @@ Result<void> check_alive(const Wait& wait) {
   return {};
 }
 
-// One read from a capture pipe. Returns true at EOF; a full buffer stops
-// appending but keeps draining, so the child never blocks on a full pipe.
+// Returns true at EOF; a full buffer stops appending but keeps draining, so
+// the child never blocks on a full pipe.
 bool pump(const int fd, std::string& sink, const std::size_t cap,
           bool* truncated) {
   char buf[4096];
@@ -383,8 +375,7 @@ Result<void> decode_status(const int status, const std::string& path,
   return Error("subprocess: undecodable wait status for " + path);
 }
 
-}  // namespace
-
+}
 Result<RunOutput> run(const std::vector<std::string>& argv,
                       const RunLimits& limits) {
   const Result<void> request = check_request(argv, limits);
@@ -438,4 +429,4 @@ Result<RunOutput> run(const std::vector<std::string>& argv,
   return output;
 }
 
-}  // namespace berth
+}

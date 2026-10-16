@@ -1,10 +1,7 @@
 #pragma once
 
-// src/core/netlog.h — the net.log WRITER (dev.md §6.1). The allowlist policy
-// it enforces lives in allowlist.h, which this header re-exports so callers
-// need one include. Every attempt — allowed, refused, failed — lands here,
-// before and after the request, and is counted in netstatus.h for the panel's
-// NET banner. Owns no sockets.
+// Every attempt — allowed, refused, failed — lands here; this module owns no
+// sockets.
 
 #include <cstdint>
 #include <string_view>
@@ -17,16 +14,15 @@ namespace berth {
 
 struct NetlogEntry {
   std::string_view host;
-  std::string_view ip;  // connected/attempted address; may be empty
+  std::string_view ip;  // attempted address; may be empty
   std::uint16_t port = 0;
-  std::string_view purpose;  // "https-get", "doh", "egress-probe", ...
-  std::string_view note;     // outcome: status code, error, stop reason
-  bool allowed = true;       // false marks a refused attempt (still logged!)
+  std::string_view purpose;
+  std::string_view note;
+  bool allowed = true;  // false marks a refused attempt, which is still logged
 };
 
-// Appends one ISO-8601 UTC line to net.log (0600). Thread-safe: a mutex
-// plus a single O_APPEND write per entry.
+// Thread-safe: one mutex, one O_APPEND write per entry, into the 0600 net.log.
 [[nodiscard]] Result<void> netlog_append(const Paths& paths,
                                          const NetlogEntry& entry);
 
-}  // namespace berth
+}

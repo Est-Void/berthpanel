@@ -35,8 +35,7 @@ std::string self_exe() {
   return std::string(buf);
 }
 
-}  // namespace
-
+}
 TEST(lock_acquire_and_release) {
   const TempDir tmp;
   const berth::Paths p = test_paths(tmp.path());

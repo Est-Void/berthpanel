@@ -52,8 +52,7 @@ Recipe go_recipe(const std::string& service_name = "berthpanel-myapp") {
   return r;
 }
 
-}  // namespace
-
+}
 TEST(recipe_edit_apply_changes_only_the_set_fields) {
   const Recipe base = go_recipe();
   RecipeEdits edits;

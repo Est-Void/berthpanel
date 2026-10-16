@@ -27,8 +27,7 @@ void put_executable(const std::filesystem::path& dir, const std::string& name) {
   CHECK(::chmod(file.c_str(), 0755) == 0);
 }
 
-}  // namespace
-
+}
 TEST(which_finds_executable_on_path) {
   const TempDir tmp;
   put_executable(tmp.path() / "bin", "faketool");

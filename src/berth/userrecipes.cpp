@@ -1,5 +1,3 @@
-// src/berth/userrecipes.cpp — see userrecipes.h for the contract.
-
 #include "userrecipes.h"
 
 #include <algorithm>
@@ -19,10 +17,7 @@ namespace berth {
 
 namespace {
 
-// The service name is the file name and the unit stem; both are bounded by
-// the ONE shared validator (§11: a creator and a remover must not disagree).
-// The prefix is forced rather than merely demanded, so a user-supplied
-// "myapp" lands as "berthpanel-myapp".
+// The prefix is forced, not demanded, so "myapp" lands as "berthpanel-myapp".
 Result<std::string> normalize_service_name(const std::string& service_name) {
   const std::string prefixed = force_unit_prefix(service_name);
   if (!validate_unit_name(prefixed)) {
@@ -39,8 +34,7 @@ std::filesystem::path recipe_file(const Paths& paths,
   return paths.recipes_dir / (service_name + ".json");
 }
 
-}  // namespace
-
+}
 Result<std::filesystem::path> user_recipe_store(const Paths& paths,
                                                 const Recipe& recipe,
                                                 const bool force) {
@@ -50,17 +44,14 @@ Result<std::filesystem::path> user_recipe_store(const Paths& paths,
 
   Recipe stored = recipe;
   stored.service_name = name.value();
-  // The ONE validator, at store time — a recipe that cannot pass it must
-  // never reach the directory, let alone a deploy (plan 4.19).
+  // The ONE validator, at store time: an invalid recipe never reaches the disk.
   Result<void> valid = validate_recipe(stored);
   if (valid.is_err()) {
     return Error("userrecipes: recipe '" + name.value() +
                  "' rejected: " + valid.error().ctx());
   }
 
-  // Duplicate policy: silently replacing a stored recipe (or shadowing a
-  // curated one) hides whose definition actually deploys. Both need the
-  // explicit `force`.
+  // Replacing or shadowing a builtin hides what deploys: both need `force`.
   if (!force) {
     const Result<std::optional<Recipe>> existing =
         user_recipe_get(paths, name.value());
@@ -83,7 +74,7 @@ Result<std::filesystem::path> user_recipe_store(const Paths& paths,
   if (dir.is_err())
     return std::move(dir).error();
   const std::filesystem::path target = recipe_file(paths, name.value());
-  // 0644: recipes carry env KEYS, never values (secrets.cpp holds those).
+  // 0644: env KEYS only, never values.
   Result<void> written =
       atomic_write(target, recipe_to_json(stored).dump(2) + "\n", kPermShared);
   if (written.is_err())
@@ -91,16 +82,17 @@ Result<std::filesystem::path> user_recipe_store(const Paths& paths,
   return target;
 }
 
-Result<std::vector<Recipe>> user_recipes_load(const Paths& paths) {
+namespace {
+
+Result<std::vector<std::filesystem::path>> recipe_files(const Paths& paths) {
   std::error_code ec;
   if (!std::filesystem::exists(paths.recipes_dir, ec)) {
     if (ec) {
       return Error("userrecipes: stat " + paths.recipes_dir.string() + ": " +
                    ec.message());
     }
-    return std::vector<Recipe>{};  // nothing stored yet, not an error
+    return std::vector<std::filesystem::path>{};  // nothing stored yet
   }
-
   std::vector<std::filesystem::path> files;
   for (const std::filesystem::directory_entry& item :
        std::filesystem::directory_iterator(paths.recipes_dir, ec)) {
@@ -117,34 +109,44 @@ Result<std::vector<Recipe>> user_recipes_load(const Paths& paths) {
                  ec.message());
   }
   std::sort(files.begin(), files.end());
+  return files;
+}
 
+// One corrupt file is loud: json_load already quarantined it, name WHICH.
+Result<Recipe> load_validated(const std::filesystem::path& file) {
+  Result<nlohmann::json> loaded = json_load(file);
+  if (loaded.is_err()) {
+    return Error("userrecipes: " + file.string() + ": " + loaded.error().ctx());
+  }
+  Result<Recipe> parsed = recipe_from_json(loaded.value());
+  if (parsed.is_err()) {
+    return Error("userrecipes: " + file.string() + ": " + parsed.error().ctx());
+  }
+  Result<void> valid = validate_recipe(parsed.value());
+  if (valid.is_err()) {
+    return Error("userrecipes: " + file.string() +
+                 " failed validation: " + valid.error().ctx());
+  }
+  // A renamed hand-edit must not store a recipe its file cannot find again.
+  if (file.filename().replace_extension() != parsed.value().service_name) {
+    return Error("userrecipes: " + file.string() + ": service_name '" +
+                 parsed.value().service_name +
+                 "' does not match the file name");
+  }
+  return std::move(parsed).value();
+}
+
+}
+
+Result<std::vector<Recipe>> user_recipes_load(const Paths& paths) {
+  const Result<std::vector<std::filesystem::path>> files = recipe_files(paths);
+  if (files.is_err())
+    return std::move(files).error();
   std::vector<Recipe> recipes;
-  for (const std::filesystem::path& file : files) {
-    Result<nlohmann::json> loaded = json_load(file);
-    if (loaded.is_err()) {
-      // json_load already quarantined the corrupt file loudly; add the
-      // file name so the user knows WHICH recipe is out.
-      return Error("userrecipes: " + file.string() + ": " +
-                   loaded.error().ctx());
-    }
-    Result<Recipe> parsed = recipe_from_json(loaded.value());
-    if (parsed.is_err()) {
-      return Error("userrecipes: " + file.string() + ": " +
-                   parsed.error().ctx());
-    }
-    Result<void> valid = validate_recipe(parsed.value());
-    if (valid.is_err()) {
-      return Error("userrecipes: " + file.string() +
-                   " failed validation: " + valid.error().ctx());
-    }
-    // The file name IS the service name (§11: every value reaching a path
-    // is validated). A renamed hand-edit must not store a recipe under a
-    // name its file cannot be removed or found by again.
-    if (file.filename().replace_extension() != parsed.value().service_name) {
-      return Error("userrecipes: " + file.string() + ": service_name '" +
-                   parsed.value().service_name +
-                   "' does not match the file name");
-    }
+  for (const std::filesystem::path& file : files.value()) {
+    Result<Recipe> parsed = load_validated(file);
+    if (parsed.is_err())
+      return std::move(parsed).error();
     recipes.push_back(std::move(parsed).value());
   }
   return recipes;
@@ -166,7 +168,7 @@ Result<std::optional<Recipe>> user_recipe_get(
 
 Result<bool> user_recipe_remove(const Paths& paths,
                                 const std::string_view service_name) {
-  // §11: the remover runs the SAME validator the creator ran.
+  // The remover runs the SAME validator the creator ran (§11).
   if (!validate_unit_name(service_name)) {
     return Error("userrecipes: invalid service name: '" +
                  std::string(service_name) + "'");
@@ -215,4 +217,4 @@ nlohmann::json user_recipes_json(const std::vector<Recipe>& recipes) {
   return doc;
 }
 
-}  // namespace berth
+}

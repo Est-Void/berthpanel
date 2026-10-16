@@ -1,5 +1,3 @@
-// src/core/state.cpp — see state.h for the contract.
-
 #include "state.h"
 
 #include <algorithm>
@@ -86,8 +84,7 @@ DocStore<ServiceRecord> store_for(const Paths& paths) {
                                  service_from_json, record_key);
 }
 
-}  // namespace
-
+}
 Result<Registry> registry_load(const Paths& paths) {
   Result<std::vector<ServiceRecord>> loaded = store_for(paths).load();
   if (loaded.is_err()) {
@@ -169,4 +166,4 @@ nlohmann::json services_json(const std::vector<ServiceRecord>& services) {
   return doc;
 }
 
-}  // namespace berth
+}

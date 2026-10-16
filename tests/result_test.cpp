@@ -36,8 +36,7 @@ Result<std::string> top_fails() {
   return r.value();
 }
 
-}  // namespace
-
+}
 TEST(result_ok_holds_value) {
   const Result<int> r = 42;
   CHECK(r.is_ok());

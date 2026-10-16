@@ -1,4 +1,3 @@
-// src/berth/backup.cpp — see backup.h for the contract.
 
 #include "backup.h"
 
@@ -41,9 +40,7 @@ std::string octal_digits(std::uint64_t value) {
   return digits;
 }
 
-// Writes a NUL-terminated octal field of `width` bytes at `off`. False when
-// the value does not fit, which fails the whole archive loudly rather than
-// silently truncating (the §11 truncated-archive trap).
+// False when the value does not fit: the archive fails, never truncates.
 bool put_octal(std::string* block, const std::size_t off,
                const std::size_t width, const std::uint64_t value) {
   const std::string digits = octal_digits(value);
@@ -61,7 +58,7 @@ std::string checksum_field(const unsigned int sum) {
   return field;
 }
 
-// One 512-byte ustar header. `link` is used only for typeflag '2'.
+// `link` is used only for typeflag '2'.
 Result<std::string> build_header(const std::string& name,
                                  const std::uint32_t mode, const char typeflag,
                                  const std::uint64_t size,
@@ -124,8 +121,7 @@ struct Entry {
   std::uint64_t size = 0;
 };
 
-// Full-field construction so no aggregate initializer skips a member (which
-// trips -Wmissing-field-initializers under -Wextra).
+// Every field set explicitly: a skipped member trips the warning.
 Entry make_entry(std::string name, const char typeflag,
                  const std::uint32_t mode) {
   Entry entry;
@@ -310,8 +306,7 @@ Result<bool> service_active(const std::string& service,
   return code.value() == 0;
 }
 
-}  // namespace
-
+}
 std::filesystem::path default_backup_path(const Paths& paths,
                                           const std::string_view service) {
   return paths.state_dir / "backups" / (std::string(service) + ".tar");
@@ -431,9 +426,8 @@ Result<RestoreReport> restore_from_archive(const Paths& paths,
   if (listed.is_err())
     return std::move(listed).error();
 
-  // The archive is OURS: only `data/` and `secrets.env` may appear at the
-  // top level. Anything else is refused, so a tampered archive cannot drop a
-  // file somewhere the restore path never intended (§11).
+  // Only `data/` and `secrets.env` may appear at the top level: a tampered
+  // archive must not be able to drop a file anywhere else.
   for (const TarEntry& entry : listed.value()) {
     std::string name = entry.name;
     if (!name.empty() && name.back() == '/')
@@ -565,4 +559,4 @@ Result<RestoreReport> restore_service(const Paths& paths,
   return restore_from_archive(paths, service, bytes.value(), force);
 }
 
-}  // namespace berth
+}

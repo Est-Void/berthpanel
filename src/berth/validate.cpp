@@ -1,5 +1,3 @@
-// src/berth/validate.cpp — see validate.h for the contract.
-
 #include "validate.h"
 
 #include "../util/ascii.h"
@@ -19,8 +17,7 @@ struct DenyRule {
   const char* pattern;
 };
 
-// The denylist. Any change here lands with a matching test change
-// (validate_test pins shape and behavior). ECMAScript syntax.
+// Any change here lands with a matching test change. ECMAScript syntax.
 constexpr DenyRule kDenylist[] = {
     {"sudo-or-su", R"((^|\s)(sudo|su)\s)"},
     {"pipe-to-shell", R"((curl|wget|fetch)[^|]*\|\s*(ba|z|da)?sh\b)"},
@@ -35,8 +32,7 @@ struct CompiledDenylist {
   std::vector<std::pair<std::string, std::regex>> rules;
 };
 
-// Compiled lazily, once; a failure to compile any pattern aborts the
-// process — silently skipping a rule is the exact §11 bug.
+// Compiled lazily, once; a pattern that fails to compile aborts the process.
 const CompiledDenylist& compiled_denylist() {
   static CompiledDenylist compiled = [] {
     CompiledDenylist out;
@@ -72,14 +68,12 @@ std::vector<std::string> scan_line(const std::string_view line) {
   return matched;
 }
 
-}  // namespace
-
+}
 std::vector<std::string> matched_dangerous_patterns(
     const std::vector<std::string>& argv) {
   (void)compiled_denylist();  // fail loudly before first real use
-  // Each element on its own, then the joined line for cross-argument
-  // shapes: ["rm", "-rf", "/"] must be caught even though no single
-  // element matches (§8: argv is the currency; the join is scan-only).
+  // Elements alone, then the joined line: ["rm", "-rf", "/"] matches no single
+  // element. Scan-only: commands are never rebuilt from the join.
   std::string joined;
   std::vector<std::string> matched;
   for (const std::string& arg : argv) {
@@ -122,9 +116,7 @@ Result<void> validate_owner_repo(const std::string_view owner_repo) {
     return Error("validate: bad character in '" + std::string(owner_repo) +
                  "'");
   }
-  // "." and ".." pass is_repo_char (which allows '.'), but they are path
-  // components, not names: "../foo" would build a URL path that walks up a
-  // directory on the API host. Reject them here, at the one validator.
+  // "." and ".." pass is_repo_char but walk up a path on the API host.
   const std::string_view owner = owner_repo.substr(0, slash);
   const std::string_view repo = owner_repo.substr(slash + 1);
   if (owner == "." || owner == ".." || repo == "." || repo == "..") {
@@ -147,4 +139,4 @@ Result<void> validate_commit_sha(const std::string_view sha) {
   return {};
 }
 
-}  // namespace berth
+}

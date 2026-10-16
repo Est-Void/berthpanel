@@ -64,8 +64,7 @@ berth::ScanReport collected_report() {
   return report;
 }
 
-}  // namespace
-
+}
 TEST(scan_summary_reports_the_first_thing_that_is_not_ready) {
   const berth::ScanReport report = collected_report();
   // One tool is missing, so "ready to deploy" would be a lie.

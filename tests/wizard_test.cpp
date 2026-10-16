@@ -76,8 +76,7 @@ berth::DraftResult sample_result() {
   return result;
 }
 
-}  // namespace
-
+}
 TEST(wizard_a_free_name_reports_no_clash) {
   const TempDir tmp;
   const berth::Paths p = test_paths(tmp.path());

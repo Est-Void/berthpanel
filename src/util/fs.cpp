@@ -21,8 +21,8 @@ bool is_dot_entry(const char* name) {
          (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'));
 }
 
-// ENOENT during a cleanup walk means a concurrent process got there first,
-// which is not this walk's failure.
+// ENOENT means a concurrent process got there first, which is not this
+// walk's failure.
 bool vanished(const int saved_errno) {
   return saved_errno == ENOENT;
 }
@@ -36,8 +36,8 @@ Result<std::size_t> remove_children(const int dirfd);
 Result<std::size_t> remove_directory(const int dirfd, const std::string& name) {
   const int child_fd = ::openat(
       dirfd, name.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-  // ELOOP: the entry stopped being a directory between the stat and the
-  // open. The plain rmdir below then fails loudly if it is not ours.
+  // ELOOP: the entry stopped being a directory between the stat and the open.
+  // The plain rmdir below then fails loudly if it is not ours.
   if (child_fd >= 0) {
     const FdGuard guard(child_fd);
     const Result<std::size_t> nested = remove_children(child_fd);
@@ -125,8 +125,7 @@ Result<std::size_t> unlink_root(const std::filesystem::path& root) {
   return 1;
 }
 
-}  // namespace
-
+}
 Result<void> ensure_dir(const std::filesystem::path& dir,
                         std::filesystem::perms perms) {
   std::error_code ec;
@@ -201,4 +200,4 @@ Result<std::size_t> remove_tree(const std::filesystem::path& root) {
   return children.value() + 1;
 }
 
-}  // namespace berth
+}

@@ -1,5 +1,3 @@
-// src/berth/lock.cpp — see lock.h for the contract.
-
 #include "lock.h"
 
 #include <fcntl.h>
@@ -44,4 +42,4 @@ int lock_test_child(const char* lock_path) {
   return 0;
 }
 
-}  // namespace berth
+}

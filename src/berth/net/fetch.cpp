@@ -1,5 +1,3 @@
-// src/berth/net/fetch.cpp — see fetch.h for the contract.
-
 #include "fetch.h"
 
 #include <atomic>
@@ -15,9 +13,7 @@ namespace berth {
 
 namespace {
 
-// Adapts resolve_host's ResolvedIp to the plain address list the client
-// asks for. Deliberately thin: the client does not need to know whether an
-// address is v4 or v6, only how to reach it.
+// The client only needs how to reach an address, not whether it is v4 or v6.
 [[nodiscard]] Result<std::vector<std::string>> resolve_to_addresses(
     const std::string_view host, const std::chrono::milliseconds budget,
     const std::atomic<bool>* cancel, const Paths& paths) {
@@ -34,12 +30,11 @@ namespace {
   return addresses;
 }
 
-}  // namespace
-
+}
 Result<HttpReply> http_get(const std::string& url,
                            const HttpGetOptions& options, const Paths& paths) {
   return berth::http_get(url, options, paths,
                          ResolveHost(&resolve_to_addresses));
 }
 
-}  // namespace berth
+}

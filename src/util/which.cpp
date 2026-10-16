@@ -1,5 +1,3 @@
-// src/util/which.cpp — see which.h for the contract.
-
 #include "which.h"
 
 #include <unistd.h>
@@ -41,4 +39,4 @@ Result<std::string> resolve_executable(const std::string& name) {
   return Error("which: not found on PATH: " + name);
 }
 
-}  // namespace berth
+}

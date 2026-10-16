@@ -33,8 +33,7 @@ void put_tool(const std::filesystem::path& dir, const std::string& name,
   CHECK(::chmod(file.c_str(), 0755) == 0);
 }
 
-}  // namespace
-
+}
 TEST(toolcheck_reports_present_and_missing) {
   const TempDir tmp;
   put_tool(tmp.path() / "bin", "bun", "1.1.20");

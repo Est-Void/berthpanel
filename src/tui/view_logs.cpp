@@ -1,5 +1,3 @@
-// src/tui/view_logs.cpp — see view_logs.h for the contract.
-
 #include "view_logs.h"
 
 #include <array>
@@ -32,12 +30,10 @@ const LogSpec& spec_of(const LogFile file) {
       return spec;
     }
   }
-  // A closed table with three entries; anything else is a bug in the caller.
   std::abort();
 }
 
-}  // namespace
-
+}
 std::string_view log_file_label(const LogFile file) {
   return spec_of(file).label;
 }
@@ -66,7 +62,6 @@ std::vector<std::string> log_empty_lines(const LogFile file) {
   std::vector<std::string> lines;
   switch (file) {
     case LogFile::kCrash:
-      // The one good outcome, said as a good outcome.
       lines.push_back("crash.log is empty: nothing has crashed.");
       lines.push_back("That is the state you want it in. It is created on the");
       lines.push_back("first crash, so an absent file and an empty one mean");
@@ -95,8 +90,6 @@ std::vector<std::string> log_error_lines(const LogFile file,
   for (const std::string& part : berth::split(error, "\n")) {
     lines.push_back("  " + part);
   }
-  // A failed read is not an empty log, and the screen must not let the two look
-  // alike (§11).
   lines.push_back(
       "this is NOT the same as an empty file: the contents are "
       "unknown right now.");
@@ -105,7 +98,7 @@ std::vector<std::string> log_error_lines(const LogFile file,
 
 std::string net_banner(const berth::NetSnapshot& snapshot) {
   if (snapshot.total == 0) {
-    return {};  // no row of zeroes: nothing has been asked for yet
+    return {};
   }
   std::string out = "NET " + std::to_string(snapshot.total) + " (" +
                     std::to_string(snapshot.denied) + " denied)";
@@ -125,7 +118,6 @@ std::string net_banner_note(const berth::NetSnapshot& snapshot) {
                     " denied — counted from the moment the request was made, "
                     "before the log line was written";
   if (snapshot.denied > 0) {
-    // A refusal is a bug or a misconfiguration; it deserves a word of its own.
     out += "  — a DENIED line is in net.log with the reason";
   }
   return out;
@@ -152,4 +144,4 @@ std::string log_tabs_line(
   return out;
 }
 
-}  // namespace tui
+}

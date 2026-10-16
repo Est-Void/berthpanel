@@ -1,12 +1,10 @@
-// CLI entry point: dispatches flags, one-shot subcommands, and — with no
-// arguments on a terminal — the interactive panel. Owns nothing beyond
-// dispatch: real work lives in modules. This file stays the ONLY bridge
-// between the two worlds (dev.md §5: berth must not depend on tui).
+// berth must not depend on tui — this file is the only bridge (§5).
 
 #include <atomic>
 #include <csignal>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -135,17 +133,12 @@ int deploy_command(const std::string_view service,
   const berth::Result<berth::Paths> paths = berth::paths_from_env();
   if (paths.is_err())
     return fail(paths.error().ctx());
-  // One deploy path for curated and BYO recipes: user recipes override
-  // builtin ones (berth/catalog.h).
   const berth::Result<berth::Recipe> recipe =
       berth::resolve_recipe(paths.value(), service);
   if (recipe.is_err())
     return fail(recipe.error().ctx());
 
-  // Upgrade gate (stage 4.22): redeploying on a NEW SHA is an upgrade and
-  // needs explicit confirmation; the old and new pins are shown first.
-  // A same-SHA redeploy is a repair (e.g. after a registry failure) and
-  // runs without ceremony.
+  // A different SHA is an upgrade needing --upgrade; the same SHA is a repair.
   const berth::Result<std::optional<berth::ServiceRecord>> existing =
       berth::registry_get(paths.value(), recipe.value().service_name);
   if (existing.is_err())
@@ -166,9 +159,7 @@ int deploy_command(const std::string_view service,
     is_upgrade = true;
   }
 
-  // Ctrl-C / SIGTERM flip this flag; every long operation polls it, so a
-  // cancelled deploy unwinds with its journal entry kept for __cleanup
-  // (§6.7). A deploy without exit signalling must not start.
+  // No exit signalling, no deploy: a cancel unwinds, journal entry kept.
   std::atomic<bool> cancel_flag{false};
   const berth::Result<void> signalling =
       berth::install_exit_signalling(&cancel_flag);
@@ -177,9 +168,7 @@ int deploy_command(const std::string_view service,
 
   std::uint16_t forced_port = 0;
   if (!port_arg.empty()) {
-    // The ONE port parser, shared with the panel's port field. atoi() here
-    // silently wrapped "70000" to 4464 and read "abc" as "auto" — a deploy on
-    // a port nobody asked for, reported as success (§11 silent wrong answer).
+    // The ONE port parser: atoi() wrapped "70000", read "abc" as auto (§11).
     const berth::Result<std::uint16_t> parsed = tui::parse_port_field(port_arg);
     if (parsed.is_err())
       return fail(parsed.error().ctx());
@@ -249,15 +238,51 @@ int services_command(const bool json) {
   return 0;
 }
 
-// `berthpanel proxy add <service> <domain> | list | remove <domain>` — the
-// managed Caddy front door (plan 5B.2). The engine lives in berth/proxy.cpp;
-// this only parses and renders. add/remove BLOCK (download + systemctl), so
-// they never run under the TUI.
+// add/remove BLOCK (download + systemctl): never run them under the TUI.
+namespace {
+
+void print_proxy_usage() {
+  std::cerr << "usage: berthpanel proxy add <service> <domain>\n"
+               "       berthpanel proxy list\n"
+               "       berthpanel proxy remove <domain>\n";
+}
+
+int proxy_add_command(const berth::Paths& paths, const char* service,
+                      const char* domain) {
+  std::atomic<bool> cancel_flag{false};
+  const berth::Result<void> signalling =
+      berth::install_exit_signalling(&cancel_flag);
+  if (signalling.is_err())
+    return fail(signalling.error().ctx());
+  const berth::Result<void> added = berth::proxy_add(paths, service, domain,
+                                                     &cancel_flag);
+  if (added.is_err())
+    return fail(added.error().ctx());
+  std::cout << "routed " << berth::normalize_proxy_domain(domain) << " -> "
+            << service << "\n";
+  return 0;
+}
+
+int proxy_remove_command(const berth::Paths& paths, const char* domain) {
+  std::atomic<bool> cancel_flag{false};
+  const berth::Result<void> signalling =
+      berth::install_exit_signalling(&cancel_flag);
+  if (signalling.is_err())
+    return fail(signalling.error().ctx());
+  const berth::Result<bool> removed =
+      berth::proxy_remove(paths, domain, &cancel_flag);
+  if (removed.is_err())
+    return fail(removed.error().ctx());
+  std::cout << (removed.value() ? "removed " : "no route for ")
+            << berth::normalize_proxy_domain(domain) << "\n";
+  return removed.value() ? 0 : 1;
+}
+
+}
+
 int proxy_command(const std::span<const char* const>& args) {
   if (args.size() < 2) {
-    std::cerr << "usage: berthpanel proxy add <service> <domain>\n"
-                 "       berthpanel proxy list\n"
-                 "       berthpanel proxy remove <domain>\n";
+    print_proxy_usage();
     return 2;
   }
   const berth::Result<berth::Paths> paths = berth::paths_from_env();
@@ -280,45 +305,16 @@ int proxy_command(const std::span<const char* const>& args) {
     }
     return 0;
   }
+  if (sub == "add" && args.size() == 4)
+    return proxy_add_command(paths.value(), args[2], args[3]);
+  if (sub == "remove" && args.size() == 3)
+    return proxy_remove_command(paths.value(), args[2]);
 
-  if (sub == "add" && args.size() == 4) {
-    std::atomic<bool> cancel_flag{false};
-    const berth::Result<void> signalling =
-        berth::install_exit_signalling(&cancel_flag);
-    if (signalling.is_err())
-      return fail(signalling.error().ctx());
-    const berth::Result<void> added =
-        berth::proxy_add(paths.value(), args[2], args[3], &cancel_flag);
-    if (added.is_err())
-      return fail(added.error().ctx());
-    std::cout << "routed " << berth::normalize_proxy_domain(args[3]) << " -> "
-              << args[2] << "\n";
-    return 0;
-  }
-
-  if (sub == "remove" && args.size() == 3) {
-    std::atomic<bool> cancel_flag{false};
-    const berth::Result<void> signalling =
-        berth::install_exit_signalling(&cancel_flag);
-    if (signalling.is_err())
-      return fail(signalling.error().ctx());
-    const berth::Result<bool> removed =
-        berth::proxy_remove(paths.value(), args[2], &cancel_flag);
-    if (removed.is_err())
-      return fail(removed.error().ctx());
-    std::cout << (removed.value() ? "removed " : "no route for ")
-              << berth::normalize_proxy_domain(args[2]) << "\n";
-    return removed.value() ? 0 : 1;
-  }
-
-  std::cerr << "usage: berthpanel proxy add <service> <domain>\n"
-               "       berthpanel proxy list\n"
-               "       berthpanel proxy remove <domain>\n";
+  print_proxy_usage();
   return 2;
 }
 
-// `berthpanel backup <service> [<archive>]` — data dir + secrets into one
-// 0600 ustar archive (plan 5B.4). The service must be stopped.
+// The service must be stopped.
 int backup_command(const std::string_view service,
                    const std::string_view archive_arg) {
   const berth::Result<berth::Paths> paths = berth::paths_from_env();
@@ -347,8 +343,7 @@ int backup_command(const std::string_view service,
   return 0;
 }
 
-// `berthpanel restore <service> <archive> [--force]` — the inverse. The
-// service must be stopped; an existing data dir needs --force.
+// The service must be stopped.
 int restore_command(const std::string_view service,
                     const std::string_view archive_arg, const bool force) {
   const berth::Result<berth::Paths> paths = berth::paths_from_env();
@@ -381,10 +376,7 @@ int verify_sandbox_command() {
   return audit.value().full_grade() ? 0 : 1;
 }
 
-// `berthpanel --selftest` — the live E2E of plan 7.1 (see berth/selftest.h).
-// It runs against the real systemd user manager with a uniquely named,
-// loopback-only unit and removes everything it created; it makes no network
-// request and touches no registry/journal entry.
+// Live E2E against the real systemd user manager; no network, no writes.
 int selftest_command() {
   const berth::Result<berth::Paths> paths = berth::paths_from_env();
   if (paths.is_err())
@@ -470,10 +462,7 @@ int recipe_remove_command(const std::string_view service) {
   return 0;
 }
 
-// `berthpanel __recipe-edit <service> [--start-cmd <tmpl>] [--port <n>] ...`
-// — fix an EXISTING user recipe without hand-editing its JSON (dev.md §8).
-// Non-interactive and scriptable; it validates through the ONE validator,
-// stores through the ONE writer, and reports the diff, but never deploys.
+// Fixes an EXISTING user recipe, validates and stores it, but never deploys.
 int recipe_edit_command(const std::string_view service,
                         const std::span<const char* const>& args) {
   const std::vector<std::string> tokens(args.begin(), args.end());
@@ -532,16 +521,10 @@ int cleanup_command(const bool install, const bool quiet) {
     std::cout << "cleanup timer installed: " << timer.value().string() << "\n";
   }
 
-  // Failures to reconcile are loud but partial success still counts:
-  // the report names what stayed behind for the next pass.
+  // Partial success still counts; the report names what stayed behind.
   return report.value().failed.empty() ? 0 : 1;
 }
 
-// `berthpanel __serve-static <root> [--listen 127.0.0.1:<port>]` — the
-// static server of plan 5.1. The bind policy lives in berth/serve.cpp (only
-// 127.0.0.1 / ::1 / localhost; a wildcard is an Err before a socket exists),
-// and SIGINT/SIGTERM flip the cancel flag the accept loop polls, so the
-// process dies without leaving a socket behind.
 int serve_static_command(const std::string_view root_arg,
                          const std::string_view listen_arg) {
   std::string address = "127.0.0.1";
@@ -581,11 +564,53 @@ int serve_static_command(const std::string_view root_arg,
   return 0;
 }
 
-// `berthpanel __serve-status [--listen 127.0.0.1:<port>]` — the read-only
-// status page of plan 5.4. It reuses the serve.cpp accept loop and the same
-// loopback-only bind policy; the page reports the registry, the dumb port
-// scan (no attribution, §7) and the deploy journal, and it gathers them per
-// request so it never serves a stale snapshot.
+namespace {
+
+void note_error(berth::StatusSnapshot& snapshot, const std::string& what) {
+  if (!snapshot.error.empty())
+    snapshot.error += "; ";
+  snapshot.error += what;
+}
+
+// The status page reports what the registry, the port scan and the journal
+// know; each failure joins the error line instead of hiding the others.
+berth::StatusSnapshot collect_status_snapshot(const berth::Paths& paths) {
+  berth::StatusSnapshot snapshot;
+  const berth::Result<std::vector<berth::ServiceRecord>> listed =
+      berth::registry_list(paths);
+  if (listed.is_err()) {
+    note_error(snapshot, "registry: " + listed.error().ctx());
+  } else {
+    for (const berth::ServiceRecord& record : listed.value()) {
+      snapshot.services.push_back(berth::StatusService{
+          record.service_name, record.display_name, record.description,
+          record.repo, record.commit, record.port});
+    }
+  }
+  const berth::Result<berth::PortReport> ports = berth::listening_ports(paths);
+  if (ports.is_err()) {
+    note_error(snapshot, "ports: " + ports.error().ctx());
+  } else {
+    for (const berth::ListeningPort& p : ports.value().ports) {
+      snapshot.ports.push_back(
+          berth::StatusPort{p.address, p.port, p.loopback, p.wildcard, p.owned});
+    }
+  }
+  const berth::Result<std::vector<berth::JournalEntry>> journal =
+      berth::journal_load(paths);
+  if (journal.is_err()) {
+    note_error(snapshot, "journal: " + journal.error().ctx());
+  } else {
+    for (const berth::JournalEntry& entry : journal.value()) {
+      snapshot.open_deploys.push_back(berth::StatusDeploy{
+          entry.service_name, entry.stage, entry.started_at_unix});
+    }
+  }
+  return snapshot;
+}
+
+}
+
 int serve_status_command(const std::string_view listen_arg) {
   std::string address = "127.0.0.1";
   std::uint16_t port = 0;
@@ -602,46 +627,8 @@ int serve_status_command(const std::string_view listen_arg) {
     return fail(paths.error().ctx());
 
   const berth::Paths captured = paths.value();
-  berth::RequestHandler handler =
-      berth::make_status_handler([captured]() -> berth::StatusSnapshot {
-        berth::StatusSnapshot snapshot;
-        const berth::Result<std::vector<berth::ServiceRecord>> listed =
-            berth::registry_list(captured);
-        if (listed.is_err()) {
-          snapshot.error = "registry: " + listed.error().ctx();
-        } else {
-          for (const berth::ServiceRecord& record : listed.value()) {
-            snapshot.services.push_back(berth::StatusService{
-                record.service_name, record.display_name, record.description,
-                record.repo, record.commit, record.port});
-          }
-        }
-        const berth::Result<berth::PortReport> ports =
-            berth::listening_ports(captured);
-        if (ports.is_err()) {
-          if (!snapshot.error.empty())
-            snapshot.error += "; ";
-          snapshot.error += "ports: " + ports.error().ctx();
-        } else {
-          for (const berth::ListeningPort& p : ports.value().ports) {
-            snapshot.ports.push_back(berth::StatusPort{
-                p.address, p.port, p.loopback, p.wildcard, p.owned});
-          }
-        }
-        const berth::Result<std::vector<berth::JournalEntry>> journal =
-            berth::journal_load(captured);
-        if (journal.is_err()) {
-          if (!snapshot.error.empty())
-            snapshot.error += "; ";
-          snapshot.error += "journal: " + journal.error().ctx();
-        } else {
-          for (const berth::JournalEntry& entry : journal.value()) {
-            snapshot.open_deploys.push_back(berth::StatusDeploy{
-                entry.service_name, entry.stage, entry.started_at_unix});
-          }
-        }
-        return snapshot;
-      });
+  berth::RequestHandler handler = berth::make_status_handler(
+      [captured]() { return collect_status_snapshot(captured); });
 
   std::atomic<bool> cancel_flag{false};
   const berth::Result<void> signalling =
@@ -664,10 +651,7 @@ int serve_status_command(const std::string_view listen_arg) {
   return 0;
 }
 
-// `berthpanel __recipe-draft <github_url> [ref] [--apply] [--force]` — the
-// CLI front end of the wizard. The FLOW lives in berth/wizard.cpp: the panel
-// runs the same prepare/store pair, and two copies of a clone+detect flow
-// would drift (§11).
+// The clone+detect FLOW lives in berth/wizard.cpp; a second copy would drift.
 int recipe_draft_command(const std::string_view url_arg,
                          const std::string_view ref_arg, const bool apply,
                          const bool force) {
@@ -690,8 +674,7 @@ int recipe_draft_command(const std::string_view url_arg,
     return fail(prepared.error().ctx());
   const berth::DraftResult& result = prepared.value();
 
-  // Asked BEFORE storing, so the answer can still be "no" (§8: an overwrite is
-  // an explicit act, and this is where the explicit act happens).
+  // Asked before storing: an overwrite must be an explicit act (§8).
   const berth::Result<berth::DraftClash> clash =
       berth::find_recipe_clash(paths.value(), result.draft.service_name);
   if (clash.is_err())
@@ -710,8 +693,7 @@ int recipe_draft_command(const std::string_view url_arg,
     return 2;
   }
 
-  // The draft is ALWAYS saved, untouched or not: what can be deployed is what
-  // is on disk (reproducibility, plan 4.21).
+  // The draft is ALWAYS saved: what is deployable is what is on disk.
   const berth::Result<std::filesystem::path> stored =
       berth::store_draft(paths.value(), result.draft, clash.value().exists);
   if (stored.is_err())
@@ -730,11 +712,121 @@ int recipe_draft_command(const std::string_view url_arg,
   return 0;
 }
 
+namespace {
+
+std::string_view listen_arg(const std::span<const char* const>& args,
+                            std::size_t from) {
+  std::string_view listen;
+  for (std::size_t i = from; i < args.size(); ++i) {
+    const std::string_view arg(args[i]);
+    if (arg == "--listen" && i + 1 < args.size()) {
+      listen = args[i + 1];
+      ++i;
+    } else if (arg.rfind("--listen=", 0) == 0) {
+      listen = arg.substr(9);
+    }
+  }
+  return listen;
+}
+
+int deploy_verb(const std::span<const char* const>& args) {
+  std::string_view port_arg;
+  bool upgrade = false;
+  bool json = false;
+  for (std::size_t i = 2; i < args.size(); ++i) {
+    const std::string_view arg(args[i]);
+    if (arg == "--upgrade") {
+      upgrade = true;
+    } else if (arg == "--json") {
+      json = true;
+    } else if (port_arg.empty()) {
+      port_arg = args[i];
+    }
+  }
+  return deploy_command(args[1], port_arg, upgrade, json);
+}
+
+int recipe_draft_verb(const std::span<const char* const>& args) {
+  std::string_view ref;
+  bool apply = false;
+  bool force = false;
+  for (std::size_t i = 2; i < args.size(); ++i) {
+    if (std::string_view(args[i]) == "--apply") {
+      apply = true;
+    } else if (std::string_view(args[i]) == "--force") {
+      force = true;
+    } else if (ref.empty()) {
+      ref = args[i];
+    }
+  }
+  return recipe_draft_command(args[1], ref, apply, force);
+}
+
+int restore_verb(const std::span<const char* const>& args) {
+  bool force = false;
+  for (std::size_t i = 3; i < args.size(); ++i) {
+    if (std::string_view(args[i]) == "--force")
+      force = true;
+  }
+  return restore_command(args[1], args[2], force);
+}
+
+// The __ verbs are the contract with the units and the TUI, not with a human.
+std::optional<int> dispatch_verb(const std::span<const char* const>& args) {
+  const std::string_view first(args[0]);
+  if (first == "proxy")
+    return proxy_command(args);
+  if (first == "backup" && args.size() >= 2 && args.size() <= 3) {
+    return backup_command(args[1], args.size() == 3 ? args[2] : "");
+  }
+  if (first == "restore" && args.size() >= 3)
+    return restore_verb(args);
+  if (first == "__egress-probe")
+    return egress_probe();
+  if (first == "__catalog") {
+    if (contains_flag(args, "--json"))
+      std::cout << berth::json_text(berth::catalog_json());
+    else
+      std::cout << berth::render_catalog_list();
+    return 0;
+  }
+  if (first == "__services")
+    return services_command(contains_flag(args, "--json"));
+  if (first == "__recipe-list")
+    return recipe_list_command(contains_flag(args, "--json"));
+  if (first == "__recipe-add" && args.size() == 2)
+    return recipe_add_command(args[1], false);
+  if (first == "__recipe-add" && args.size() == 3 &&
+      std::string_view(args[2]) == "--force") {
+    return recipe_add_command(args[1], true);
+  }
+  if (first == "__recipe-remove" && args.size() == 2)
+    return recipe_remove_command(args[1]);
+  if (first == "__recipe-edit" && args.size() >= 2)
+    return recipe_edit_command(args[1], args.subspan(2));
+  if (first == "__recipe-draft" && args.size() >= 2)
+    return recipe_draft_verb(args);
+  if (first == "__deploy" && args.size() >= 2)
+    return deploy_verb(args);
+  if (first == "__cleanup") {
+    return cleanup_command(contains_flag(args, "--install"),
+                           contains_flag(args, "--quiet"));
+  }
+  if (first == "__serve-static" && args.size() >= 2)
+    return serve_static_command(args[1], listen_arg(args, 2));
+  if (first == "__serve-status")
+    return serve_status_command(listen_arg(args, 1));
+  // Test hook for the SIGKILL flock scenario (stage 4.3), not a user command.
+  if (first == "__test-lock-child" && args.size() == 2)
+    return berth::lock_test_child(args[1]);
+  return std::nullopt;
+}
+
+}
+
 int run(const std::span<const char* const> args) {
   if (args.empty()) {
-    // No arguments on a terminal means the panel; a pipe or a file means the
-    // usage text, because rendering a full-screen UI into a pipe is never
-    // what the caller wanted.
+    // A pipe or a file gets the usage text, never a full-screen UI.
     if (!::isatty(STDOUT_FILENO)) {
       print_usage();
       return 2;
@@ -744,112 +836,8 @@ int run(const std::span<const char* const> args) {
       return fail(paths.error().ctx());
     return tui::run_tui(paths.value());
   }
-  {
-    // One-shot subcommands must be the first argument.
-    const std::string_view first(args[0]);
-    if (first == "proxy")
-      return proxy_command(args);
-    if (first == "backup" && args.size() >= 2 && args.size() <= 3) {
-      return backup_command(args[1], args.size() == 3 ? args[2] : "");
-    }
-    if (first == "restore" && args.size() >= 3) {
-      bool force = false;
-      for (std::size_t i = 3; i < args.size(); ++i) {
-        if (std::string_view(args[i]) == "--force")
-          force = true;
-      }
-      return restore_command(args[1], args[2], force);
-    }
-    if (first == "__egress-probe")
-      return egress_probe();
-    if (first == "__catalog") {
-      if (contains_flag(args, "--json"))
-        std::cout << berth::json_text(berth::catalog_json());
-      else
-        std::cout << berth::render_catalog_list();
-      return 0;
-    }
-    if (first == "__services")
-      return services_command(contains_flag(args, "--json"));
-    if (first == "__recipe-list")
-      return recipe_list_command(contains_flag(args, "--json"));
-    if (first == "__recipe-add" && args.size() == 2)
-      return recipe_add_command(args[1], false);
-    if (first == "__recipe-add" && args.size() == 3 &&
-        std::string_view(args[2]) == "--force")
-      return recipe_add_command(args[1], true);
-    if (first == "__recipe-remove" && args.size() == 2)
-      return recipe_remove_command(args[1]);
-    if (first == "__recipe-edit" && args.size() >= 2)
-      return recipe_edit_command(args[1], args.subspan(2));
-    if (first == "__recipe-draft" && args.size() >= 2) {
-      std::string_view ref;
-      bool apply = false;
-      bool force = false;
-      for (std::size_t i = 2; i < args.size(); ++i) {
-        if (std::string_view(args[i]) == "--apply") {
-          apply = true;
-        } else if (std::string_view(args[i]) == "--force") {
-          force = true;
-        } else if (ref.empty()) {
-          ref = args[i];
-        }
-      }
-      return recipe_draft_command(args[1], ref, apply, force);
-    }
-    if (first == "__deploy" && args.size() >= 2) {
-      const std::string_view service = args[1];
-      std::string_view port_arg;
-      bool upgrade = false;
-      bool json = false;
-      for (std::size_t i = 2; i < args.size(); ++i) {
-        const std::string_view arg(args[i]);
-        if (arg == "--upgrade") {
-          upgrade = true;
-        } else if (arg == "--json") {
-          json = true;
-        } else if (port_arg.empty()) {
-          port_arg = args[i];
-        }
-      }
-      return deploy_command(service, port_arg, upgrade, json);
-    }
-    if (first == "__cleanup") {
-      return cleanup_command(contains_flag(args, "--install"),
-                             contains_flag(args, "--quiet"));
-    }
-    if (first == "__serve-static" && args.size() >= 2) {
-      std::string_view listen;
-      for (std::size_t i = 2; i < args.size(); ++i) {
-        const std::string_view arg(args[i]);
-        if (arg == "--listen" && i + 1 < args.size()) {
-          listen = args[i + 1];
-          ++i;
-        } else if (arg.rfind("--listen=", 0) == 0) {
-          listen = arg.substr(9);
-        }
-      }
-      return serve_static_command(args[1], listen);
-    }
-    if (first == "__serve-status") {
-      std::string_view listen;
-      for (std::size_t i = 1; i < args.size(); ++i) {
-        const std::string_view arg(args[i]);
-        if (arg == "--listen" && i + 1 < args.size()) {
-          listen = args[i + 1];
-          ++i;
-        } else if (arg.rfind("--listen=", 0) == 0) {
-          listen = arg.substr(9);
-        }
-      }
-      return serve_status_command(listen);
-    }
-    // Test hook for the SIGKILL flock scenario (stage 4.3); not a user
-    // command, documented in berth/lock.h.
-    if (first == "__test-lock-child" && args.size() == 2) {
-      return berth::lock_test_child(args[1]);
-    }
-  }
+  if (const std::optional<int> handled = dispatch_verb(args))
+    return *handled;
   for (const char* const arg : args) {
     const std::string_view a(arg);
     if (a == "--version") {
@@ -868,11 +856,9 @@ int run(const std::span<const char* const> args) {
   return 2;
 }
 
-}  // namespace
-
+}
 int main(int argc, char* argv[]) {
-  // Build tools inherit the disposition; git and friends handle EPIPE
-  // themselves. Without this, an early-closed pipe kills the panel.
+  // Without this, an early-closed pipe kills the panel.
   ::signal(SIGPIPE, SIG_IGN);
 
   const char* const* first = argc > 0 ? argv + 1 : nullptr;

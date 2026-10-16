@@ -1,5 +1,3 @@
-// src/berth/recipe_edit.cpp — see recipe_edit.h for the contract.
-
 #include "recipe_edit.h"
 
 #include <cstdint>
@@ -13,9 +11,7 @@ namespace berth {
 
 namespace {
 
-// Strict decimal parse, shared by --port and --tasks. Deliberately not
-// strtol: a trailing character ("80O" with a letter) must be an Err, not
-// the silent prefix strtol would return (§11 silent wrong answer).
+// Not strtol: a trailing character ("80O") must be an Err, not a silent prefix.
 Result<std::uint64_t> parse_uint(const std::string& text,
                                  const std::string_view flag) {
   if (text.empty()) {
@@ -36,8 +32,7 @@ Result<std::uint64_t> parse_uint(const std::string& text,
   return value;
 }
 
-}  // namespace
-
+}
 Result<Recipe> apply_recipe_edits(const Recipe& base,
                                   const RecipeEdits& edits) {
   const bool any = edits.start_cmd.has_value() || edits.bind.has_value() ||
@@ -66,8 +61,6 @@ Result<Recipe> apply_recipe_edits(const Recipe& base,
   if (edits.tasks_max.has_value())
     edited.res.tasks_max = edits.tasks_max.value();
 
-  // The ONE validator, exactly as at store and load time. A rejected edit
-  // never leaves this function, so it can never be stored (§8/§11).
   const Result<void> valid = validate_recipe(edited);
   if (valid.is_err()) {
     return Error("recipe edit rejected: " + valid.error().ctx());
@@ -83,7 +76,6 @@ Result<RecipeEditResult> user_recipe_update(const Paths& paths,
     return with_context(std::move(got).error(), "recipe edit");
   }
   if (!got.value().has_value()) {
-    // A builtin-only name is a different act: create a user override first.
     const Result<Recipe> builtin = builtin_recipe(service_name);
     if (builtin.is_ok()) {
       return Error(
@@ -102,9 +94,7 @@ Result<RecipeEditResult> user_recipe_update(const Paths& paths,
     return std::move(edited).error();
   }
 
-  // force=true: the recipe already exists by definition, and the edits were
-  // just validated by apply_recipe_edits above; store re-validates and writes
-  // atomically at 0644.
+  // force=true: the recipe exists by definition and was just validated.
   Result<std::filesystem::path> stored =
       user_recipe_store(paths, edited.value(), true);
   if (stored.is_err()) {
@@ -219,4 +209,4 @@ std::string render_recipe_edit_diff(const Recipe& before, const Recipe& after) {
   return out;
 }
 
-}  // namespace berth
+}

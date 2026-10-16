@@ -1,5 +1,3 @@
-// src/berth/net/tls.cpp — see tls.h for the contract.
-
 #include "tls.h"
 
 #include <mbedtls/error.h>
@@ -20,8 +18,7 @@ namespace berth {
 
 namespace {
 
-// TLS 1.3 in mbedTLS 3.6 routes through PSA, which must be initialised once
-// per process. Failure here is loud: no TLS, no request.
+// PSA needs one init per process; failure aborts — no TLS, no request.
 std::once_flag g_psa_init;
 
 void ensure_psa_initialised() {
@@ -33,8 +30,7 @@ void ensure_psa_initialised() {
   });
 }
 
-}  // namespace
-
+}
 TlsSession::TlsSession(const int fd) : fd_(fd) {
   mbedtls_entropy_init(&entropy_);
   mbedtls_ctr_drbg_init(&drbg_);
@@ -155,10 +151,8 @@ Result<std::size_t> TlsSession::read_some(
     const std::atomic<bool>* cancel) {
   while (true) {
     const int rc = mbedtls_ssl_read(&ssl_, buf, buf_size);
-    // mbedtls_ssl_read may need to WRITE during a read (post-handshake TLS
-    // 1.3 traffic, key updates). Treating WANT_WRITE as fatal aborted an
-    // otherwise-valid connection; the handshake loop above and write_all()
-    // both already wait on the direction mbedTLS asked for.
+    // A read may need to WRITE (post-handshake TLS 1.3 traffic, key updates):
+    // treating WANT_WRITE as fatal aborts a valid connection.
     if (rc == MBEDTLS_ERR_SSL_WANT_READ || rc == MBEDTLS_ERR_SSL_WANT_WRITE) {
       const short want = rc == MBEDTLS_ERR_SSL_WANT_READ ? POLLIN : POLLOUT;
       const Result<void> waited =
@@ -176,4 +170,4 @@ Result<std::size_t> TlsSession::read_some(
   }
 }
 
-}  // namespace berth
+}

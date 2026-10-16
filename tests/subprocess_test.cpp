@@ -26,8 +26,7 @@ long long elapsed_ms_since(std::chrono::steady_clock::time_point t0) {
       .count();
 }
 
-}  // namespace
-
+}
 TEST(subprocess_echo_captures_stdout) {
   const Result<RunOutput> r =
       run({"/bin/echo", "hello"},

@@ -27,8 +27,7 @@ Recipe good() {
   return r;
 }
 
-}  // namespace
-
+}
 TEST(recipes_split_template_before_substitution) {
   const auto tokens =
       split_command_template("/bin/app --addr 127.0.0.1 --port {port}");

@@ -25,8 +25,7 @@ std::vector<std::filesystem::path> list_dir(const std::filesystem::path& dir) {
   return out;
 }
 
-}  // namespace
-
+}
 TEST(atomic_write_round_trip_private_perms) {
   const TempDir tmp;
   const auto dest = tmp.path() / "state.json";

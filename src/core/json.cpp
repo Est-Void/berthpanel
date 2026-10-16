@@ -1,5 +1,3 @@
-// src/core/json.cpp — see json.h for the contract.
-
 #include "json.h"
 
 #include <string>
@@ -50,4 +48,4 @@ Result<void> json_store(const std::filesystem::path& path,
   return {};
 }
 
-}  // namespace berth
+}

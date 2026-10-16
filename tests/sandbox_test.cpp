@@ -31,8 +31,7 @@ std::size_t count_property(const std::vector<std::string>& body,
   return count;
 }
 
-}  // namespace
-
+}
 TEST(sandbox_argv_always_carries_the_full_grade_set) {
   const std::vector<std::string> body =
       sandbox_argv_body({.argv = {"/bin/true"},

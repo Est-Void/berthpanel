@@ -20,6 +20,11 @@
 - Layout: `src/main.cpp` (CLI incl. `__deploy/__cleanup/__serve-static/__egress-probe`), `paths.cpp` = single XDG truth, `berth/` = deploy engine, `tui/` = panel. **Layering: `berth` must not depend on `tui`.**
 - Name is load-bearing in 7 places, change atomically: binary `berthpanel`, XDG state `~/.local/state/berthpanel/`, data `~/.local/share/berthpanel/services/`, unit prefix `berthpanel-`, `berthpanel-cleanup.timer/.service`, `BERTHPANEL_*` env.
 
+## Clean code rule (enforced — `make check`)
+A comment earns its place only when the code **cannot** say it. Three kinds survive: an invariant or trap, a decision nobody can infer, a `TODO`/`FIXME`. Everything else — restating the code, file-echo headers, design essays, rationale already captured in `docs/dev.md`, section banners — is deleted, not rephrased. Identifiers carry the meaning; the comment carries only the constraint.
+
+Enforced mechanically by `scripts/comment-lint.py` (part of `make check`): per-file cap 48 comment lines, no comment run over 8 lines, repo cap 6%, no banner/file-echo headers, no commented-out code, comment lines within 80 columns. The heuristic checks are the floor, not the standard — a diff can pass the linter and still be over-commented. Adding a comment requires adding a line to it that names a constraint or a trap; a line that would still be true if the code below it were deleted does not qualify.
+
 ## Security invariants (do not regress — see dev.md §6, §11)
 - Allowlisted egress only (`kAllowedEndpoints`, per-hop check, no redirect following); every request → `net.log`. Sandbox (`systemd-run --user`) mandatory at grade FULL, no env-settable override. State it honestly: blast-radius reducer, not a trust boundary.
 - Tokens via `GIT_ASKPASS` only (exact host match); private files 0600 via `atomic.cpp` (`O_EXCL` temp + rename, never bare `ofstream`); `tar` reader fails loudly on unsafe entries; one shared `validate_unit_name` for all unit paths; empty env vars = unset; corrupt JSON = loud backup, never silent default.

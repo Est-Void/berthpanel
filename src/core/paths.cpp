@@ -1,5 +1,3 @@
-// src/core/paths.cpp — see paths.h for the contract.
-
 #include "paths.h"
 
 #include <filesystem>
@@ -14,8 +12,8 @@ namespace berth {
 
 namespace {
 
-// A relative XDG_* value is ignored, not honoured: honouring it would let a
-// stray export aim the state dir at the process CWD.
+// A relative XDG_* value is ignored, not honoured: honouring it would aim the
+// state dir at the process CWD.
 std::filesystem::path xdg_root(const std::filesystem::path& home,
                                const char* env_name,
                                std::string_view fallback_suffix) {
@@ -32,8 +30,7 @@ std::filesystem::path app_dir(const std::filesystem::path& root) {
   return root / std::filesystem::path(kAppName);
 }
 
-}  // namespace
-
+}
 Result<Paths> paths_from_env() {
   const std::optional<std::string> home = env_nonempty("HOME");
   if (!home.has_value()) {
@@ -48,6 +45,7 @@ Result<Paths> paths_from_env() {
   out.units_dir =
       xdg_root(home_dir, "XDG_CONFIG_HOME", ".config") / "systemd" / "user";
   out.recipes_dir = out.config_dir / "recipes";
+  out.stacks_dir = out.config_dir / "stacks";
   out.services_dir = out.data_dir / "services";
   out.secrets_dir = out.state_dir / "secrets";
   out.state_json = out.state_dir / "state.json";
@@ -59,4 +57,4 @@ Result<Paths> paths_from_env() {
   return out;
 }
 
-}  // namespace berth
+}

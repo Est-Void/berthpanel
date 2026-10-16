@@ -1,12 +1,5 @@
 #pragma once
 
-// src/util/fd.h — RAII owner for a single POSIX file descriptor
-// (dev.md §4: every handle gets a scoped wrapper). Move-only, closes on
-// destruction, never owns more than one fd. Subprocesses, sockets and
-// mbedTLS contexts get their own wrappers. Also owns write_all(): a
-// partial write to an append-only log is silent data loss, so the loop
-// that makes it impossible lives next to the handle it protects.
-
 #include <unistd.h>
 
 #include <cerrno>
@@ -53,8 +46,8 @@ class FdGuard {
   int fd_ = -1;
 };
 
-// Writes every byte, resuming after a short write and after EINTR. Reports
-// only a hard failure; the returned count is the whole buffer or an error.
+// A partial write to an append-only log is silent data loss; the loop makes
+// it impossible and reports only a hard failure.
 [[nodiscard]] inline Result<void> write_all(const int fd,
                                             const std::string_view data) {
   std::size_t left = data.size();
@@ -72,4 +65,4 @@ class FdGuard {
   return {};
 }
 
-}  // namespace berth
+}

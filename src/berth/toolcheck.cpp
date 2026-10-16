@@ -29,8 +29,7 @@ std::string first_version_line(const std::string& text) {
   return {};
 }
 
-}  // namespace
-
+}
 Result<std::vector<ToolStatus>> check_tools(
     const std::vector<std::string>& names, std::atomic<bool>* cancel) {
   std::vector<ToolStatus> out;
@@ -76,4 +75,4 @@ std::string render_tool_report(const std::vector<ToolStatus>& tools) {
   return out;
 }
 
-}  // namespace berth
+}

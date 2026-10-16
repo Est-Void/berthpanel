@@ -1,10 +1,5 @@
-// Tests for net/tar.h (the minimal read-only tar reader and the archive
-// path rules) and net/github_api.h (the trees API parser). Archives are
-// assembled in-test, byte by byte, so every rejection case is exact.
-// No network here.
-//
-// The load-bearing theme: an unsafe entry must FAIL the extraction
-// loudly — never be skipped, never be partially accepted (§11).
+// An unsafe entry FAILS the extraction loudly, never a skip and never a partial
+// accept. Archives are assembled byte by byte, so no network is involved.
 
 #include "berth/net/github_api.h"
 #include "berth/net/tar.h"
@@ -95,8 +90,7 @@ std::string tar_end() {
   return std::string(kBlock * 2, '\0');
 }
 
-// "len key=value\n" — the length counts itself, so it must be computed
-// after the digit count is known.
+// The length counts its own digits, so it is only known after counting them.
 std::string pax_record(const std::string& key_value) {
   std::size_t length = key_value.size() + 3;  // digits + ' ' + '\n' guess
   while (true) {
@@ -119,9 +113,9 @@ std::string pax_path_entry(const std::string& long_name,
 }
 
 TEST(rawfetch_tree_rows_with_wrong_types_do_not_throw) {
-  // A present-but-wrong-typed field used to reach value()/get<T>(), which
-  // throws nlohmann::type_error; only parse_error is caught, so the parser
-  // aborted the process on hostile input instead of failing as a Result.
+  // A wrong-typed field reached get<T>() and threw nlohmann::type_error, which
+  // only parse_error catches: hostile input aborted the process instead of
+  // failing as a Result.
   const auto bad_path =
       parse_tree_response(R"({"tree":[{"path":123,"type":"blob"}]})");
   CHECK(bad_path.is_ok());
@@ -139,13 +133,11 @@ TEST(rawfetch_tree_rows_with_wrong_types_do_not_throw) {
   CHECK(bad_size.value().size() == 1);
   CHECK(bad_size.value()[0].size == 0);
 
-  // A wrong-typed REQUIRED flag is a loud error, not a crash and not a silent
-  // "not truncated".
+  // A wrong-typed REQUIRED flag is loud, never a silent "not truncated".
   CHECK(parse_tree_response(R"({"truncated":"yes","tree":[]})").is_err());
 }
 
-}  // namespace
-
+}
 TEST(rawfetch_safe_paths) {
   CHECK(archive_path_safe("a/b.txt"));
   CHECK(archive_path_safe("repo-sha/"));

@@ -24,8 +24,7 @@ berth::ServiceRecord record(const std::string& name, const std::uint16_t port) {
   return r;
 }
 
-}  // namespace
-
+}
 TEST(json_services_empty_document_has_schema_and_empty_array) {
   const nlohmann::json doc = berth::services_json({});
   CHECK(doc.at("schema").get<int>() == berth::kJsonSchema);

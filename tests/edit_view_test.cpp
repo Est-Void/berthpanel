@@ -1,7 +1,4 @@
-// Tests for the recipe-edit view model (stage 4.19+/4.21 TUI). The load-bearing
-// pieces are pure: the insert-mode focus cycle, the loud numeric parse that
-// assembles a RecipeEdits, and the builtin refusal. No terminal, no engine
-// call, no file.
+// Pure view model: no terminal, no engine call, no file.
 
 #include "tui/view_edit.h"
 
@@ -55,8 +52,7 @@ bool hint_contains(const std::vector<tui::KeyHint>& hints,
   return false;
 }
 
-}  // namespace
-
+}
 TEST(edit_focus_cycle_visits_every_field_then_wraps) {
   using tui::EditField;
   // kNone enters at the start command, like the wizard's kNone enters at url.
@@ -87,8 +83,8 @@ TEST(edit_field_labels_match_the_slots) {
 }
 
 TEST(edit_field_at_matches_the_input_slot_order) {
-  // The renderer's input vector is in this order, so an off-by-one would draw
-  // one field's value under another field's label.
+  // The renderer's input vector order; an off-by-one draws a value under the
+  // wrong label.
   CHECK(tui::edit_field_at(0) == tui::EditField::kStartCmd);
   CHECK(tui::edit_field_at(1) == tui::EditField::kBind);
   CHECK(tui::edit_field_at(2) == tui::EditField::kHealthPath);
@@ -122,8 +118,8 @@ TEST(edit_fields_seed_from_the_recipe) {
 }
 
 TEST(edit_assembles_a_declared_bind_from_the_form) {
-  // The no-bind-flag app: start_cmd is only {self}, the bind field declares
-  // loopback, and a fixed port drops the {port} requirement.
+  // No bind flag in start_cmd: the bind field declares loopback, and a fixed
+  // port drops the {port} requirement.
   tui::EditFields fields = tui::edit_fields_from_recipe(go_recipe());
   fields.start_cmd = "{self}";
   fields.bind = "127.0.0.1";
@@ -135,7 +131,7 @@ TEST(edit_assembles_a_declared_bind_from_the_form) {
   CHECK(edits.value().bind.has_value());
   CHECK(edits.value().bind.value() == "127.0.0.1");
 
-  // The assembly reaches the ONE engine: the declared bind makes it valid.
+  // The declared bind makes it valid through the ONE engine.
   const berth::Result<berth::Recipe> applied =
       berth::apply_recipe_edits(go_recipe(), edits.value());
   CHECK(applied.is_ok());
@@ -185,8 +181,7 @@ TEST(edit_rejects_a_non_numeric_port_loudly) {
   fields.port = "70000";
   CHECK(tui::assemble_recipe_edits(fields).is_err());
 
-  // 0 typed is refused by the shared parser; the way to ask for a free port is
-  // to leave the field empty.
+  // 0 typed is refused; a free port is asked for by leaving the field empty.
   fields.port = "0";
   CHECK(tui::assemble_recipe_edits(fields).is_err());
 }
@@ -208,9 +203,8 @@ TEST(edit_rejects_a_non_numeric_tasks_loudly) {
 }
 
 TEST(edit_an_invalid_start_cmd_surfaces_the_validator_error) {
-  // The assembled edits reach the SAME engine the CLI uses. A start_cmd that
-  // drops the loopback bind must be refused there, naming the rule — the
-  // §8/§11 trap of storing a wrong edit.
+  // The SAME engine as the CLI: a start_cmd dropping the loopback bind must be
+  // refused there, naming the rule (§8/§11 trap of storing a wrong edit).
   tui::EditFields fields = tui::edit_fields_from_recipe(go_recipe());
   fields.start_cmd = "{self} --port {port}";
   const berth::Result<berth::RecipeEdits> edits =
@@ -248,7 +242,7 @@ TEST(edit_saved_lines_name_the_file_and_the_change) {
 }
 
 TEST(edit_key_hints_follow_the_state_they_are_in) {
-  // The form with no field focused: enter the fields, save, or leave.
+  // No field focused: enter, save, or leave.
   const std::vector<tui::KeyHint> idle =
       tui::edit_key_hints(tui::EditField::kNone, false);
   CHECK(hint_contains(idle, "i"));

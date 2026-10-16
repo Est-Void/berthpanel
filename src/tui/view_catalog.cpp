@@ -1,5 +1,3 @@
-// src/tui/view_catalog.cpp — see view_catalog.h for the contract.
-
 #include "view_catalog.h"
 
 #include <cstdio>
@@ -16,9 +14,7 @@ namespace {
 
 constexpr std::size_t kCommitShortLen = 7;
 
-// Column widths of the list table. The service name is the widest fixed
-// column; everything after it is short and fixed-width so the table does not
-// jitter as the cursor moves.
+// Fixed widths: the table must not jitter as the cursor moves.
 constexpr std::size_t kNameWidth = 24;
 constexpr std::size_t kLangWidth = 10;
 constexpr std::size_t kLimitsWidth = 16;
@@ -71,8 +67,7 @@ void append_steps(std::vector<std::string>& out, const std::string_view heading,
   }
 }
 
-}  // namespace
-
+}
 berth::Result<Catalog> load_catalog(const berth::Paths& paths) {
   berth::Result<std::vector<berth::Recipe>> builtin = berth::builtin_catalog();
   if (builtin.is_err()) {
@@ -117,7 +112,7 @@ RemoveConfirm recipe_remove_key(const std::string_view key) {
   if (key == "n" || key == "N" || key == "\x1b") {
     return RemoveConfirm::kDismissed;
   }
-  return RemoveConfirm::kEaten;  // the modal is modal
+  return RemoveConfirm::kEaten;
 }
 
 std::vector<std::string> recipe_remove_confirm_lines(
@@ -191,8 +186,7 @@ std::vector<std::string> catalog_detail_lines(const Catalog& catalog,
   out.emplace_back("  source: " +
                    std::string(recipe_source_label(catalog.sources[index])));
   out.emplace_back("  unit:   " + recipe.service_name);
-  // The actionable line goes first: the details pane clips at the box edge
-  // on a short terminal, and this is the one line the user came for.
+  // First: the details pane clips at the box edge on a short terminal.
   out.emplace_back(
       "  deploy: switch to the Deploy tab and press Enter "
       "  (CLI: berthpanel __deploy " +
@@ -234,4 +228,4 @@ std::vector<std::string> catalog_detail_lines(const Catalog& catalog,
   return out;
 }
 
-}  // namespace tui
+}

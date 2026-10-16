@@ -23,8 +23,7 @@ berth::Paths test_paths(const std::filesystem::path& root) {
   return p;
 }
 
-}  // namespace
-
+}
 TEST(secrets_render_quotes_values) {
   const auto text = render_environment_file({
       {"ADMIN_PASSWORD", "hunter2"},

@@ -144,8 +144,7 @@ berth::RequestHandler static_handler(const fs::path& root) {
   return handler.value();
 }
 
-}  // namespace
-
+}
 TEST(serve_loopback_policy_refuses_wildcards) {
   CHECK(berth::is_loopback_bind("127.0.0.1").value());
   CHECK(berth::is_loopback_bind("::1").value());

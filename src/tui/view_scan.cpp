@@ -1,5 +1,3 @@
-// src/tui/view_scan.cpp — see view_scan.h for the contract.
-
 #include "view_scan.h"
 
 #include <string>
@@ -16,8 +14,7 @@ std::string mark(const bool good) {
   return good ? "ok  " : "--  ";
 }
 
-// The "not collected" text a failed step shows. Loud on purpose: an unreadable
-// section must not read as an empty one (§11).
+// Loud on purpose: an unreadable section must not read as an empty one (§11).
 std::string collection_failed(const std::string& what,
                               const std::string& error) {
   std::string line = "--  " + what + ": NOT COLLECTED";
@@ -31,8 +28,7 @@ std::string ms(const std::chrono::milliseconds elapsed) {
   return std::to_string(elapsed.count()) + "ms";
 }
 
-}  // namespace
-
+}
 std::vector<std::string> scan_prereq_lines(const berth::ScanReport& report) {
   std::vector<std::string> lines;
   if (!report.prereqs.done) {
@@ -106,8 +102,6 @@ std::vector<std::string> scan_port_lines(const berth::ScanReport& report) {
         (ports.ipv6_error.empty() ? std::string() : ": " + ports.ipv6_error));
   }
   if (ports.unparsed > 0) {
-    // A shortened list reads as "nothing is listening", so say what was
-    // skipped.
     lines.push_back("      " + std::to_string(ports.unparsed) +
                     " unreadable lines were skipped");
   }
@@ -172,8 +166,7 @@ std::string scan_summary_line(const berth::ScanReport& report) {
   if (report.cancelled) {
     return "scan cancelled — the sections below are what was collected";
   }
-  // "Could not be read" outranks "something is missing": a report built from
-  // two sections and a hole is not a green light.
+    // "Could not be read" outranks "something is missing": a hole is not green.
   std::vector<std::string> uncollected;
   if (!report.prereqs.done) {
     uncollected.emplace_back("the build tools");
@@ -205,9 +198,8 @@ std::string scan_summary_line(const berth::ScanReport& report) {
 }
 
 std::string scan_network_alert(const berth::ScanReport& report) {
-  // `error` is only set when the probe itself failed; a refused connection
-  // arrives as ok=false with the reason in `detail`, so gating on `error` here
-  // would make the alert unreachable in exactly the case it exists for.
+  // A refusal arrives as ok=false with the reason in `detail`, so gating on
+  // `error` would make the alert unreachable exactly when it exists for.
   if (!report.network.done || report.network.ok) {
     return {};
   }
@@ -232,4 +224,4 @@ std::vector<std::string> scan_idle_lines() {
   };
 }
 
-}  // namespace tui
+}

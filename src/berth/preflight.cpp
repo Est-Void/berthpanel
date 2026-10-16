@@ -14,8 +14,7 @@ bool language_supported(const std::string& language) {
          language == "prebuilt";
 }
 
-}  // namespace
-
+}
 Result<PreflightReport> preflight_recipe(const RecipeLike& recipe,
                                          const std::vector<ToolStatus>& tools) {
   PreflightReport report;
@@ -83,4 +82,4 @@ std::string render_preflight(const PreflightReport& report) {
   return out;
 }
 
-}  // namespace berth
+}

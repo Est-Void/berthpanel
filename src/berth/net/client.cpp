@@ -1,5 +1,3 @@
-// src/berth/net/client.cpp — see client.h for the contract.
-
 #include "client.h"
 
 #include <poll.h>
@@ -41,8 +39,7 @@ struct Attempt {
          options.cancel->load(std::memory_order_relaxed);
 }
 
-// Netlog with a fresh attempt note; a log write failure is an Err the
-// caller must see, never a swallowed warning.
+// A log write failure is an Err the caller must see, never swallowed.
 Result<void> log_attempt(const Paths& paths, const HttpUrl& target,
                          const std::string& ip, const HttpGetOptions& options,
                          const std::string& note, const bool allowed) {
@@ -54,8 +51,7 @@ Result<void> log_attempt(const Paths& paths, const HttpUrl& target,
                                           .allowed = allowed});
 }
 
-// §6.2: the gate runs before every socket connect. The refusal is logged
-// first, so net.log shows the attempt even though no byte ever moved.
+// §6.2: the gate runs before every connect; a refusal is still logged.
 Result<void> gate(const HttpUrl& target, const HttpGetOptions& options,
                   const Paths& paths, EndpointClass* cls_out) {
   const EndpointClass cls = classify_endpoint(target.host);
@@ -74,8 +70,7 @@ Result<void> gate(const HttpUrl& target, const HttpGetOptions& options,
   return refusal("host not permitted: " + target.host);
 }
 
-// Plaintext http is refused unless it is a loopback health check, even for
-// an allowlisted host: §6.1 allows the host, not the downgrade.
+// Even an allowlisted host may not downgrade: §6.1 allows the host only.
 Result<void> gate_scheme(const HttpUrl& target, const EndpointClass cls,
                          const HttpGetOptions& options) {
   if (target.scheme != "http")
@@ -129,16 +124,13 @@ Result<std::string> build_request(const HttpUrl& target,
   req += "Accept: */*\r\n";
   req += "Connection: close\r\n";
   if (options.bearer_token != nullptr) {
-    // §6.3: exact host match, never substring. A token bound for any other
-    // host is a caller bug and is refused loudly.
+    // §6.3: exact host match, never substring.
     if (target.host != kApiHost) {
       return refusal("bearer token is only permitted for api.github.com");
     }
     req += "Authorization: Bearer " + *options.bearer_token + "\r\n";
   }
-  // The blank line that terminates the head. It is required whether or not
-  // a token was added: without it the peer waits for headers that never
-  // come, and the request hangs until the deadline.
+  // Terminates the head; without it the peer waits until the deadline.
   req += "\r\n";
   return req;
 }
@@ -149,8 +141,7 @@ enum class Framed {
   kUnusableContentLength,
 };
 
-// What the bytes accumulated so far say about framing. A head that does not
-// parse yet is simply incomplete — more bytes may finish it.
+// An unparsable head is incomplete, not an error: more bytes may finish it.
 Result<Framed> framing_of(const std::string& wire) {
   const Result<std::pair<HttpReply, std::size_t>> head = parse_http_head(wire);
   if (head.is_err())
@@ -173,8 +164,6 @@ bool plain_response_is_complete(const std::string& wire) {
   return state.is_err() ? false : state.value() == Framed::kComplete;
 }
 
-// Reads until the response is complete under its own framing, or until the
-// peer closes. Caps the accumulated bytes and the wall clock.
 Result<void> read_response(TlsSession& session, const HttpUrl& target,
                            const HttpGetOptions& options,
                            const Deadline deadline, std::string* wire) {
@@ -244,7 +233,6 @@ Result<HttpReply> parse_complete(const std::string& wire,
                                  const std::string& host) {
   Result<std::pair<HttpReply, std::size_t>> head = parse_http_head(wire);
   if (head.is_err()) {
-    // Ended before a complete head: transport-shaped, not an HTTP result.
     return Error("http_get: truncated response from " + host + ": " +
                  head.error().ctx());
   }
@@ -256,11 +244,8 @@ Result<HttpReply> parse_complete(const std::string& wire,
   return reply;
 }
 
-// One attempt against one address: connect, TLS, send, read, parse.
-// Plaintext bytes on the loopback health-check path. Separate from the TLS
-// path on purpose: mbedTLS on a context that never completed a handshake
-// fails with BAD_INPUT_PARAMETERS, so a single "session" abstraction over
-// both would be a lie.
+// Separate from the TLS path on purpose: mbedTLS on a context that never
+// completed a handshake fails with BAD_INPUT_PARAMETERS.
 Result<void> read_plain_response(const int fd, const HttpUrl& target,
                                  const HttpGetOptions& options,
                                  const Deadline deadline, std::string* wire) {
@@ -284,7 +269,7 @@ Result<void> read_plain_response(const int fd, const HttpUrl& target,
       return Error("plain read " + target.host + ": " + errno_text(errno));
     }
     if (n == 0)
-      return {};  // peer closed
+      return {};
     wire->append(reinterpret_cast<const char*>(buf),
                  static_cast<std::size_t>(n));
     if (plain_response_is_complete(*wire))
@@ -432,8 +417,7 @@ Result<HttpReply> get_once_retried(const std::string& url,
                " attempts: " + last_error);
 }
 
-// Logs a redirect the allowlist refused (§6.1: a refused hop is still an
-// attempt and must appear in net.log).
+// §6.1: a refused hop is still an attempt and must appear in net.log.
 Result<void> log_refused_hop(const Paths& paths,
                              const RedirectDecision& decision,
                              const HttpGetOptions& options) {
@@ -449,8 +433,7 @@ Result<void> log_refused_hop(const Paths& paths,
                          .allowed = false});
 }
 
-}  // namespace
-
+}
 Result<HttpReply> http_get(const std::string& url,
                            const HttpGetOptions& options, const Paths& paths,
                            const ResolveHost& resolve) {
@@ -495,4 +478,4 @@ Result<HttpReply> http_get(const std::string& url,
   }
 }
 
-}  // namespace berth
+}

@@ -1,5 +1,3 @@
-// src/tui/screens.cpp — see screens.h for the contract.
-
 #include "screens.h"
 
 #include <fcntl.h>
@@ -34,33 +32,20 @@ using ftxui::Elements;
 
 namespace {
 
-// How often the deploy tail reads the log the ENGINE is already writing. The
-// file is the sync — there is no second sink to keep in step with it (§5: the
-// deploy log belongs in a neutral module, never in tui/).
 constexpr auto kDeployTailPoll = std::chrono::milliseconds(250);
-// The tail gives up waiting for the deploy after this long, so a stuck reader
-// cannot hold a finished deploy's result hostage.
 constexpr std::chrono::milliseconds kTailDrainBudget{2000};
-// The tail must know where this deploy's log starts before the engine writes
-// its first line; the worker waits this long for it to say so.
+// The tail must know where this deploy's log starts before its first line.
 constexpr std::chrono::milliseconds kTailReadyBudget{1000};
 
 constexpr std::size_t kDeployListRows = 6;
 constexpr std::size_t kDeployTailRows = 8;
-// While a draft is on screen the recipe list and the log tail give up their
-// rows: the review needs them, and a vbox that overflows DROPS rows — which
-// silently eats the port field.
+// A draft takes the rows a vbox would DROP — silently eating the port field.
 constexpr std::size_t kDraftListRows = 2;
 constexpr std::size_t kDraftTailRows = 3;
 
-}  // namespace
-
-// --- Deploy (6.3) -----------------------------------------------------------
-
+}
 namespace {
 
-// Appends freshly read lines to the screen's ring buffer and folds the newest
-// stage in. Under the mutex, like every other write to the view state.
 void absorb_deploy_lines(const std::shared_ptr<Panel>& panel,
                          const std::vector<std::string>& lines) {
   std::lock_guard lock(panel->mutex);
@@ -73,26 +58,19 @@ void absorb_deploy_lines(const std::shared_ptr<Panel>& panel,
   }
 }
 
-// The tail's handshake with the deploy worker. Shared, not stack-allocated:
-// the worker outlives start_deploy(), so a captured reference would dangle.
+// Shared: the tail worker outlives start_deploy(), so a reference dangles.
 struct TailGate {
-  std::atomic<bool> ready{false};    // the tail knows where this log starts
-  std::atomic<bool> drained{false};  // the tail has read its last line
+  std::atomic<bool> ready{false};
+  std::atomic<bool> drained{false};
 };
 
-// Reads the deploy log from wherever the last poll stopped and pushes whole
-// lines into the ring. Returns nothing: a vanished log is not an error the
-// screen can act on, and the engine's own result is the verdict.
 void follow_deploy_log(const std::shared_ptr<Panel>& panel,
                        const std::filesystem::path& log_path,
                        const std::shared_ptr<TailGate>& gate) {
   const std::shared_ptr<Panel> keep_alive = panel;
   std::thread tail([keep_alive, log_path, gate]() {
-    // If the log already exists, start at its current end — this screen shows
-    // THIS deploy, not every deploy that ever ran. A missing log is created by
-    // the engine's first append and is reopened from the start below. A POSIX
-    // fd, not a stdio stream: read() after EOF sees later appends, while a
-    // FILE* would keep its EOF flag set and freeze the tail.
+    // Start at the current end: this screen shows THIS deploy. A POSIX fd, not
+    // stdio: read() after EOF sees later appends, a FILE* freezes on its EOF.
     int fd = ::open(log_path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd >= 0 && ::lseek(fd, 0, SEEK_END) < 0) {
       ::close(fd);
@@ -128,10 +106,8 @@ void follow_deploy_log(const std::shared_ptr<Panel>& panel,
     gate->ready.store(true, std::memory_order_release);
     while (keep_alive->deploy_running.load(std::memory_order_relaxed) &&
            !keep_alive->shutting_down.load(std::memory_order_relaxed)) {
-      // The log is created on the engine's first append, which can happen
-      // after this reader starts. A missing file is not "no progress to show",
-      // it is "the first line has not been written yet" — so keep trying
-      // instead of giving up and losing the whole stage ladder (§11).
+      // A missing file means 'no first line yet', not 'no progress' — keep
+      // trying rather than lose the whole stage ladder (§11).
       if (fd < 0) {
         fd = ::open(log_path.c_str(), O_RDONLY | O_CLOEXEC);
       }
@@ -139,7 +115,6 @@ void follow_deploy_log(const std::shared_ptr<Panel>& panel,
       flush();
       std::this_thread::sleep_for(kDeployTailPoll);
     }
-    // One last pass: the engine wrote the done/failed lines while we slept.
     if (fd < 0) {
       fd = ::open(log_path.c_str(), O_RDONLY | O_CLOEXEC);
     }
@@ -153,16 +128,13 @@ void follow_deploy_log(const std::shared_ptr<Panel>& panel,
   tail.detach();
 }
 
-}  // namespace
-
+}
 void start_deploy(const std::shared_ptr<Panel>& panel,
                   const berth::Paths& paths, const berth::Recipe& recipe,
                   const std::uint16_t forced_port, DeployPreStore pre_store) {
   {
     std::lock_guard lock(panel->mutex);
-    // One deploy at a time, in the UI. The engine's deploy.lock is the second
-    // line of defence (against a deploy started from the CLI), not the first:
-    // flock contention would be discovered only after the fetch stage began.
+    // One deploy at a time in the UI: deploy.lock is only the second line.
     if (panel->deploy_in_flight) {
       return;
     }
@@ -179,8 +151,6 @@ void start_deploy(const std::shared_ptr<Panel>& panel,
     panel->deploy_status = "starting " + recipe.service_name;
   }
 
-  // The tail goes first: it must know the log's end offset before the engine
-  // writes "fetch ...", or this deploy's first line is lost to the race.
   const std::shared_ptr<TailGate> gate = std::make_shared<TailGate>();
   follow_deploy_log(panel, paths.deploy_log, gate);
 
@@ -189,19 +159,13 @@ void start_deploy(const std::shared_ptr<Panel>& panel,
       [paths, recipe, forced_port, gate, panel,
        pre_store](const std::shared_ptr<Op>& op) {
         {
-          // Publish the op BEFORE the tail-ready wait. `c` reaches the engine
-          // only through panel->deploy_op; assigning it after a wait of up to
-          // a second let a cancel in that window flip nothing and the deploy
-          // run to completion while the screen said "cancelling".
+          // Publish the op BEFORE the tail-ready wait: 'c' reaches the engine
+          // only through panel->deploy_op.
           std::lock_guard lock(panel->mutex);
           panel->deploy_op = op;
         }
         static_cast<void>(wait_for_flag(gate->ready, kTailReadyBudget));
         if (pre_store) {
-          // The store runs here, on the deploy's own worker, so it is FINISHED
-          // before the first byte of the deploy. It used to run on its own
-          // worker while start_deploy was called synchronously right after, so
-          // a failed store still deployed the draft.
           const berth::Result<void> stored = pre_store();
           if (stored.is_err()) {
             return berth::Result<berth::DeployOutcome>(
@@ -214,9 +178,7 @@ void start_deploy(const std::shared_ptr<Panel>& panel,
         options.cancel = &op->cancel;
         berth::Result<berth::DeployOutcome> outcome =
             run_deploy(paths, recipe, forced_port, ops, options);
-        // Tell the tail to stop, then WAIT for it, so the done/failed lines
-        // land in the ring before the verdict is folded into the state. The
-        // wait is bounded: a wedged reader must not hold the result back.
+        // Stop the tail, then WAIT (bounded) for the done/failed lines.
         panel->deploy_running.store(false, std::memory_order_release);
         static_cast<void>(wait_for_flag(gate->drained, kTailDrainBudget));
         return outcome;
@@ -260,17 +222,13 @@ void cancel_deploy(const std::shared_ptr<Panel>& panel) {
 
 Element render_deploy_screen(const Panel& panel,
                              const ftxui::Elements& create_inputs) {
-  // The overwrite question replaces the screen, like every other dialog: it is
-  // the one thing that must not be read past.
   if (panel.draft_clash_confirming) {
     return boxed_dialog(
         draft_clash_lines(panel.draft_clash, panel.draft.commit),
         Color::Yellow);
   }
   if (panel.confirming_recipe_remove) {
-    // The real path, derived the same way the engine's recipe_file() does, so
-    // the dialog names the file it is about to delete (never a hand-typed
-    // XDG default that could drift, §11).
+    // Derived like the engine's recipe_file(), never a hand-typed XDG path.
     const std::string recipe_path =
         (panel.paths.recipes_dir / (panel.recipe_remove_target + ".json"))
             .string();
@@ -283,8 +241,6 @@ Element render_deploy_screen(const Panel& panel,
   out.push_back(ftxui::text("DEPLOY") | ftxui::bold |
                 ftxui::color(Color::Magenta));
 
-  // A static ellipsis, never an animated spinner: the panel has no animation
-  // clock, and a spinner that does not tick lies about progress.
   Elements status;
   if (panel.deploy_running.load(std::memory_order_relaxed)) {
     const bool cancelling =
@@ -294,8 +250,6 @@ Element render_deploy_screen(const Panel& panel,
                                  panel.deploy_service + "...") |
                      ftxui::color(cancelling ? Color::Yellow : Color::Magenta));
   } else if (!panel.deploy_status.empty()) {
-    // A cancellation is not a failure: the engine returns an Error to unwind,
-    // but the status stays yellow and no "deploy failed:" box is drawn.
     const DeployVerdict verdict = deploy_verdict(
         panel.deploy_finished, panel.deploy_cancelled, panel.deploy_error);
     const Color colour = verdict.success     ? Color::Green
@@ -308,16 +262,13 @@ Element render_deploy_screen(const Panel& panel,
   out.push_back(ftxui::hbox(std::move(status)) | ftxui::dim);
   out.push_back(ftxui::separator());
 
-  // The catalog action's verdict (a recipe removed, or why it could not be).
-  // A refusal to remove a builtin also lands here.
   if (!panel.catalog_status.empty()) {
     const bool bad = panel.catalog_status.rfind("could not", 0) == 0;
     out.push_back(ftxui::text("  " + panel.catalog_status) |
                   ftxui::color(bad ? Color::Red : Color::Green));
   }
 
-  // A refused edit (a builtin recipe) is a status line, not a modal: the user
-  // has not lost the screen and can pick a user recipe and press E again.
+  // A refusal is a status line, not a modal: the screen is not lost.
   if (!panel.edit_error.empty()) {
     for (const std::string& part : berth::split(panel.edit_error, "\n")) {
       out.push_back(ftxui::paragraph("  " + part) | ftxui::color(Color::Red));
@@ -325,8 +276,6 @@ Element render_deploy_screen(const Panel& panel,
   }
 
   if (!panel.catalog_error.empty()) {
-    // A catalog that failed to load must say so (§11). The old screen fell
-    // through to an empty list and showed the user nothing at all.
     std::vector<std::string> lines{"the catalog could not be read:"};
     for (const std::string& part : berth::split(panel.catalog_error, "\n")) {
       lines.push_back("  " + part);
@@ -339,10 +288,7 @@ Element render_deploy_screen(const Panel& panel,
                          "recipes dir") |
         ftxui::dim);
   } else {
-    // Header and selectable rows are SEPARATE: line_list marks its own cursor
-    // row, and panel.catalog_cursor indexes panel.catalog.recipes, so the
-    // header must not be part of the vector the cursor walks. One row of the
-    // budget is the header, hence the -1.
+    // Header row is NOT selectable: the cursor indexes catalog.recipes.
     const std::size_t rows = drafting ? kDraftListRows : kDeployListRows;
     out.push_back(ftxui::text(catalog_header_line()) | ftxui::dim);
     out.push_back(line_list(catalog_row_lines(panel.catalog),
@@ -355,8 +301,6 @@ Element render_deploy_screen(const Panel& panel,
   }
   out.push_back(ftxui::separator());
 
-  // The creation form takes the whole block: it is the only way to describe a
-  // new service, so its eleven fields are what the user is looking at.
   if (panel.create_active || panel.create_running) {
     out.push_back(ftxui::text("NEW SERVICE") | ftxui::bold |
                   ftxui::color(Color::Magenta));
@@ -394,8 +338,6 @@ Element render_deploy_screen(const Panel& panel,
   }
   out.push_back(ftxui::separator());
 
-  // The ladder is the deploy's progress; while a draft is being reviewed it
-  // would just be five lines of "nothing yet".
   if (!drafting) {
     out.push_back(paragraph_lines(deploy_stage_lines(
         panel.deploy_stage, panel.deploy_finished, panel.deploy_status)));
@@ -470,8 +412,6 @@ Element render_deploy_screen(const Panel& panel,
   return ftxui::vbox(std::move(out)) | ftxui::flex;
 }
 
-// --- Recipe edit (4.19+) ---------------------------------------------------
-
 Element render_edit_screen(const Panel& panel,
                            const ftxui::Elements& edit_inputs) {
   Elements out;
@@ -528,8 +468,6 @@ Element render_edit_screen(const Panel& panel,
   return ftxui::vbox(std::move(out)) | ftxui::flex;
 }
 
-// --- Catalog (6.2) ---------------------------------------------------------
-
 void refresh_catalog(const std::shared_ptr<Panel>& panel,
                      const berth::Paths& paths, const bool background) {
   {
@@ -548,8 +486,6 @@ void refresh_catalog(const std::shared_ptr<Panel>& panel,
       panel, "catalog load",
       [paths](const std::shared_ptr<Op>& op) -> berth::Result<Catalog> {
         std::atomic<bool>* cancel = &op->cancel;
-        // Cancelled before it started is not a failure worth rendering; the
-        // load simply never happens.
         if (cancel->load()) {
           return berth::Error("cancelled before the catalog read");
         }
@@ -576,8 +512,7 @@ void remove_user_recipe(const std::shared_ptr<Panel>& panel,
                         const std::string& service_name) {
   {
     std::lock_guard lock(panel->mutex);
-    // Never overlap the auto-refresh or a second removal: both mutate the same
-    // list and cursor, and a delete racing a reload is the §11 stale-row bug.
+    // A delete racing a reload is the §11 stale-row bug.
     if (panel->recipe_removing || panel->catalog_loading ||
         panel->catalog_auto) {
       return;
@@ -597,8 +532,6 @@ void remove_user_recipe(const std::shared_ptr<Panel>& panel,
         if (removed.is_err()) {
           return std::move(removed).error();
         }
-        // The reload happens in the SAME worker, after the write: the list can
-        // never show what the removal did not do.
         berth::Result<Catalog> reloaded = load_catalog(paths);
         if (reloaded.is_err()) {
           return berth::with_context(std::move(reloaded).error(),
@@ -623,8 +556,6 @@ void remove_user_recipe(const std::shared_ptr<Panel>& panel,
       });
 }
 
-// --- System Scan (6.5) -----------------------------------------------------
-
 void run_system_scan(const std::shared_ptr<Panel>& panel,
                      const berth::Paths& paths) {
   {
@@ -644,9 +575,6 @@ void run_system_scan(const std::shared_ptr<Panel>& panel,
       [](Panel& state, berth::Result<berth::ScanReport>&& report) {
         state.scan_running = false;
         if (report.is_err()) {
-          // The scan itself failed (not one of its sections). The previous
-          // report stays on screen next to this text, so a failing re-run does
-          // not erase what was known.
           state.scan_error = report.error().ctx();
           return;
         }
@@ -657,7 +585,6 @@ void run_system_scan(const std::shared_ptr<Panel>& panel,
 
 namespace {
 
-// One titled section of the report.
 Element scan_section(const std::string& title,
                      const std::vector<std::string>& lines) {
   Elements out;
@@ -667,14 +594,11 @@ Element scan_section(const std::string& title,
   return ftxui::vbox(std::move(out));
 }
 
-}  // namespace
-
+}
 Element render_scan_screen(const Panel& panel) {
   Elements out;
   out.push_back(ftxui::text("SYSTEM SCAN") | ftxui::bold |
                 ftxui::color(Color::Cyan));
-  // The same honesty as everywhere else: a static ellipsis, never an animated
-  // spinner the panel has no clock to advance.
   if (panel.scan_running) {
     out.push_back(ftxui::text("\xe2\x8b\xb0 running the scan (all four steps "
                               "are bounded)...") |
@@ -697,8 +621,6 @@ Element render_scan_screen(const Panel& panel) {
     out.push_back(ftxui::separator());
   }
 
-  // The network alert gets its own emphasis: it is the only section whose
-  // failure the user can do something about, and the scan completes anyway.
   const std::string alert = scan_network_alert(panel.scan);
   if (!alert.empty()) {
     out.push_back(paragraph_lines(berth::split(alert, "\n")) |
@@ -707,8 +629,6 @@ Element render_scan_screen(const Panel& panel) {
   }
 
   if (panel.scan_running && !panel.scan_ever_ran) {
-    // Nothing collected yet: the idle text is more useful than four empty
-    // sections.
     out.push_back(paragraph_lines({"first run in progress..."}) | ftxui::dim);
     return ftxui::vbox(std::move(out)) | ftxui::flex;
   }
@@ -722,26 +642,18 @@ Element render_scan_screen(const Panel& panel) {
   return ftxui::vbox(std::move(out)) | ftxui::flex;
 }
 
-// --- BYO wizard (plan 4.21) ------------------------------------------------
-
 namespace {
 
-// What the draft worker hands back: the draft AND the clash answer. Both are
-// computed on the worker, in one pass — the clash needs the detected
-// service_name, so it cannot be asked before the clone, and asking it from the
-// render thread would mean file reads there (§5).
+// The clash needs the detected name: file reads stay off the render thread.
 struct DraftPrepared {
   berth::DraftResult draft;
   berth::DraftClash clash;
-  std::string error;  // empty when the draft was made
+  std::string error;
 };
 
-}  // namespace
-
+}
 namespace {
 
-// The creation form's result: the detected draft with the user's eight values
-// applied on top. Everything the review shows and the store writes.
 struct PreparedRecipe {
   berth::Recipe recipe;
   std::string owner_repo;
@@ -752,8 +664,7 @@ struct PreparedRecipe {
   std::string error;
 };
 
-}  // namespace
-
+}
 void start_create_recipe(const std::shared_ptr<Panel>& panel,
                          const berth::Paths& paths,
                          const berth::DraftRequest& request,
@@ -773,8 +684,6 @@ void start_create_recipe(const std::shared_ptr<Panel>& panel,
       [paths, request, fields, keep_alive](
           const std::shared_ptr<Op>& op) -> berth::Result<PreparedRecipe> {
         {
-          // Publish the op so 'c' reaches the creation's own flag while it
-          // runs.
           std::lock_guard lock(keep_alive->mutex);
           keep_alive->create_op = op;
         }
@@ -793,10 +702,7 @@ void start_create_recipe(const std::shared_ptr<Panel>& panel,
         }
         berth::DraftResult detected = std::move(prepared).value();
 
-        // The user's eight values WIN over the detector's guesses — that is the
-        // whole point of the form. The PURE engine runs validate_recipe on the
-        // result, so a form that describes something invalid is refused here,
-        // before a review exists, let alone a file (§8).
+        // The user's eight values WIN over the detector's guesses (§8).
         const berth::Result<berth::RecipeEdits> edits =
             assemble_recipe_edits(fields);
         if (edits.is_err()) {
@@ -817,8 +723,7 @@ void start_create_recipe(const std::shared_ptr<Panel>& panel,
         out.warnings = std::move(detected.warnings);
         const berth::Result<berth::DraftClash> clash =
             berth::find_recipe_clash(paths, out.recipe.service_name);
-        // A clash we could not determine is treated as a clash: a store that
-        // cannot check the name has to ask, never assume it is free.
+        // An undeterminable clash IS a clash: a failed check must ask.
         if (clash.is_err()) {
           out.clash.exists = true;
           out.clash.service_name = out.recipe.service_name;
@@ -839,9 +744,7 @@ void start_create_recipe(const std::shared_ptr<Panel>& panel,
         state.create_error.clear();
         state.create_active = false;
         state.create_field = CreateField::kNone;
-        // Handed to the EXISTING review + store path: the form created it, and
-        // from here `s` stores and `d` stores and deploys. One store, one
-        // clash policy, one review (the old shape: two create paths drift).
+        // Handed to the EXISTING review + store path: two create paths drift.
         state.draft = berth::DraftResult{};
         state.draft.draft = std::move(value.recipe);
         state.draft.owner_repo = std::move(value.owner_repo);
@@ -865,8 +768,6 @@ void accept_draft(const std::shared_ptr<Panel>& panel,
   bool clash_needs_an_answer = false;
   {
     std::lock_guard lock(panel->mutex);
-    // A second 's'/'d' while a store, a draft or a deploy is in flight must not
-    // spawn a second writer over the same file.
     if (!panel->draft_ready || panel->draft_stored || panel->draft_running ||
         panel->draft_storing || panel->deploy_in_flight) {
       return;
@@ -886,8 +787,7 @@ void accept_draft(const std::shared_ptr<Panel>& panel,
     }
   }
   if (clash_needs_an_answer) {
-    // The question, not the overwrite: the store has not happened yet, and it
-    // will not happen until the user says so (§8).
+// Nothing is stored until the user says (§8).
     std::lock_guard lock(panel->mutex);
     panel->draft_clash_confirming = true;
     panel->draft_pending_deploy = deploy_after;
@@ -895,10 +795,7 @@ void accept_draft(const std::shared_ptr<Panel>& panel,
   }
 
   if (deploy_after) {
-    // Store and deploy are ONE worker: start_deploy's worker runs pre_store to
-    // completion before run_deploy, so a refused store aborts the deploy.
-    // Starting the store on its own worker and calling start_deploy right after
-    // raced the two and deployed a draft that was never written (wizard.h).
+// Store and deploy are ONE worker: a refused store aborts the deploy.
     refresh_catalog(panel, paths);
     start_deploy(panel, paths, recipe, port,
                  [paths, recipe, force]() -> berth::Result<void> {
@@ -918,9 +815,7 @@ void accept_draft(const std::shared_ptr<Panel>& panel,
     }
     panel->draft_storing = true;
   }
-  // Storing reloads the catalog in the SAME worker (like the removal does), so
-  // the recipe that was just written can be selected without racing the write:
-  // the next Enter then deploys exactly what was saved.
+  // The reload is in the SAME worker, so the next Enter deploys what was saved.
   struct StoredDraft {
     std::filesystem::path path;
     Catalog catalog;
@@ -954,8 +849,6 @@ void accept_draft(const std::shared_ptr<Panel>& panel,
         state.draft_stored_path = std::move(value.path);
         state.draft_error.clear();
         state.draft_status = "stored";
-        // Select it so Enter deploys it once Esc closes the draft (the draft
-        // owns Enter while it is up).
         state.catalog = std::move(value.catalog);
         for (std::size_t i = 0; i < state.catalog.recipes.size(); ++i) {
           if (state.catalog.recipes[i].service_name == service_name) {
@@ -976,23 +869,17 @@ void discard_draft(const std::shared_ptr<Panel>& panel) {
   panel->draft_error.clear();
 }
 
-// --- Recipe edit (4.19+) ---------------------------------------------------
-
 namespace {
 
-// The save's whole result: the engine's before/after/path, the rendered diff
-// the screen shows, and the reloaded catalog. One worker returns all three so
-// the catalog reload can never race the write — it happens AFTER it, on the
-// same thread, with no nested lock (the apply callback runs under the panel
-// lock; calling refresh_catalog() there would deadlock).
+// One worker returns write + diff + reload, so the catalog cannot race the
+// write; refresh_catalog() under the panel lock would deadlock.
 struct EditSave {
   berth::RecipeEditResult edit;
   std::string diff;
   Catalog catalog;
 };
 
-}  // namespace
-
+}
 void start_recipe_edit(const std::shared_ptr<Panel>& panel,
                        const berth::Paths& paths,
                        const berth::RecipeEdits& edits) {
@@ -1064,16 +951,12 @@ DraftKey handle_draft_clash_key(Panel& panel, const std::string& key) {
     panel.draft_clash_confirming = false;
     return DraftKey::kDismissed;
   }
-  return DraftKey::kEaten;  // the modal is modal
+  return DraftKey::kEaten;
 }
-
-// --- Logs (6.6) ------------------------------------------------------------
 
 namespace {
 
-// How many lines a log view holds. Bounded because the buffer is a ring
-// (§5) and because a screen that tries to draw 20k lines is a screen that
-// takes a second to redraw.
+// Bounded (§5): drawing 20k lines takes a second to redraw.
 constexpr std::size_t kLogViewLines = 1000;
 constexpr std::size_t kLogVisibleRows = 14;
 
@@ -1090,19 +973,14 @@ std::filesystem::path log_path_of(const berth::Paths& paths,
   abort_bug("unknown LogFile");
 }
 
-}  // namespace
-
+}
 void refresh_logs(const std::shared_ptr<Panel>& panel,
                   const berth::Paths& paths) {
   LogFile file = LogFile::kDeploy;
   std::size_t generation = 0;
   {
     std::lock_guard lock(panel->mutex);
-    // A newer request SUPERSEDES one in flight instead of being dropped. The
-    // old behavior returned early when a tail was loading, so switching 1→2
-    // while file 1 was being read left file 2 unloaded and then wrote file 1's
-    // lines under file 2's selected tab. The generation makes the stale reply
-    // a no-op and lets the new file load immediately.
+    // The generation makes a stale reply a no-op: a switch never loses a load.
     file = panel->log_selected;
     panel->log_loading = true;
     panel->log_error.clear();
@@ -1115,9 +993,6 @@ void refresh_logs(const std::shared_ptr<Panel>& panel,
         return berth::tail_lines(path, kLogViewLines);
       },
       [file, generation](Panel& state, berth::Result<berth::Tail>&& tail) {
-        // A reply for a file the user has switched away from is dropped: the
-        // screen already cleared for the new selection, and writing this under
-        // it would show one file's tail under another file's name.
         if (generation != state.log_generation) {
           return;
         }
@@ -1127,8 +1002,7 @@ void refresh_logs(const std::shared_ptr<Panel>& panel,
         }
         const std::size_t slot = log_file_index(file);
         if (tail.is_err()) {
-          // An unreadable log is NOT an empty one: the buffer is cleared so the
-          // screen cannot show a stale tail next to an error about this file.
+          // An unreadable log is NOT an empty one: the buffer is cleared.
           state.log_error = tail.error().ctx();
           state.logs_lines.clear();
           state.log_counts[slot] = std::nullopt;
@@ -1144,9 +1018,6 @@ void refresh_logs(const std::shared_ptr<Panel>& panel,
           state.logs_lines.push_back(line);
         }
         state.log_counts[slot] = state.logs_lines.size();
-        // The scroll position is left alone on purpose: a reload must not yank
-        // the view back to the bottom, and log_window clamps a scroll that is
-        // now past the top of a shorter file.
       });
 }
 
@@ -1160,8 +1031,6 @@ Element render_logs_screen(const Panel& panel) {
   out.push_back(ftxui::text(std::string("  ") + std::string(log_file_path_hint(
                                                     panel.log_selected))) |
                 ftxui::dim);
-  // What the header's NET number means, spelled out once, here where there is
-  // room for it. The banner itself is only the count.
   const berth::NetSnapshot net = berth::netstatus_snapshot();
   out.push_back(ftxui::text("  " + net_banner_note(net)) | ftxui::dim);
   out.push_back(ftxui::separator());
@@ -1175,8 +1044,6 @@ Element render_logs_screen(const Panel& panel) {
         paragraph_lines(log_error_lines(panel.log_selected, panel.log_error)) |
         ftxui::color(Color::Red));
   } else if (panel.logs_lines.empty()) {
-    // No error and no lines: the file is genuinely empty (or absent, which is
-    // the same thing for crash.log). Tail.h says so in words per file.
     out.push_back(paragraph_lines(log_empty_lines(panel.log_selected)));
   } else {
     Elements meta;
@@ -1188,8 +1055,6 @@ Element render_logs_screen(const Panel& panel) {
                                " lines")) |
         ftxui::dim);
     if (panel.log_truncated) {
-      // A log longer than the window is not a log the panel can show whole,
-      // and pretending otherwise would be a silent lie.
       meta.push_back(ftxui::text("  (the file is longer than the read window; "
                                  "this is its tail)") |
                      ftxui::dim);
@@ -1212,22 +1077,17 @@ Element render_logs_screen(const Panel& panel) {
   return ftxui::vbox(std::move(out)) | ftxui::flex;
 }
 
-// --- My Services (6.4) ----------------------------------------------------
-
 void refresh_services(const std::shared_ptr<Panel>& panel,
                       const berth::Paths& paths, const bool background) {
   {
     std::lock_guard lock(panel->mutex);
-    // An action owns the rows until its own re-list lands: a refresh must not
-    // race it (the §11 stale-row bug). One guard covers foreground and
-    // background so the two can never overlap either.
+    // An action owns the rows until its re-list lands (§11 stale-row bug).
     if (panel->services_loading || panel->services_auto ||
         !panel->action.empty()) {
       return;
     }
     if (background) {
-      // Silent: no "querying..." status, and no user-visible loading flag, so
-      // a tick cannot clobber an action's verdict or flicker the screen.
+      // Silent: no status line and no loading flag, so a tick cannot clobber.
       panel->services_auto = true;
     } else {
       panel->services_loading = true;
@@ -1251,9 +1111,7 @@ void refresh_services(const std::shared_ptr<Panel>& panel,
         state.services_cursor = cursor_after_rows_refresh(
             state.services_cursor, state.rows, rows.value());
         state.rows = std::move(rows).value();
-        // While a confirm dialog is up it owns the screen: the cursor is frozen
-        // so the highlight cannot walk off the service the dialog is naming.
-        // An index left stale by that freeze is repaired on the next refresh.
+        // A dialog owns the screen: the cursor is frozen while it is up.
         if (dialog_open && state.services_cursor >= state.rows.size()) {
           state.services_cursor = 0;
         }
@@ -1265,8 +1123,6 @@ void refresh_services(const std::shared_ptr<Panel>& panel,
 
 namespace {
 
-// What the freeze/unfreeze did, said in words: a frozen service holds its port,
-// which is the part a user cannot un-derive from "active".
 std::string row_is_frozen_after(const bool frozen_now, const bool freezing,
                                 const std::string& service_name) {
   if (frozen_now) {
@@ -1275,30 +1131,20 @@ std::string row_is_frozen_after(const bool frozen_now, const bool freezing,
            "unfreeze it";
   }
   if (freezing) {
-    // The signal went out and the substate says it did not take: say THAT
-    // rather than claim a freeze that never happened (§11).
     return service_name + " did not freeze (systemd says it is still " +
            "running) — nothing was changed";
   }
   return service_name + " is running again";
 }
 
-// start / stop / restart / kill / uninstall share one shape: a label, one
-// blocking call, and the outcome folded into the status line. Only the call
-// differs. The action and the re-list run on ONE worker and land in ONE apply,
-// so the row the user just acted on can never be left showing its old state
-// (start still reading "inactive", an uninstalled service still listed). Doing
-// the re-list here also avoids taking panel.mutex again from inside the apply,
-// which would self-deadlock.
+// Action and re-list on ONE worker; re-listing here avoids a self-deadlock.
 void service_action(const std::shared_ptr<Panel>& panel,
                     const std::string& label,
                     const std::function<berth::Result<void>()>& op) {
   berth::Paths paths;
   {
     std::lock_guard lock(panel->mutex);
-    // One action at a time, and never against rows a refresh is mid-replace:
-    // a second press is a no-op, not a race. A background tick counts too, or
-    // its apply could land after the action's re-list and show stale rows.
+    // One action at a time, never against rows a refresh is mid-replacing.
     if (!panel->action.empty() || panel->services_loading ||
         panel->services_auto) {
       return;
@@ -1320,8 +1166,6 @@ void service_action(const std::shared_ptr<Panel>& panel,
               berth::Result<std::vector<berth::ServiceRow>>&& refreshed) {
         state.action.clear();
         if (refreshed.is_err()) {
-          // The action succeeded but the re-list did not: say both, and leave
-          // the old rows rather than claim a state we could not read.
           state.services_status = label +
                                   ": ok (the list could not be refreshed: " +
                                   refreshed.error().ctx() + ")";
@@ -1339,8 +1183,7 @@ void service_action(const std::shared_ptr<Panel>& panel,
       });
 }
 
-}  // namespace
-
+}
 void service_action_start(const std::shared_ptr<Panel>& panel,
                           const std::string& service_name) {
   service_action(panel, "starting " + service_name, [service_name]() {
@@ -1375,8 +1218,6 @@ void service_action_kill(const std::shared_ptr<Panel>& panel,
 
 void service_action_freeze(const std::shared_ptr<Panel>& panel,
                            const std::string& service_name) {
-  // The label depends on what the row believes now, so the status line says
-  // "freezing" only when the service is actually running.
   bool freezing = true;
   {
     std::lock_guard lock(panel->mutex);
@@ -1391,8 +1232,7 @@ void service_action_freeze(const std::shared_ptr<Panel>& panel,
     }
     panel->action = (freezing ? "freezing " : "unfreezing ") + service_name;
   }
-  // The freeze reports back a BOOL — a signal that was sent is not a state —
-  // so it does not fit service_action()'s Result<void> shape.
+  // A signal that was sent is not a state, so the freeze reports a BOOL.
   run_on_worker<bool>(
       panel, "freeze",
       [service_name, freezing](const std::shared_ptr<Op>& /*op*/) {
@@ -1409,8 +1249,6 @@ void service_action_freeze(const std::shared_ptr<Panel>& panel,
           if (row.service_name != service_name) {
             continue;
           }
-          // Both verbs return "true = frozen now", confirmed against the
-          // process: the row shows what IS, not what we asked for.
           row.frozen = frozen.value();
         }
         state.services_status =
@@ -1432,8 +1270,6 @@ Element render_services_screen(const Panel& panel) {
   out.push_back(ftxui::text("MY SERVICES") | ftxui::bold |
                 ftxui::color(Color::Green));
 
-  // A static ellipsis, not an animated spinner: the panel has no animation
-  // clock, and a spinner that never ticks lies about progress.
   Elements status;
   if (!panel.action.empty()) {
     status.push_back(ftxui::text("\xe2\x8b\xb0 " + panel.action + "..."));
@@ -1452,8 +1288,7 @@ Element render_services_screen(const Panel& panel) {
   if (panel.rows.empty()) {
     out.push_back(paragraph_lines(services_empty_lines()) | ftxui::flex);
   } else {
-    // Same split as the catalog list: the header is not selectable, or the
-    // highlight and the action would be one row apart.
+    // Header row is not selectable: the highlight would be one row off.
     out.push_back(ftxui::text(services_header_line()) | ftxui::dim);
     out.push_back(line_list(services_row_lines(panel.rows),
                             panel.services_cursor, Color::Green, true,
@@ -1475,8 +1310,6 @@ Element confirm_kill_screen(const Panel& panel) {
   return boxed_dialog(confirm_kill_lines(panel.kill_target), Color::Red);
 }
 
-// The kill dialog reuses the uninstall dialog's key rules: same shape, same
-// "the caller acts" contract. A second near-identical enum would be a trap.
 UninstallKey handle_kill_key(Panel& panel, const std::string& key) {
   if (key == "y" || key == "Y") {
     panel.confirming_kill = false;
@@ -1499,7 +1332,6 @@ UninstallKey handle_uninstall_key(Panel& panel, const std::string& key) {
     return UninstallKey::kConfirmed;
   }
   if (key == "q") {
-    // "q" keeps meaning quit; the dialog only lets it out.
     panel.confirming_uninstall = false;
     return UninstallKey::kQuit;
   }
@@ -1507,7 +1339,7 @@ UninstallKey handle_uninstall_key(Panel& panel, const std::string& key) {
     panel.confirming_uninstall = false;
     return UninstallKey::kDismissed;
   }
-  return UninstallKey::kEaten;  // anything else is eaten by the modal
+  return UninstallKey::kEaten;
 }
 
-}  // namespace tui
+}

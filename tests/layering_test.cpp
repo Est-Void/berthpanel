@@ -36,8 +36,7 @@ bool is_engine_source(const fs::path& p) {
   return ext == ".cpp" || ext == ".h" || ext == ".hpp";
 }
 
-}  // namespace
-
+}
 TEST(engine_sources_never_include_the_tui_or_ftxui) {
   // Resolve the repo root from this file's path first (the Makefile compiles
   // with a repo-relative path), then from the working directory (`make test`

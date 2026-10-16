@@ -57,8 +57,7 @@ Recipe go_recipe(const std::string& service_name = "berthpanel-myapp") {
   return r;
 }
 
-}  // namespace
-
+}
 TEST(user_recipe_store_and_load_roundtrip) {
   const TempDir tmp;
   const berth::Paths p = test_paths(tmp.path());

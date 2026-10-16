@@ -1,11 +1,7 @@
 #pragma once
 
-// src/berth/journal.h — deploy-journal.json, the interrupted-deploy
-// record (dev.md §6.7). An entry is written when a deploy starts real
-// work and removed when the deploy reaches a terminal outcome; cleanup
-// treats "entry present AND deploy.lock free" as interrupted. Storage
-// goes through json.h: a corrupt journal is quarantined loudly, never
-// read as empty (§11). Missing file = no journal = nothing interrupted.
+// An entry lives while a deploy does real work; cleanup reads "present AND lock
+// free" as interrupted. A corrupt journal is quarantined, never read as empty.
 
 #include <cstdint>
 #include <string>
@@ -18,12 +14,15 @@
 namespace berth {
 
 struct JournalEntry {
-  std::string service_name;  // unit stem, validated on load
-  std::string work_dir;      // services/<name> dir cleanup removes
-  std::string repo;          // owner/repo as deployed
-  std::string commit;        // target SHA
-  std::string stage;         // cloning | building | registering
+  std::string service_name;
+  std::string work_dir;
+  std::string repo;
+  std::string commit;
+  std::string stage;
   std::int64_t started_at_unix = 0;
+  // Non-empty for a stack member: the group stem. The key stays service_name,
+  // so each member is its own entry; the tag groups them for cleanup.
+  std::string stack;
 };
 
 [[nodiscard]] Result<std::vector<JournalEntry>> journal_load(
@@ -33,8 +32,13 @@ struct JournalEntry {
 [[nodiscard]] Result<void> journal_upsert(const Paths& paths,
                                           const JournalEntry& entry);
 
+// One store for the whole group: a stack writes all member entries before the
+// first member runs, so an interruption reconciles every member.
+[[nodiscard]] Result<void> journal_upsert_many(
+    const Paths& paths, const std::vector<JournalEntry>& entries);
+
 // Idempotent: removing an unknown entry is Ok — cleanup may run twice.
 [[nodiscard]] Result<void> journal_remove(const Paths& paths,
                                           std::string_view service_name);
 
-}  // namespace berth
+}

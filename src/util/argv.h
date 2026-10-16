@@ -1,15 +1,12 @@
 #pragma once
 
-// src/util/argv.h — inspection of an argv array. argv is the only currency
-// for subprocesses (dev.md §11): nothing here splits or joins on whitespace.
-
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace berth {
 
-// Basename of argv[0]: "/usr/bin/pnpm" -> "pnpm". Empty for an empty argv.
+// Basename of argv[0]: "/usr/bin/pnpm" -> "pnpm".
 [[nodiscard]] inline std::string program_name(
     const std::vector<std::string>& argv) {
   if (argv.empty())
@@ -28,4 +25,4 @@ namespace berth {
   return false;
 }
 
-}  // namespace berth
+}

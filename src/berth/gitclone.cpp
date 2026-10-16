@@ -1,5 +1,3 @@
-// src/berth/gitclone.cpp — see gitclone.h for the contract.
-
 #include "gitclone.h"
 
 #include <optional>
@@ -18,8 +16,6 @@ namespace berth {
 
 namespace {
 
-// A 0700 directory holding the token and a GIT_ASKPASS shim. Both vanish
-// with the TempDir, so the token never outlives the clone that needed it.
 class Askpass {
  public:
   [[nodiscard]] static Result<Askpass> create(const std::string& token);
@@ -91,7 +87,6 @@ Result<void> run_git(const std::vector<std::string>& args,
   return {};
 }
 
-// The four git invocations that materialise one pinned commit.
 Result<void> fetch_pinned_commit(const CloneRequest& request,
                                  const std::filesystem::path& dest,
                                  const std::filesystem::path& askpass_dir) {
@@ -118,8 +113,6 @@ Result<void> fetch_pinned_commit(const CloneRequest& request,
                  request, askpass_dir);
 }
 
-// §6.6: a checkout is not proof. HEAD is read back and compared against the
-// requested SHA, so a moved branch can never pass for a pin.
 Result<void> verify_head_is(const CloneRequest& request,
                             const std::filesystem::path& dest) {
   const Result<std::string> git_bin = resolve_executable("git");
@@ -154,9 +147,7 @@ Result<void> check_dest_is_free(const std::filesystem::path& dest) {
   return ensure_dir(dest.parent_path());
 }
 
-// Holds the askpass directory for as long as the clone runs. An empty
-// source means "no token": run_git then leaves GIT_ASKPASS unset, so git can
-// only reach a credential helper the user already has.
+// No token: GIT_ASKPASS stays unset, so only a credential helper can answer.
 class TokenSource {
  public:
   [[nodiscard]] static Result<TokenSource> for_token(const std::string* token);
@@ -214,10 +205,8 @@ RefCandidates scan_ls_remote(const std::string& out, const std::string& ref) {
   return found;
 }
 
-// An annotated tag lists twice and the peeled "ref^{}" line is the real
-// commit, so it wins. HEAD is a fallback ONLY when nothing explicit was
-// asked: resolving a NAMED ref to whatever HEAD points at would deploy a
-// moved branch (§6.6).
+// The peeled ref^{} line is the annotated-tag commit; HEAD is only a fallback
+// for an unnamed ref (§6.6).
 std::string choose_ref_sha(const RefCandidates& found, const std::string& ref) {
   if (!found.peeled.empty())
     return found.peeled;
@@ -228,8 +217,7 @@ std::string choose_ref_sha(const RefCandidates& found, const std::string& ref) {
   return {};
 }
 
-}  // namespace
-
+}
 bool token_allowed_for_url(const std::string& url,
                            const std::string_view host) {
   const Result<HttpUrl> parsed = parse_http_url(url);
@@ -298,8 +286,6 @@ Result<std::string> github_owner_repo_from_url(const std::string& url) {
     return Error("gitclone: not a valid url: '" + url +
                  "': " + parsed.error().ctx());
   }
-  // §6.1 front door: https and host EXACTLY github.com. "github.com.evil.io"
-  // and "evil.io/github.com" are refused here, before anything is spawned.
   if (parsed.value().scheme != "https" || parsed.value().host != kTokenHost) {
     return Error("gitclone: only https://" + std::string(kTokenHost) +
                  " is accepted: '" + url + "'");
@@ -323,8 +309,7 @@ Result<std::string> resolve_ref_sha(const std::string& url,
                                     std::atomic<bool>* cancel) {
   if (url.empty())
     return Error("gitclone: resolve_ref_sha: empty url");
-  // The ref goes into argv, so anything option-shaped or whitespace-bearing
-  // is refused rather than escaped.
+  // The ref goes into argv: option-shaped or whitespace values are refused.
   if (ref.find_first_of(" \t\n\r") != std::string::npos) {
     return Error("gitclone: ref contains whitespace: '" + ref + "'");
   }
@@ -346,9 +331,8 @@ Result<std::string> resolve_ref_sha(const std::string& url,
   };
   limits.extra_env = &env;
 
-  // The FULL ref list is requested (no ref pattern): `ls-remote <url> v1`
-  // pattern-matches by suffix and silently hides the peeled "refs/tags/v1^{}"
-  // line — the one commit an annotated tag must resolve to.
+  // No ref pattern: `ls-remote <url> v1` matches by suffix and hides the
+  // peeled "refs/tags/v1^{}" line an annotated tag must resolve to.
   const Result<RunOutput> out =
       run({std::move(binary).value(), "ls-remote", url}, limits);
   if (out.is_err())
@@ -372,4 +356,4 @@ Result<std::string> resolve_ref_sha(const std::string& url,
   return chosen;
 }
 
-}  // namespace berth
+}

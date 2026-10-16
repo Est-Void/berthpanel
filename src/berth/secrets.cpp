@@ -1,5 +1,3 @@
-// src/berth/secrets.cpp — see secrets.h for the contract.
-
 #include "secrets.h"
 
 #include <algorithm>
@@ -19,8 +17,7 @@ namespace {
          all_chars(std::string_view(key).substr(1), is_env_key_char);
 }
 
-// Values are always quoted: an unquoted value would stop at the first
-// space or '#', and systemd would silently store a truncated secret.
+// Always quoted: unquoted stops at the first space or '#' and truncates.
 [[nodiscard]] Result<std::string> quote_env_value(const std::string& value) {
   for (const char c : value) {
     if (c == '\n' || c == '\r' || c == '\0') {
@@ -40,8 +37,7 @@ namespace {
   return out;
 }
 
-}  // namespace
-
+}
 Result<std::string> render_environment_file(
     const std::vector<SecretEntry>& entries) {
   std::string out;
@@ -87,4 +83,4 @@ Result<std::filesystem::path> write_secrets(
   return target;
 }
 
-}  // namespace berth
+}

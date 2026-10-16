@@ -1,9 +1,11 @@
 #include "deploy.h"
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <cstddef>
 #include <ctime>
+#include <functional>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -52,8 +54,7 @@ RecipeLike recipe_view(const Recipe& recipe) {
   return view;
 }
 
-}  // namespace
-
+}
 Result<std::vector<std::string>> resolve_start_argv(
     const Recipe& recipe, const std::filesystem::path& work_dir,
     const std::uint16_t port, std::string& binary) {
@@ -75,10 +76,6 @@ Result<std::vector<std::string>> resolve_start_argv(
       return std::move(substituted).error();
     resolved.push_back(std::move(substituted).value());
   }
-  // A non-absolute program (a bare `bun`, or the `env` Gitea uses) must be
-  // resolved HERE: systemd's PATH is not the panel's, so a bare name passes
-  // preflight and the unit then dies at start. {self}/{bin} are absolute and
-  // skip this.
   std::string& program = resolved.front();
   if (program.empty() || program.front() != '/') {
     const Result<std::string> absolute = resolve_executable(program);
@@ -115,9 +112,7 @@ Result<void> RealDeployOps::fetch_source(const Recipe& recipe,
       return std::move(installed).error();
     return {};
   }
-  // §6.1: a git clone is an outbound request to github.com that does not
-  // run through httpclient, so the attempt is logged here — BEFORE it
-  // runs, so the line exists even if the process dies mid-clone.
+  // Logged BEFORE the clone so the line exists even if it dies mid-clone.
   const std::string note = "clone " + recipe.owner_repo() + "@" + recipe.commit;
   const Result<void> logged =
       netlog_append(paths, NetlogEntry{.host = kTokenHost,
@@ -128,10 +123,6 @@ Result<void> RealDeployOps::fetch_source(const Recipe& recipe,
                                        .allowed = true});
   if (logged.is_err())
     return logged.error();
-  // A pinned clone cannot land on top of an existing checkout, and the
-  // refusal that follows ("destination exists and is not empty") says nothing
-  // about WHY there is something there — so the two cases are told apart here,
-  // before the clone runs and while we still know what the service is.
   const Result<std::optional<ServiceRecord>> registered =
       registry_get(paths, recipe.service_name);
   if (registered.is_err()) {
@@ -144,8 +135,7 @@ Result<void> RealDeployOps::fetch_source(const Recipe& recipe,
                         !std::filesystem::is_empty(work_dir, ec);
   if (occupied) {
     if (registered.value().has_value()) {
-      // A LIVE service's checkout: replacing the tree under a running service
-      // is not a repair, it is a surprise. Refuse, and say what to do instead.
+      // Replacing the tree under a LIVE service is a surprise, not a repair.
       return Error(
           "deploy: the checkout for " + recipe.service_name +
           " is already in " + work_dir.string() +
@@ -156,9 +146,7 @@ Result<void> RealDeployOps::fetch_source(const Recipe& recipe,
           "(it holds your data) — berthpanel will not delete the tree a "
           "registered service runs from.");
     }
-    // NOT registered ⇒ leftover from an interrupted deploy, which §6.7 already
-    // treats as sweepable. Remove it here, and SAY so in deploy.log: a silent
-    // rm of a work dir is exactly what this project refuses to do.
+    // Unregistered ⇒ interrupted leftover: remove it and SAY so.
     const Result<std::uintmax_t> removed = remove_tree(work_dir);
     if (removed.is_err()) {
       return with_context(std::move(removed).error(),
@@ -270,9 +258,6 @@ Result<void> RealDeployOps::start_service(const std::string& service_name) {
 
 namespace {
 
-// Errors raised inside this file already start with "deploy: ", and the call
-// sites below add it again to say which step failed. "deploy: deploy: ..." in
-// the panel's error line is noise on a message the user has to act on.
 std::string step_error(const std::string& step, std::string ctx) {
   if (ctx.rfind("deploy: ", 0) == 0) {
     return ctx;
@@ -280,11 +265,8 @@ std::string step_error(const std::string& step, std::string ctx) {
   return "deploy: " + step + ": " + std::move(ctx);
 }
 
-}  // namespace
-
+}
 std::string parse_systemctl_show(const std::string_view show) {
-  // The listed properties, in a fixed output order: systemctl prints its own
-  // order, which is not what we asked for, so we must not depend on it.
   constexpr std::array<std::string_view, 5> kKeys{
       "Result", "ExecMainStatus", "ExecMainCode", "ActiveState", "SubState"};
   std::array<std::string, kKeys.size()> values;
@@ -324,8 +306,6 @@ std::string bound_journal_tail(const std::string_view text,
   if (max_lines == 0 || max_bytes == 0) {
     return {};
   }
-  // Trailing blank lines are noise, not lines to show; dropping them first
-  // makes the line count match what a reader would call the tail.
   std::size_t end = text.size();
   while (end > 0 && text[end - 1] == '\n') {
     --end;
@@ -345,9 +325,7 @@ std::string bound_journal_tail(const std::string_view text,
   std::string_view tail = body.substr(start);
   if (tail.size() > max_bytes) {
     tail = tail.substr(tail.size() - max_bytes);
-    // The byte cap can land mid-line; drop the partial leading line so the
-    // evidence never starts with a truncated word. A single over-long line
-    // has no newline to cut on and is kept as the capped slice.
+    // The cap can land mid-line: drop the partial head, never start mid-word.
     const std::size_t nl = tail.find('\n');
     if (nl != std::string_view::npos) {
       tail = tail.substr(nl + 1);
@@ -361,11 +339,7 @@ namespace {
 constexpr std::size_t kFailureEvidenceMaxLines = 20;
 constexpr std::size_t kFailureEvidenceMaxBytes = 4096;
 
-// Gathers the unit's OWN evidence for a failed start: the systemd verdict and
-// the bounded journal tail, each line prefixed so the panel's log pane reads
-// as the app's words. Cannot fail: a missing systemctl/journalctl, a timeout
-// or a cancellation are handled by skipping that part, so a start failure
-// never turns into a different failure. Never runs on the UI thread.
+// Cannot fail: a missing or timed-out tool skips its part.
 [[nodiscard]] std::string capture_unit_failure_evidence(
     const std::string& service_name, std::atomic<bool>* cancel) {
   std::string evidence;
@@ -412,8 +386,7 @@ constexpr std::size_t kFailureEvidenceMaxBytes = 4096;
   return evidence;
 }
 
-}  // namespace
-
+}
 Result<void> RealDeployOps::await_running(const std::string& service_name,
                                           const Paths& paths,
                                           std::atomic<bool>* cancel) {
@@ -422,10 +395,6 @@ Result<void> RealDeployOps::await_running(const std::string& service_name,
   if (active.is_err()) {
     return std::move(active).error();
   }
-  // "active" only means the process was SPAWNED (Type=simple). A service whose
-  // start_cmd is wrong passes that check and dies a second later, looping on
-  // Restart=on-failure — and the deploy would have reported success. So it has
-  // to STAY active to be called a deploy.
   const Result<std::string> systemctl = resolve_executable("systemctl");
   if (systemctl.is_err()) {
     return std::move(systemctl).error();
@@ -452,16 +421,12 @@ Result<void> RealDeployOps::await_running(const std::string& service_name,
     }
     observed.push_back(state);
     if (state != "active") {
-      // No point waiting out the rest of the window on a unit that already
-      // left: the verdict is already decided.
       break;
     }
     interruptible_sleep(std::chrono::milliseconds(250));
   }
   Result<std::string> settled = settle_active(service_name, observed);
   if (settled.is_err()) {
-    // The unit is down: surface ITS OWN words, in the error and in deploy.log
-    // (the panel reads the log), instead of sending the user to journalctl.
     const std::string evidence =
         capture_unit_failure_evidence(service_name, cancel);
     if (!evidence.empty()) {
@@ -486,13 +451,10 @@ Result<void> RealDeployOps::verify_listening(const std::string& service_name,
       return Error("deploy: cancelled while checking that " + service_name +
                    " is listening on port " + std::to_string(port));
     }
-    // /proc/net only — the same dumb, unattributed reader System Scan uses
-    // (§7): no /proc/<pid> walk, no socket-inode guess at who owns the port.
+    // /proc/net only — the dumb, unattributed reader: no /proc/<pid> walk.
     Result<PortReport> report = listening_ports(paths);
     if (report.is_err()) {
-      // A probe that cannot run is not evidence of absence (§11). Warn loudly
-      // so the failure mode is visible, then let an otherwise-active deploy
-      // proceed rather than fail on the checker itself.
+      // A probe that cannot run is not evidence of absence: warn, never fail.
       const Result<void> warned = deploylog_append(
           paths, "WARNING: could not verify that " + service_name +
                      " is listening on port " + std::to_string(port) + " (" +
@@ -555,8 +517,7 @@ Result<std::string> settle_active(const std::string& service_name,
                                   const std::vector<std::string>& states,
                                   const std::string& evidence) {
   if (states.empty()) {
-    // Vacuous truth is not evidence: a settle window that never got an answer
-    // has confirmed nothing, and must not report a service as up.
+    // Vacuous truth is not evidence: an unanswered window confirmed nothing.
     std::string message = "deploy: " + service_name +
                           " was never confirmed active after starting — no "
                           "answer from systemctl during the settle window";
@@ -567,10 +528,7 @@ Result<std::string> settle_active(const std::string& service_name,
   }
   for (const std::string& state : states) {
     if (state != "active") {
-      // The most common cause by far is a start_cmd the app does not
-      // understand — the detector's is an ASSUMPTION and says so — and the
-      // app's OWN verdict now rides along, so the user is not sent to the
-      // unit logs for a flag typo.
+      // The start_cmd is an assumption that says so: its verdict rides along.
       std::string message = "deploy: ";
       message += service_name;
       message += " came up and then left 'active' (state: ";
@@ -590,8 +548,7 @@ Result<std::string> settle_active(const std::string& service_name,
 
 namespace {
 
-// The observed listeners as a bounded "address:port" list. Bounded because a
-// busy host would otherwise push the actual diagnosis out of the error line.
+// Bounded: a busy host would push the actual diagnosis out of the error line.
 std::string render_observed_listeners(const std::vector<ListeningPort>& ports) {
   if (ports.empty()) {
     return "(none)";
@@ -612,8 +569,7 @@ std::string render_observed_listeners(const std::vector<ListeningPort>& ports) {
   return out;
 }
 
-}  // namespace
-
+}
 Result<void> verify_loopback_listener(const PortReport& report,
                                       const std::uint16_t expected_port,
                                       const std::string& service_name) {
@@ -624,7 +580,7 @@ Result<void> verify_loopback_listener(const PortReport& report,
       continue;
     }
     if (port.loopback) {
-      return {};  // a loopback listener on the recorded port is the success
+      return {};
     }
     listening_on_port = true;
     if (!port.wildcard) {
@@ -633,10 +589,7 @@ Result<void> verify_loopback_listener(const PortReport& report,
   }
   const std::string observed = render_observed_listeners(report.ports);
   if (!listening_on_port) {
-    // The §11 silent wrong answer: the unit is active, so `enable --now` and
-    // the settle window both said success, but the port the registry is about
-    // to record belongs to nobody. The fixed-port recipe whose app hardcodes a
-    // different port is the concrete case; name it.
+    // Active but nothing on the recorded port: the silent wrong answer.
     return Error(
         "deploy: " + service_name +
         " is active but nothing is listening on port " +
@@ -649,8 +602,7 @@ Result<void> verify_loopback_listener(const PortReport& report,
         "flag/placeholder ({port}); fix it with 'berthpanel __recipe-edit " +
         service_name + " --start-cmd ...' or 'E' in the panel.");
   }
-  // A listener on the port exists but none of it is loopback: binding beyond
-  // 127.0.0.1/::1 is the exposure the loopback-only invariant forbids.
+  // Bound beyond loopback is the exposure the loopback-only invariant forbids.
   const std::string where = wildcard_only
                                 ? "only on a wildcard address (0.0.0.0/::)"
                                 : "on a non-loopback address";
@@ -683,12 +635,8 @@ bool work_dir_matches_layout(const Paths& paths, const JournalEntry& entry) {
   return std::filesystem::path(entry.work_dir).lexically_normal() == expected;
 }
 
-// True unless entry.work_dir, canonically resolved, lands STRICTLY inside
-// paths.services_dir. Compared component by component — never as a string
-// prefix, or "/srv/x" would count as inside "/srv/xy". weakly_canonical
-// resolves the existing path, so a symlinked component cannot fake
-// containment. A filesystem error counts as outside: the sweep then
-// refuses to act on the entry instead of guessing.
+// True unless entry.work_dir resolves STRICTLY inside services_dir — per
+// component, never as a string prefix, after weakly_canonical. Error = outside.
 bool work_dir_outside_services(const Paths& paths, const JournalEntry& entry) {
   std::error_code ec;
   const std::filesystem::path dir =
@@ -716,12 +664,7 @@ void log_sweep(const Paths& paths, const std::string& line) {
   static_cast<void>(logged);
 }
 
-// Removes a unit artifact — the unit file or the `enable` symlink under
-// default.target.wants/. Returns true when something was removed. remove(2)
-// does not follow a symlink (so a DANGLING wants link is removed as a link)
-// and does not report an error for a missing path, which is exactly what we
-// need; symlink_status/exists would either follow the link or raise ENOENT
-// when the parent directory is absent.
+// remove(2) does not follow the symlink and ignores a missing path.
 Result<bool> remove_unit_artifact(const std::filesystem::path& path) {
   std::error_code ec;
   const bool removed = std::filesystem::remove(path, ec);
@@ -730,17 +673,13 @@ Result<bool> remove_unit_artifact(const std::filesystem::path& path) {
   return removed;
 }
 
-}  // namespace
-
+}
 Result<ReconcileReport> sweep_interrupted_entries(
     const Paths& paths, DeployOps& ops,
     const std::vector<JournalEntry>& entries, std::atomic<bool>* cancel) {
-  // PRECONDITION (deploy.h): the deploy lock is held or proven free. Under
-  // that lock, "journal entry present" IS an interrupted deploy (§6.7) —
-  // unless the service is in the registry, which means the deploy completed
-  // and only the journal write-back was lost. The registry is read once,
-  // up front: if it cannot be read, no entry can be proven unregistered and
-  // nothing may be deleted.
+  // PRECONDITION (deploy.h): the lock is held, so an entry present means
+  // interrupted — unless it is in the registry, i.e. only the write-back was
+  // lost. Read once: if it fails, nothing is provably unregistered.
   ReconcileReport report;
   Result<std::vector<ServiceRecord>> registry = registry_list(paths);
   if (registry.is_err())
@@ -766,10 +705,7 @@ Result<ReconcileReport> sweep_interrupted_entries(
       continue;
     }
 
-    // Path guard, before anything is stopped or removed: a work_dir that
-    // does not resolve strictly inside THIS services_dir is never swept —
-    // it may belong to a completely different install (swapped XDG env,
-    // hand-edited journal, symlink escape). Loud and permanent.
+    // Path guard: a work_dir outside THIS services_dir may be another install.
     if (work_dir_outside_services(paths, entry)) {
       log_sweep(paths, "cleanup: " + entry.service_name + " work_dir '" +
                            entry.work_dir + "' is outside " +
@@ -779,15 +715,11 @@ Result<ReconcileReport> sweep_interrupted_entries(
     }
 
     if (!work_dir_matches_layout(paths, entry)) {
-      // §11: validate every value that reaches a path. A hand-edited
-      // journal entry never steers a delete outside the services layout.
       fail("journal work_dir '" + entry.work_dir + "' is not " +
            (paths.services_dir / entry.service_name).string());
       continue;
     }
 
-    // Registry guard: a registered service was fully deployed — its
-    // journal entry is stale, its files are NOT cleanup's to remove.
     if (in_registry(entry.service_name)) {
       log_sweep(paths, "cleanup: " + entry.service_name +
                            " is in the registry — stale journal entry "
@@ -804,9 +736,8 @@ Result<ReconcileReport> sweep_interrupted_entries(
     bool ok = true;
     std::string why;
 
-    // 1. The app unit may be LIVE: a deploy that died at 'registering'
-    //    started it before the registry write was confirmed. Stop it, or
-    //    the work-dir removal races a running service.
+    // 1. The app unit may be LIVE: a deploy that died at 'registering' started
+    // it before the registry write was confirmed.
     Result<bool> stopped = ops.stop_unit(entry.service_name, cancel);
     if (stopped.is_err()) {
       ok = false;
@@ -815,10 +746,7 @@ Result<ReconcileReport> sweep_interrupted_entries(
       log_sweep(paths, "cleanup stopped unit " + entry.service_name);
     }
 
-    // 2. The orphaned build unit (systemd-run --wait keeps the transient
-    //    unit running when berthpanel dies mid-build). Only a deploy that
-    //    got past build_unit_name() can have one — the same function
-    //    decides, so an invalid name here proves no unit exists.
+    // 2. The orphaned build unit; build_unit_name() gates it and validates it.
     if (ok) {
       Result<std::string> build_stem = build_unit_name(entry.service_name);
       if (build_stem.is_err()) {
@@ -837,7 +765,6 @@ Result<ReconcileReport> sweep_interrupted_entries(
       }
     }
 
-    // 3. The work dir.
     if (ok) {
       Result<std::size_t> removed = remove_tree(entry.work_dir);
       if (removed.is_err()) {
@@ -849,12 +776,8 @@ Result<ReconcileReport> sweep_interrupted_entries(
       }
     }
 
-    // 4. The unit file, if the deploy died at 'registering' with the unit
-    //    already written — plus the `enable` symlink start_service created
-    //    under default.target.wants/. Removing only the unit file leaves a
-    //    dangling wants symlink behind, the exact leftover this sweep
-    //    exists to prevent. No daemon-reload: a loaded-but-fileless unit is
-    //    inert, and the next enable does a reload anyway.
+    // 4. The unit file AND the `enable` symlink: removing only the unit file
+    // leaves the dangling link. No daemon-reload: a fileless unit is inert.
     if (ok) {
       const std::filesystem::path unit_file =
           paths.units_dir / (entry.service_name + ".service");
@@ -880,12 +803,8 @@ Result<ReconcileReport> sweep_interrupted_entries(
       }
     }
 
-    // Secrets deliberately stay: the file may hold user-provided
-    // environment values (stage 4B), it is rewritten on the next deploy
-    // of the same recipe, and cleanup must not delete user data.
+    // Secrets stay: user env values, rewritten on the next deploy.
 
-    // 5. The journal entry goes LAST: "still present" is exactly what a
-    //    half-finished sweep relies on for its next retry.
     if (!ok) {
       fail(why);
       continue;
@@ -896,7 +815,9 @@ Result<ReconcileReport> sweep_interrupted_entries(
       continue;
     }
     report.swept.push_back(ReconcileReport::Swept{
-        .service_name = entry.service_name, .stage = entry.stage});
+        .service_name = entry.service_name,
+        .stage = entry.stage,
+        .stack = entry.stack});
     log_sweep(paths, "cleanup reconciled " + entry.service_name +
                          " (interrupted at '" + entry.stage + "')");
   }
@@ -913,9 +834,7 @@ Result<ReconcileReport> reconcile_interrupted(const Paths& paths,
   if (entries.value().empty())
     return report;
 
-  // The lock decides liveness, not timestamps (§6.7): a sweep must never
-  // race a live deploy, and taking the lock is what makes "entry present"
-  // mean "interrupted".
+  // The lock, not timestamps, decides liveness.
   Result<DeployLock> lock = DeployLock::acquire(paths);
   if (lock.is_err()) {
     if (lock.error().ctx().find("already running") != std::string::npos) {
@@ -940,7 +859,11 @@ std::string render_reconcile_report(const ReconcileReport& report) {
   }
   for (const ReconcileReport::Swept& swept : report.swept) {
     out += "reconciled " + swept.service_name + " (interrupted at '" +
-           swept.stage + "')\n";
+           swept.stage + "'";
+    if (!swept.stack.empty()) {
+      out += ", stack " + swept.stack;
+    }
+    out += ")\n";
   }
   for (const std::string& skipped : report.skipped_registry) {
     out += "SKIPPED " + skipped +
@@ -957,45 +880,29 @@ std::string render_reconcile_report(const ReconcileReport& report) {
   return out;
 }
 
-Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
-                                 const std::uint16_t forced_port,
-                                 DeployOps& ops, const DeployOptions& options) {
-  const Result<void> analysed = validate_recipe(recipe);
-  if (analysed.is_err())
-    return std::move(analysed).error();
+namespace {
 
-  Result<DeployLock> lock = DeployLock::acquire(paths);
-  if (lock.is_err())
-    return std::move(lock).error();
+using StageWriter = std::function<Result<void>(const char* name)>;
+using StageLogger = std::function<void(const std::string& line)>;
 
-  // Reconciliation (§6.7): we hold the exclusive lock, so any journal
-  // entry still present belongs to an interrupted deploy. Sweep it before
-  // any new work — a deploy never proceeds on top of interrupted state,
-  // and a rerun after "unit live but not registered" starts clean.
-  Result<std::vector<JournalEntry>> stale = journal_load(paths);
-  if (stale.is_err())
-    return std::move(stale).error();
-  Result<ReconcileReport> swept =
-      sweep_interrupted_entries(paths, ops, stale.value(), options.cancel);
-  if (swept.is_err())
-    return std::move(swept).error();
-  for (const std::pair<std::string, std::string>& failure :
-       swept.value().failed) {
-    static_cast<void>(deploylog_append(
-        paths, "cleanup failed for " + failure.first + ": " + failure.second));
-    if (failure.first == recipe.service_name) {
-      return Error("deploy: interrupted deploy for " + failure.first +
-                   " could not be cleaned up, refusing to build on top of "
-                   "it: " +
-                   failure.second);
-    }
-  }
+Result<void> write_stage(const Paths& paths, const std::string& service_name,
+                         const std::string& work_dir, const std::string& repo,
+                         const std::string& commit, const std::string& stack,
+                         const char* name) {
+  JournalEntry entry;
+  entry.service_name = service_name;
+  entry.work_dir = work_dir;
+  entry.repo = repo;
+  entry.commit = commit;
+  entry.stage = name;
+  entry.stack = stack;
+  entry.started_at_unix = static_cast<std::int64_t>(::time(nullptr));
+  // Cannot write the journal ⇒ stop here, never leave an untracked work dir.
+  return journal_upsert(paths, entry);
+}
 
-  const auto log = [&paths](const std::string& line) {
-    const Result<void> logged = deploylog_append(paths, line);
-    static_cast<void>(logged);
-  };
-
+Result<void> preflight_unit(const Recipe& recipe,
+                            const DeployOptions& options) {
   Result<std::vector<ToolStatus>> tools =
       check_tools(recipe.tools, options.cancel);
   if (tools.is_err())
@@ -1005,45 +912,19 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
   if (preflight.is_err())
     return std::move(preflight).error();
   if (!preflight.value().ready()) {
-    return Error("deploy: preflight blocked this recipe:\n" +
+    return Error("deploy: preflight blocked " + recipe.service_name + ":\n" +
                  render_preflight(preflight.value()));
   }
+  return {};
+}
 
-  std::uint16_t port = recipe.port;
-  if (forced_port != 0) {
-    port = forced_port;
-  } else if (port == 0) {
-    Result<std::vector<ServiceRecord>> registered = registry_list(paths);
-    if (registered.is_err())
-      return std::move(registered).error();
-    std::vector<std::uint16_t> taken;
-    for (const ServiceRecord& record : registered.value()) {
-      if (record.port != 0)
-        taken.push_back(record.port);
-    }
-    Result<std::uint16_t> picked = pick_free_port(taken);
-    if (picked.is_err())
-      return std::move(picked).error();
-    port = picked.value();
-  }
-
-  const std::filesystem::path work_dir =
-      paths.services_dir / recipe.service_name;
-  const auto stage = [&](const char* name) -> Result<void> {
-    JournalEntry entry;
-    entry.service_name = recipe.service_name;
-    entry.work_dir = work_dir.string();
-    entry.repo = recipe.owner_repo();
-    entry.commit = recipe.commit;
-    entry.stage = name;
-    entry.started_at_unix = static_cast<std::int64_t>(::time(nullptr));
-    // NOT discarded: the journal entry is the record §6.7 cleanup finds an
-    // interrupted deploy by. A deploy that cannot write it must stop here, not
-    // run on and die leaving an untracked work dir behind (§11: a failed write
-    // is not a successful deploy).
-    return journal_upsert(paths, entry);
-  };
-
+Result<DeployOutcome> deploy_unit(const Paths& paths, const Recipe& recipe,
+                                  const std::uint16_t port,
+                                  const std::filesystem::path& work_dir,
+                                  DeployOps& ops,
+                                  const DeployOptions& options,
+                                  const StageWriter& stage,
+                                  const StageLogger& log) {
   {
     const Result<void> staged = stage("cloning");
     if (staged.is_err())
@@ -1064,9 +945,7 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
       return with_context(std::move(staged).error(),
                           "deploy: recording the 'building' journal stage");
   }
-  // Stage lines are what the TUI's tail reads to show progress (the log is the
-  // engine's, never a second sink the panel owns), so they are written here
-  // rather than synthesized from the return value.
+  // The TUI tail reads these stage lines; the log is the engine's only sink.
   log("build " + recipe.service_name + " port " + std::to_string(port));
   Result<void> prefetched = ops.prefetch(recipe, work_dir, paths, options);
   if (prefetched.is_err()) {
@@ -1098,21 +977,14 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
         "deploy: unit start failed: " + std::move(started).error().ctx() +
         " (journal entry kept for cleanup)");
   }
-  // `systemctl enable --now` returns 0 even for a unit that dies a moment
-  // later, so success is only claimed once the unit is actually up (§11:
-  // a failure must never read as a success).
   Result<void> running =
       ops.await_running(recipe.service_name, paths, options.cancel);
   if (running.is_err()) {
     return Error(step_error("start", std::move(running).error().ctx()) +
                  " (journal entry kept for cleanup)");
   }
-  // `await_running` proves the unit STAYED active; it does not prove the app
-  // serves the port this deploy recorded. A fixed-port recipe whose app binds
-  // somewhere else would deploy "successfully" against a port nothing listens
-  // on (§11), so a live loopback listener is required before success. Same
-  // failure semantics as the other start failures: loud, journal kept, not
-  // registered.
+  // await_running does not prove the app serves the recorded port. Same
+  // semantics as the other start failures: loud, journal kept, unregistered.
   Result<void> listening =
       ops.verify_listening(recipe.service_name, port, paths, options.cancel);
   if (listening.is_err()) {
@@ -1129,8 +1001,7 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
   record.port = port;
   Result<void> registered = ops.register_service(record, paths);
   if (registered.is_err()) {
-    // Logged as a stage of its own: this is the failure the panel must never
-    // render as a success — the unit is live and unregistered (§11).
+    // Its own stage: the unit is live and unregistered. Never a success.
     log("REGISTRY WRITE FAILED " + recipe.service_name + ": " +
         registered.error().ctx());
     return Error("deploy: REGISTRY WRITE FAILED: " + registered.error().ctx() +
@@ -1149,4 +1020,193 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
   return outcome;
 }
 
-}  // namespace berth
+StageLogger make_log(const Paths& paths) {
+  return [&paths](const std::string& line) {
+    const Result<void> logged = deploylog_append(paths, line);
+    static_cast<void>(logged);
+  };
+}
+
+}
+
+Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
+                                 const std::uint16_t forced_port,
+                                 DeployOps& ops, const DeployOptions& options) {
+  const Result<void> analysed = validate_recipe(recipe);
+  if (analysed.is_err())
+    return std::move(analysed).error();
+
+  Result<DeployLock> lock = DeployLock::acquire(paths);
+  if (lock.is_err())
+    return std::move(lock).error();
+
+  Result<std::vector<JournalEntry>> stale = journal_load(paths);
+  if (stale.is_err())
+    return std::move(stale).error();
+  Result<ReconcileReport> swept =
+      sweep_interrupted_entries(paths, ops, stale.value(), options.cancel);
+  if (swept.is_err())
+    return std::move(swept).error();
+  for (const std::pair<std::string, std::string>& failure :
+       swept.value().failed) {
+    static_cast<void>(deploylog_append(
+        paths, "cleanup failed for " + failure.first + ": " + failure.second));
+    if (failure.first == recipe.service_name) {
+      return Error("deploy: interrupted deploy for " + failure.first +
+                   " could not be cleaned up, refusing to build on top of "
+                   "it: " +
+                   failure.second);
+    }
+  }
+
+  const Result<void> ready = preflight_unit(recipe, options);
+  if (ready.is_err())
+    return std::move(ready).error();
+
+  std::uint16_t port = recipe.port;
+  if (forced_port != 0) {
+    port = forced_port;
+  } else if (port == 0) {
+    Result<std::vector<ServiceRecord>> registered = registry_list(paths);
+    if (registered.is_err())
+      return std::move(registered).error();
+    std::vector<std::uint16_t> taken;
+    for (const ServiceRecord& record : registered.value()) {
+      if (record.port != 0)
+        taken.push_back(record.port);
+    }
+    Result<std::uint16_t> picked = pick_free_port(taken);
+    if (picked.is_err())
+      return std::move(picked).error();
+    port = picked.value();
+  }
+
+  const std::filesystem::path work_dir =
+      paths.services_dir / recipe.service_name;
+  const StageWriter stage =
+      [&paths, &recipe, &work_dir](const char* name) -> Result<void> {
+    return write_stage(paths, recipe.service_name, work_dir.string(),
+                       recipe.owner_repo(), recipe.commit, "", name);
+  };
+  return deploy_unit(paths, recipe, port, work_dir, ops, options, stage,
+                     make_log(paths));
+}
+
+Result<StackDeployOutcome> run_stack_deploy(const Paths& paths,
+                                            const Stack& stack, DeployOps& ops,
+                                            const DeployOptions& options) {
+  const Result<void> analysed = validate_stack(stack);
+  if (analysed.is_err())
+    return std::move(analysed).error();
+
+  Result<DeployLock> lock = DeployLock::acquire(paths);
+  if (lock.is_err())
+    return std::move(lock).error();
+
+  Result<std::vector<JournalEntry>> stale = journal_load(paths);
+  if (stale.is_err())
+    return std::move(stale).error();
+  Result<ReconcileReport> swept =
+      sweep_interrupted_entries(paths, ops, stale.value(), options.cancel);
+  if (swept.is_err())
+    return std::move(swept).error();
+
+  std::vector<std::string> member_units;
+  member_units.reserve(stack.members.size());
+  for (const StackMember& member : stack.members) {
+    Result<std::string> unit =
+        member_unit_name(stack.service_name, member.name);
+    if (unit.is_err())
+      return std::move(unit).error();
+    member_units.push_back(std::move(unit).value());
+  }
+  for (const std::pair<std::string, std::string>& failure :
+       swept.value().failed) {
+    static_cast<void>(deploylog_append(
+        paths, "cleanup failed for " + failure.first + ": " + failure.second));
+    if (std::find(member_units.begin(), member_units.end(), failure.first) !=
+        member_units.end()) {
+      return Error("deploy: interrupted deploy of stack " +
+                   stack.service_name + " member " + failure.first +
+                   " could not be cleaned up, refusing to start the stack: " +
+                   failure.second);
+    }
+  }
+
+  for (const StackMember& member : stack.members) {
+    const Result<void> ready = preflight_unit(member.recipe, options);
+    if (ready.is_err())
+      return std::move(ready).error();
+  }
+
+  Result<std::vector<ServiceRecord>> registered = registry_list(paths);
+  if (registered.is_err())
+    return std::move(registered).error();
+  std::vector<std::uint16_t> taken;
+  for (const ServiceRecord& record : registered.value()) {
+    if (record.port != 0)
+      taken.push_back(record.port);
+  }
+  std::vector<std::uint16_t> ports(stack.members.size(), 0);
+  for (std::size_t i = 0; i < stack.members.size(); ++i) {
+    if (stack.members[i].recipe.port != 0) {
+      ports[i] = stack.members[i].recipe.port;
+      taken.push_back(ports[i]);
+      continue;
+    }
+    Result<std::uint16_t> picked = pick_free_port(taken);
+    if (picked.is_err())
+      return std::move(picked).error();
+    ports[i] = picked.value();
+    taken.push_back(ports[i]);
+  }
+
+  // Write EVERY member entry before the first member runs, so a kill anywhere
+  // leaves the whole group for cleanup, not only the member in progress.
+  const std::int64_t now = static_cast<std::int64_t>(::time(nullptr));
+  std::vector<JournalEntry> entries;
+  entries.reserve(stack.members.size());
+  for (std::size_t i = 0; i < stack.members.size(); ++i) {
+    JournalEntry entry;
+    entry.service_name = member_units[i];
+    entry.work_dir = (paths.services_dir / member_units[i]).string();
+    entry.repo = stack.members[i].recipe.owner_repo();
+    entry.commit = stack.members[i].recipe.commit;
+    entry.stage = "cloning";
+    entry.stack = stack.service_name;
+    entry.started_at_unix = now;
+    entries.push_back(std::move(entry));
+  }
+  const Result<void> recorded = journal_upsert_many(paths, entries);
+  if (recorded.is_err()) {
+    return with_context(std::move(recorded).error(),
+                        "deploy: recording the stack journal entries");
+  }
+
+  const Result<std::vector<std::size_t>> order = stack_deploy_order(stack);
+  if (order.is_err())
+    return std::move(order).error();
+  const StageLogger log = make_log(paths);
+  StackDeployOutcome outcome;
+  outcome.stack_name = stack.service_name;
+  for (const std::size_t i : order.value()) {
+    const Recipe& recipe = stack.members[i].recipe;
+    const std::filesystem::path work_dir = paths.services_dir / member_units[i];
+    const StageWriter stage =
+        [&paths, &recipe, &stack, &member_units, i](
+            const char* name) -> Result<void> {
+      return write_stage(paths, member_units[i],
+                         (paths.services_dir / member_units[i]).string(),
+                         recipe.owner_repo(), recipe.commit, stack.service_name,
+                         name);
+    };
+    Result<DeployOutcome> member =
+        deploy_unit(paths, recipe, ports[i], work_dir, ops, options, stage, log);
+    if (member.is_err())
+      return std::move(member).error();
+    outcome.members.push_back(std::move(member).value());
+  }
+  return outcome;
+}
+
+}

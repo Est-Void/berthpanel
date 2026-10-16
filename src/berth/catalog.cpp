@@ -12,11 +12,7 @@ namespace berth {
 
 namespace {
 
-// Memos 0.31.0 ships prebuilt release assets with published checksums, so
-// the deploy needs no compiler on the host: a pinned tarball verified by
-// SHA-256 (toolbox) instead of a bun+go build (dev.md §8 "prebuilt binary
-// through toolbox"). The commit is the tag's own SHA — a branch would be
-// exactly the anti-TOFU violation §6.6 forbids.
+// Commit is the tag's own SHA; a branch would be the anti-TOFU violation §6.6.
 Recipe memos_recipe() {
   Recipe r;
   r.owner = "usememos";
@@ -34,8 +30,6 @@ Recipe memos_recipe() {
           "d99bf9de5e947cd41f7f1ae59e1e97d9af933d1bcc2d1316b3ab1ffe0a69e5c0",
       .member = "memos"};
   r.binary_name = "memos";
-  // --addr 127.0.0.1 is the loopback bind the catalog contract demands;
-  // memos would otherwise listen on every interface.
   r.start_cmd = "{self} --addr 127.0.0.1 --port {port} --data {project}/data";
   r.health_path = "/";
   r.port = 0;
@@ -44,9 +38,6 @@ Recipe memos_recipe() {
   return r;
 }
 
-// Filebrowser 2.63.23 ships prebuilt Go release tarballs with published
-// checksums, so the host needs no compiler: a pinned tarball verified with
-// SHA-256 through toolbox, keyed to the tag's own commit (§6.6).
 Recipe filebrowser_recipe() {
   Recipe r;
   r.owner = "filebrowser";
@@ -64,8 +55,7 @@ Recipe filebrowser_recipe() {
           "b14db2bb8033caa3f80205eb6578b2ed0744ebd9e716b790bc4a9703ce909e88",
       .member = "filebrowser"};
   r.binary_name = "filebrowser";
-  // Filebrowser already defaults to loopback, but the bind is spelled out;
-  // its own default database would otherwise land in the install dir.
+  // --database/--root must sit inside {project}: the defaults hit install_dir.
   r.start_cmd =
       "{self} --address 127.0.0.1 --port {port} --database {project}/"
       "filebrowser.db --root {project}/files";
@@ -76,11 +66,6 @@ Recipe filebrowser_recipe() {
   return r;
 }
 
-// Gitea 28.1.0 publishes a raw linux-amd64 binary asset (alongside the .xz
-// and source archives), so the host needs no Go/pnpm/vite at all: the asset
-// itself is pinned by SHA-256 and installed through toolbox. A raw asset is
-// the file, so `member` is the destination file name. The commit is the tag's
-// own peeled SHA, cross-checked against git ls-remote (§6.6).
 Recipe gitea_recipe() {
   Recipe r;
   r.owner = "go-gitea";
@@ -99,9 +84,7 @@ Recipe gitea_recipe() {
       .member = "gitea",
       .archive = ToolArchive::kRaw};
   r.binary_name = "gitea";
-  // Gitea takes its bind address from GITEA__server__HTTP_ADDR; the default is
-  // the wildcard, so env supplies loopback explicitly and --port carries the
-  // chosen port. resolve_start_argv absolutizes the `env` prefix.
+  // The bind comes from env; its default is the wildcard.
   r.start_cmd =
       "env GITEA__server__HTTP_ADDR=127.0.0.1 {self} web --port {port}";
   r.health_path = "/";
@@ -111,8 +94,6 @@ Recipe gitea_recipe() {
   return r;
 }
 
-// Uptime Kuma 2.5.6 ships only a frontend dist asset (no server binary), so
-// it is a source build under bun and starts from its server entry point.
 Recipe uptime_kuma_recipe() {
   Recipe r;
   r.owner = "louislam";
@@ -126,10 +107,7 @@ Recipe uptime_kuma_recipe() {
   r.prefetch_steps = {{"bun", "install", "--ignore-scripts"}};
   r.build_steps = {{"bun", "install"}, {"bun", "run", "build"}};
   r.binary_name = "server/server.js";
-  // server/config.js parses argv with args-parser@1.3.0, which only honours
-  // --flag=value: `--host 127.0.0.1` silently leaves hostname=true and binds
-  // the wildcard. The equals form is the spelling that actually takes effect;
-  // bun itself is absolutized by resolve_start_argv.
+  // args-parser@1.3.0 needs --host=127.0.0.1; the space form is ignored.
   r.start_cmd = "bun {project}/server/server.js --host=127.0.0.1 --port={port}";
   r.health_path = "/";
   r.port = 0;
@@ -138,8 +116,7 @@ Recipe uptime_kuma_recipe() {
   return r;
 }
 
-}  // namespace
-
+}
 Result<std::vector<Recipe>> builtin_catalog() {
   std::vector<Recipe> catalog = {memos_recipe(), filebrowser_recipe(),
                                  gitea_recipe(), uptime_kuma_recipe()};
@@ -165,9 +142,6 @@ Result<Recipe> builtin_recipe(const std::string_view service_name) {
 
 Result<Recipe> resolve_recipe(const Paths& paths,
                               const std::string_view service_name) {
-  // A user recipe with the same name WINS: the stored file is the
-  // explicit act of replacing the curated default. Loading user recipes
-  // is loud — one corrupt file must not read as "no recipes" (§11).
   Result<std::optional<Recipe>> user = user_recipe_get(paths, service_name);
   if (user.is_err())
     return std::move(user).error();
@@ -209,4 +183,4 @@ nlohmann::json catalog_json() {
   return doc;
 }
 
-}  // namespace berth
+}

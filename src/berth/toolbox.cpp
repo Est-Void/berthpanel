@@ -26,8 +26,7 @@ Result<std::string> sha256_of_file(const std::filesystem::path& path) {
   return sha256_hex(bytes.value());
 }
 
-}  // namespace
-
+}
 Result<void> verify_sha256_file(const std::filesystem::path& path,
                                 const std::string& expected_sha256) {
   Result<std::string> actual = sha256_of_file(path);
@@ -89,10 +88,8 @@ Result<std::filesystem::path> install_pinned_tool(const PinnedTool& tool,
   if (tool.sha256.empty()) {
     return Error("toolbox: " + tool.name + " has no sha256 pin");
   }
-  // `inner_path` is the recipe's `member` and is interpolated into the install
-  // path: a user recipe with member "../../.config/systemd/user/x.service"
-  // would otherwise write outside install_dir (§11: validate every value that
-  // reaches a path). tar_list does not apply archive_path_safe either.
+  // `inner_path` is interpolated into the install path, so a member of "../../"
+  // would escape install_dir (§11); tar_list applies no archive_path_safe.
   if (!archive_path_safe(tool.inner_path)) {
     return Error("toolbox: " + tool.name +
                  " member is not a safe relative "
@@ -101,8 +98,7 @@ Result<std::filesystem::path> install_pinned_tool(const PinnedTool& tool,
   }
   const std::filesystem::path staging =
       paths.state_dir / "toolbox" / (tool.name + ".staging");
-  // A failed install (bad archive, missing member, write error) must not leave
-  // the verified download behind.
+  // A failed install must not leave the verified download behind.
   struct StagingGuard {
     std::filesystem::path dir;
     ~StagingGuard() {
@@ -147,9 +143,7 @@ Result<std::filesystem::path> install_pinned_tool(const PinnedTool& tool,
     if (found->size > toolbox_max_tool_bytes) {
       return Error("toolbox: " + tool.name + " member exceeds the size cap");
     }
-    // A pax `size` override is not re-validated by tar_parse against the
-    // archive length, so the member's declared extent must be checked before
-    // substr, or a crafted archive silently installs a truncated payload.
+    // A pax `size` override is not re-validated against the archive length.
     if (found->data_offset > archive_bytes.size() ||
         found->size > archive_bytes.size() - found->data_offset) {
       return Error("toolbox: " + tool.name + " member '" + tool.inner_path +
@@ -185,4 +179,4 @@ Result<std::filesystem::path> install_pinned_tool(const PinnedTool& tool,
   return target;
 }
 
-}  // namespace berth
+}

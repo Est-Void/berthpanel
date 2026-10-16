@@ -50,8 +50,7 @@ berth::ServiceRecord record_named(const std::string& name) {
   return r;
 }
 
-}  // namespace
-
+}
 TEST(selftest_unit_name_is_well_formed) {
   const std::string name = selftest_unit_name("deadbeef");
   CHECK(name == "berthpanel-selftest-deadbeef");

@@ -1,20 +1,8 @@
 #pragma once
 
-// src/tui/ring.h — the bounded log buffer (dev.md §5: "Log line buffers are
-// bounded ring buffers, not vectors drained from the front").
-//
-// The reason is memory, and the failure mode is specific: a long deploy
-// streams thousands of lines, and a `std::vector` that gets erased from the
-// front reallocates on every push and grows without a ceiling. Here the
-// buffer holds at most `capacity` items forever; the oldest is overwritten
-// and counted in dropped(), so the screen can say so honestly instead of
-// pretending the tail is the whole story.
-//
-// NOT THREAD-SAFE BY ITSELF. The caller owns the synchronization — the panel
-// keeps one mutex around the whole view state, so a render and a worker
-// cannot interleave. This header owns no locks because a lock per buffer
-// would hide the fact that reading a snapshot is a copy.
-
+// Logical index 0 is the oldest item still held; once full, push_back
+// overwrites the oldest and dropped() counts the loss. NOT THREAD-SAFE — the
+// panel's single mutex around the view state owns synchronization.
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -27,8 +15,8 @@ template <typename T>
 class RingBuffer {
  public:
   explicit RingBuffer(const std::size_t capacity) : buf_(capacity) {
-    // A zero capacity would silently drop every line; that is a bug in the
-    // caller, not a runtime condition to absorb.
+    // Zero capacity would silently drop every line: a caller bug, not a
+    // runtime condition to absorb.
     if (capacity == 0) {
       std::fputs("tui: invariant violated: RingBuffer capacity is zero\n",
                  stderr);
@@ -36,7 +24,6 @@ class RingBuffer {
     }
   }
 
-  // Overwrites the oldest item once full. Never grows.
   void push_back(T value) {
     const std::size_t next = (head_ + size_) % buf_.size();
     if (size_ == buf_.size()) {
@@ -49,7 +36,6 @@ class RingBuffer {
     ++size_;
   }
 
-  // Oldest first, which is the order a log is read in.
   [[nodiscard]] std::vector<T> snapshot() const {
     std::vector<T> out;
     out.reserve(size_);
@@ -59,9 +45,8 @@ class RingBuffer {
     return out;
   }
 
-  // Element at LOGICAL index, 0 = the oldest line still held. O(1) and
-  // copy-free, which is what lets the render thread draw the tail window
-  // without cloning the buffer every frame.
+  // LOGICAL index, 0 = the oldest line still held; copy-free so the render
+  // thread can draw the tail window without cloning the buffer.
   const T& at(const std::size_t index) const {
     if (index >= size_) {
       std::fputs("tui: invariant violated: RingBuffer index out of range\n",
@@ -89,4 +74,4 @@ class RingBuffer {
   std::size_t dropped_ = 0;
 };
 
-}  // namespace tui
+}

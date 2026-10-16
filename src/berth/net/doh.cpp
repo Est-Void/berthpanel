@@ -1,5 +1,3 @@
-// src/berth/net/doh.cpp — see doh.h for the contract.
-
 #include "doh.h"
 
 #include <arpa/inet.h>
@@ -21,11 +19,8 @@ constexpr std::string_view kDohHost = "cloudflare-dns.com";
 constexpr std::string_view kDohBootstrapIps[] = {"1.1.1.1", "1.0.0.1"};
 
 bool record_is_address(const nlohmann::json& item, ResolvedIp* out) {
-  // The type check is `is_number_integer()` and not just `contains()`: a
-  // record with "type":"A" (or null, or an array) makes get<int>() throw a
-  // nlohmann type_error that only the parse_error handler above catches —
-  // so a malformed-but-valid-JSON answer would abort the process instead of
-  // failing as a Result (§6.10: no crash on malformed input).
+  // is_number_integer(), not contains(): "type":"A", null or an array makes
+  // get<int>() throw a type_error that aborts instead of failing (§6.10).
   if (!item.is_object() || !item.contains("type") ||
       !item["type"].is_number_integer() || !item.contains("data") ||
       !item["data"].is_string()) {
@@ -49,13 +44,11 @@ bool record_is_address(const nlohmann::json& item, ResolvedIp* out) {
     }
     return false;
   }
-  // Other record types (CNAME chains and friends) are not addresses; a
-  // response made only of those is a loud error below, not a skip.
+  // A CNAME-only answer is a loud error below, not a skip.
   return false;
 }
 
-// The host goes into a URL, so everything outside the unreserved set is
-// percent-encoded.
+// The host goes into a URL, so anything outside [a-z0-9.-] is encoded.
 std::string percent_encode_host(const std::string& host) {
   std::string out;
   out.reserve(host.size());
@@ -74,8 +67,7 @@ std::string percent_encode_host(const std::string& host) {
   return out;
 }
 
-// Returns the validated "Answer" array. Every rejection here is a loud
-// error: a DoH response we do not understand is never read as "no records".
+// An answer we do not understand is a loud error, never "no records".
 Result<nlohmann::json> validated_answers(const std::string_view body) {
   nlohmann::json doc;
   try {
@@ -131,8 +123,7 @@ Result<std::vector<ResolvedIp>> resolve_doh(
   return Error("resolver: DoH fallback failed for " + host + ": " + last_error);
 }
 
-}  // namespace
-
+}
 Result<std::vector<ResolvedIp>> parse_doh_answers(const std::string_view body) {
   Result<nlohmann::json> answers = validated_answers(body);
   if (answers.is_err())
@@ -156,4 +147,4 @@ DohFallback doh_fallback() {
   };
 }
 
-}  // namespace berth
+}

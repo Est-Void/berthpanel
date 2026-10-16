@@ -1,13 +1,6 @@
 #pragma once
 
-// src/berth/net/tls.h — one mbedTLS client session over one connected
-// socket. Owns the handshake, the writes and the reads, and nothing else: no
-// retry policy, no URL, no logging. The trust store is the EMBEDDED Mozilla
-// root set (core/trust_store.h); no system CA path is ever consulted (dev.md
-// §2), so a tampered /etc/ssl cannot widen what this connects to.
-//
-// Nothing is global except a single psa_crypto_init, the one process-wide
-// mbedTLS requirement. Sessions never share state.
+// Verify REQUIRED against the embedded roots; no system CA path is consulted.
 
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/entropy.h>
@@ -31,8 +24,7 @@ class TlsSession {
   TlsSession& operator=(const TlsSession&) = delete;
   ~TlsSession();
 
-  // Verifies the peer against the embedded roots for `hostname` — the
-  // CONNECTED name, never a resolved address.
+  // Verifies against the embedded roots for `hostname`, never an address.
   [[nodiscard]] Result<void> handshake(
       const std::string& hostname,
       std::chrono::steady_clock::time_point deadline,
@@ -42,7 +34,7 @@ class TlsSession {
       std::string_view data, std::chrono::steady_clock::time_point deadline,
       const std::atomic<bool>* cancel);
 
-  // Reads up to `buf_size` bytes; 0 means TLS close-notify (EOF).
+  // 0 means TLS close-notify (EOF).
   [[nodiscard]] Result<std::size_t> read_some(
       unsigned char* buf, std::size_t buf_size,
       std::chrono::steady_clock::time_point deadline,
@@ -61,4 +53,4 @@ class TlsSession {
   mbedtls_ssl_context ssl_;
 };
 
-}  // namespace berth
+}

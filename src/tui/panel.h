@@ -1,17 +1,7 @@
 #pragma once
 
-// src/tui/panel.h — the panel's shared view state and the small render
-// helpers every screen builds on.
-//
-// Panel is one struct on purpose: the render thread reads it and the workers
-// write it, under ONE mutex. Per-field locks are how a half-updated view
-// happens — a list that has been refreshed next to a status line that has
-// not. The critical sections are a handful of string copies.
-//
-// Everything here is UI-THREAD state except the two atomics and the mutex,
-// which the workers touch. There is no blocking call anywhere in this header:
-// an engine call belongs on a worker (app.h).
-
+// Panel is ONE struct under ONE mutex: per-field locks are how a half-updated
+// view happens. Nothing here blocks — an engine call belongs on a worker.
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -47,66 +37,50 @@
 
 namespace tui {
 
-inline constexpr std::size_t kSignWidth = 5;  // the widest sign line
+inline constexpr std::size_t kSignWidth = 5;
 inline constexpr std::size_t kSignGap = 3;
-inline constexpr std::size_t kVisibleRows = 12;  // list window height
-// Bounded, always (§5): 2000 lines is enough to read a deploy tail and small
-// enough that a runaway build cannot grow the panel's memory.
+inline constexpr std::size_t kVisibleRows = 12;
+// Bounded (§5): a runaway build must not grow the panel's memory.
 inline constexpr std::size_t kLogCapacity = 2000;
 
 struct Panel {
-  // The XDG layout, copied in once: no screen builds a path itself (§3).
+  // Copied in once: no screen builds a path itself (§3).
   berth::Paths paths;
 
   std::atomic<bool> shutting_down{false};
   mutable std::mutex mutex;
 
-  // The running long operations. The quit path goes through it; it is the
-  // difference between "q cancelled the thing you were waiting for" and "q
-  // hoped for the best" (dev.md §6.7).
+  // The quit path cancels through it: a quit must unwind what it waited for.
   OpRegistry ops;
 
-  // The one handle a worker may use to reach the render loop. Owned by
-  // app.cpp for the panel's lifetime; null in tests, where request_render()
-  // is then a no-op.
+  // The one handle a worker uses to reach the render loop; null in tests.
   ftxui::ScreenInteractive* screen = nullptr;
 
-  // Bounded log buffers, owned here so no screen can invent its own unbounded
-  // vector (dev.md §5). One per view: the deploy tail and the Logs screen's
-  // selection are different files and different lifetimes.
+  // Owned here so no screen can invent its own unbounded vector (§5).
   RingBuffer<std::string> logs_lines{kLogCapacity};
 
-  // Catalog (6.2). Loaded once at startup; the DEPLOY screen is where the
-  // recipe list lives, because that is where a recipe becomes an action.
-  // `catalog_loading` is a user-visible refresh (spinner, the empty-state
-  // gate); `catalog_auto` is the silent background refresh, kept separate so a
-  // tick cannot blank the empty-state text or clobber an action's status.
+  // catalog_loading is the visible refresh; catalog_auto the silent tick, so a
+  // tick cannot blank the empty-state or clobber an action's status.
   bool catalog_loading = false;
   bool catalog_auto = false;
   std::string catalog_error;
   Catalog catalog;
   std::size_t catalog_cursor = 0;
   bool catalog_details = false;
-  // Recipe removal (Deploy tab, key x). The confirmation is modal and its
-  // target is a service NAME, not an index: a catalog refresh (or the
-  // auto-refresh tick) can move the row under a dialog otherwise.
+  // The removal modal's target is a service NAME, not an index: a refresh (or
+  // the auto-refresh tick) can move the row under a dialog.
   bool confirming_recipe_remove = false;
   std::string recipe_remove_target;
-  bool recipe_removing = false;  // the remove+reload worker is in flight
-  std::string catalog_status;    // result/error of the last catalog action
+  bool recipe_removing = false;
+  std::string catalog_status;
 
-  // Deploy (6.3). `deploy_running` is an ATOMIC and not mutex-guarded state
-  // because two threads read it without the panel lock: the render thread (can
-  // I start a second deploy?) and the log tail (is there still something to
-  // read?). `deploy_in_flight` is the mutex-guarded one, and it stays true
-  // from the key press until the result is folded in — a second deploy cannot
-  // be started in the window where the engine is done but the screen has not
-  // drawn the verdict yet. Everything else here is ordinary UI-thread state.
+  // deploy_running is ATOMIC because two threads read it without the panel lock
+  // (render thread, log tail). deploy_in_flight is the guarded one, true from
+  // the key press until the verdict is drawn.
   std::atomic<bool> deploy_running{false};
   bool deploy_in_flight = false;
   std::atomic<bool> deploy_cancel_requested{false};
-  // The operation THIS deploy runs as. 'c' flips its cancel flag, which is the
-  // same flag the quit path flips — one path to the engine, not two.
+  // 'c' flips the same flag the quit path flips: one path to the engine.
   std::shared_ptr<Op> deploy_op;
   std::string deploy_status;
   std::string deploy_error;
@@ -114,21 +88,16 @@ struct Panel {
   bool deploy_finished = false;
   bool deploy_cancelled = false;
   berth::DeployOutcome deploy_outcome;
-  std::string deploy_service;     // the recipe being deployed
+  std::string deploy_service;
   RingBuffer<std::string> deploy_log_lines{kLogCapacity};
 
-  // The reviewed recipe (plan 4.21, stage 4.21): the creation form makes it,
-  // the review shows it, s/d store it. Fields are behind an explicit insert
-  // mode so that q / e / r / c keep working (§12.16).
+  // Insert mode, so q / e / r / c keep working with no field focused (§12.16).
   bool draft_running = false;
-  // True while a store-only worker is writing the draft. Without it a second
-  // 's' press during the write queued a second writer over the same file.
+  // Without it a second 's' during the write queued a second writer.
   bool draft_storing = false;
-  // The operation THIS draft runs as, so 'c' cancels the draft without
-  // touching a log tail or a service refresh that happens to be live (6.7:
-  // one flag per operation, never a panel-wide cancel).
+  // One flag per operation, never a panel-wide cancel (§6.7).
   std::shared_ptr<Op> draft_op;
-  bool draft_ready = false;  // a draft is waiting for review
+  bool draft_ready = false;
   berth::DraftResult draft;
   berth::DraftClash draft_clash;
   bool draft_stored = false;
@@ -136,15 +105,10 @@ struct Panel {
   std::string draft_status;
   std::string draft_error;
   bool draft_clash_confirming = false;
-  // What the clash modal does after 'y': store AND deploy, or store only.
   bool draft_pending_deploy = false;
 
-  // Creation form ('i'): one form for a new service — url, ref, the port to
-  // deploy on, and the eight recipe values. `create_active` is the form;
-  // `create_field` is the insert-mode focus, kNone until 'i' (§12.16). The
-  // eight values are the view model's EditFields, so the loud parsers
-  // (assemble_recipe_edits) and the ONE validator are the same ones the edit
-  // screen uses — two forms cannot disagree (§11).
+  // create_field is the insert-mode focus, kNone until 'i'; the eight values
+  // are the view model's EditFields, so two forms cannot disagree.
   bool create_active = false;
   CreateField create_field = CreateField::kNone;
   EditFields create;
@@ -154,15 +118,10 @@ struct Panel {
   std::string create_status;
   std::string create_error;
   bool create_running = false;
-  // The creation form's own op, so 'c' cancels the create and NOT whatever
-  // else is in flight — one flag per operation, never a panel-wide cancel (6.7).
   std::shared_ptr<Op> create_op;
 
-  // Recipe edit (stage 4.19+/4.21 TUI): edit a USER recipe's values without
-  // hand-editing JSON. `edit_active` is the sub-screen; `edit_field` is the
-  // insert-mode focus, kNone until 'i' (§12.16). `edit` is the view model's
-  // form, so the renderer and the worker agree on one shape. A builtin recipe
-  // never sets these: the refusal is a status line on the Deploy screen.
+  // edit_field is the focus, kNone until 'i'. A builtin recipe never sets
+  // these: the refusal is a status line on the Deploy screen.
   bool edit_active = false;
   EditField edit_field = EditField::kNone;
   EditFields edit;
@@ -174,82 +133,60 @@ struct Panel {
   std::string edit_status;
   std::string edit_error;
 
-  // My Services (6.4). As above: `services_loading` is user-visible, and
-  // `services_auto` is the silent background refresh so a tick never replaces
-  // the status line (e.g. "starting x: ok") with "querying..."
+  // services_auto is the silent tick: it never replaces an action's status.
   bool services_loading = false;
   bool services_auto = false;
   std::string services_status;
   std::vector<berth::ServiceRow> rows;
   std::size_t services_cursor = 0;
-  std::string action;  // non-empty while a start/stop/uninstall is running
+  std::string action;
   bool confirming_uninstall = false;
   berth::ServiceRow uninstall_target;
   bool confirming_kill = false;
   berth::ServiceRow kill_target;
 
-  // System Scan (6.5). One worker at a time; `scan_ever_ran` is what makes the
-  // tab run its scan on the first visit instead of at startup — a network GET
-  // should happen because the user went looking, not because the binary did.
+  // The tab scans on first visit: a network GET only when the user looks.
   bool scan_running = false;
   bool scan_ever_ran = false;
   std::string scan_error;
   berth::ScanReport scan;
 
-  // Logs (6.6). One buffer for the SELECTED log, refilled by a worker on an
-  // explicit r — never polled from the render loop, and never the whole file.
+  // Refilled by a worker on an explicit r — never polled from the render loop.
   LogFile log_selected = LogFile::kDeploy;
   bool log_loading = false;
-  // Bumped per tail request. A reply whose generation is stale belongs to a
-  // file the user has already switched away from, and must not land under the
-  // new file's name (a fast 1-2 switch used to show deploy.log as net.log).
+  // A stale generation belongs to a file the user already left.
   std::size_t log_generation = 0;
   bool log_truncated = false;
   bool log_existed = false;
   std::string log_error;
-  // Lines on screen per log file; unset until that file has been read, so
-  // the tab line never prints a count for a log nobody has looked at.
   std::vector<std::optional<std::size_t>> log_counts;
   std::size_t log_scroll = 0;  // lines up from the newest (0 = live)
 
-  // How many long operations the last quit had to cancel. Set on the quit path
-  // and reported on stderr afterwards, because a panel that swallows Ctrl-C
-  // without saying what it interrupted has told the user nothing (§11).
+  // Reported on stderr: a quit must say what it interrupted (§11).
   std::size_t cancelled_on_quit = 0;
 
   std::size_t tab = 0;
 };
 
-// Nudges the render loop. The panel's message queue: a worker may post here
-// and nowhere else. Does nothing once the panel is shutting down, which is
-// what lets the workers be detached instead of joined.
+// Workers post here and nowhere else; silent after shutdown, so they detach.
 void request_render(const Panel& panel);
 
-// The one way off the render thread. `work` runs on a detached thread with the
-// operation's own cancel flag (pass `&op->cancel` to the engine); `apply` runs
-// back on the render thread with the mutex held, so a worker result is folded
-// into the state without a second lock and without a torn read.
-//
-// Detached, not joined: a `systemctl` that ignores its timeout must not hold
-// the quit hostage. What makes that safe is stated here once: the state is
-// captured by shared_ptr (so it outlives the panel), the op deregisters itself
-// on the way out (so a later cancel_all() never flips a flag nobody reads),
-// request_render() goes quiet after shutdown. A worker that is still running
-// when the process exits has already been told to stop.
+// The one way off the render thread: `work` runs detached on the op's own
+// cancel flag, `apply` back on the render thread with the mutex held.
+// Detached, not joined — a `systemctl` that ignores its timeout must not hold
+// the quit hostage. Safe because the state is a shared_ptr and the op
+// deregisters on the way out.
 template <typename T>
 void run_on_worker(
     const std::shared_ptr<Panel>& panel, const std::string& label,
     const std::function<berth::Result<T>(const std::shared_ptr<Op>&)>& work,
     const std::function<void(Panel&, berth::Result<T>&&)>& apply) {
-  // The registry carries its own mutex, so this does NOT need the panel lock:
-  // the two are never held at once, and a worker never blocks the render thread
-  // on the registry.
+  // The registry has its own mutex: the two are never held at once.
   const std::shared_ptr<Op> op = panel->ops.begin(label);
   const std::shared_ptr<Panel> keep_alive = panel;
   std::thread worker([keep_alive, work, apply, op]() {
     berth::Result<T> outcome = work(op);
-    // Deregister BEFORE the shutdown check: an op that finished during the
-    // quit must not be left in the list for a later cancel to find.
+    // Deregister BEFORE the shutdown check, or a quit leaves an op to find.
     static_cast<void>(keep_alive->ops.end(op));
     if (keep_alive->shutting_down.load()) {
       return;
@@ -261,39 +198,27 @@ void run_on_worker(
   worker.detach();
 }
 
-// Aborts with a message: a violated UI invariant is a bug in this binary,
-// never something to render around.
 [[noreturn]] void abort_bug(const char* what);
 
-// The closed accent palette from chrome.h, as FTXUI colors.
 [[nodiscard]] ftxui::Color accent_color(std::string_view name);
 
-// Pads an already-assembled cell out to `width`. Padding, not formatting:
-// the caller owns the text.
 void pad_to_width(std::string& out, std::size_t width);
 
-// The window of `lines` to draw so the cursor stays visible. `cursor` indexes
-// `lines`; returns the first index to draw.
 [[nodiscard]] std::size_t window_start(std::size_t count, std::size_t cursor,
                                        std::size_t visible);
 
-// A list of plain lines with one cursor row; everything but the cursor is
-// dimmed. `cursor_visible` is false when there is nothing to select. `visible`
-// is the window height, so a screen with two lists gives each a share instead
-// of letting both ask for the full frame.
+// cursor_visible is false when there is nothing to select; visible is this
+// list's share of the frame.
 [[nodiscard]] ftxui::Element line_list(const std::vector<std::string>& lines,
                                        std::size_t cursor, ftxui::Color accent,
                                        bool cursor_visible,
                                        std::size_t visible = kVisibleRows);
 
-// Free text, wrapped: ftxui::text() clips at the box edge, and a hint that
-// vanishes past the right margin is a hint that does not exist.
+// Wrapped: ftxui::text() clips at the box edge.
 [[nodiscard]] ftxui::Element paragraph_lines(
     const std::vector<std::string>& lines);
 
-// A log TAIL, scrolled. `scroll` is how many lines UP from the newest one the
-// window sits, so 0 pins the bottom — which is what a live log must do, or the
-// newest line scrolls off the moment it arrives. Copy-free: the buffer is read
+// scroll counts UP from the newest, so 0 pins the bottom. Copy-free: read
 // through RingBuffer::at, never cloned per frame.
 template <typename T>
 [[nodiscard]] ftxui::Element log_window(const RingBuffer<T>& buffer,
@@ -303,8 +228,7 @@ template <typename T>
     return ftxui::text(" ") | ftxui::dim | ftxui::flex;
   }
   const std::size_t total = buffer.size();
-  // How many lines from the end the window starts. A scroll past the top
-  // clamps: the top of a live log is the oldest line still kept.
+  // A scroll past the top clamps to the oldest line still kept.
   const std::size_t wanted = scroll + visible;
   const std::size_t from_end = wanted < total ? wanted : total;
   std::size_t first = total - from_end;
@@ -318,31 +242,19 @@ template <typename T>
   return ftxui::vbox(std::move(rows)) | ftxui::flex;
 }
 
-// A modal dialog: the lines in a rounded border, centred with spacers. It
-// REPLACES the screen rather than overlaying it — a dbox over a full-width
-// table lets the table bleed through, and a confirmation you cannot read is
-// not a confirmation.
+// REPLACES the screen; a dbox over a full-width table lets the table bleed
+// through.
 [[nodiscard]] ftxui::Element boxed_dialog(const std::vector<std::string>& lines,
                                           ftxui::Color accent);
 
-// The bordered header bar with the brand mark and the version. `net` is the
-// NET banner (view_logs.h): read from one atomic word on every render, which
-// is the only reason it can be there at all.
 [[nodiscard]] ftxui::Element header_bar(const berth::NetSnapshot& net);
 
-// The fixed-width vertical tab strip.
 [[nodiscard]] ftxui::Element tab_strip(std::size_t active);
 
-// The key hints along the bottom.
 [[nodiscard]] ftxui::Element footer_bar();
 
-// One per-screen hint line: the KEYS in the one accent, the words dim. The
-// renderer does no parsing — the key/words split is data from the view models
-// (dev.md §12.14), so it is asserted without a terminal.
 [[nodiscard]] ftxui::Element key_hint(const KeyHint& hint);
 
-// Several hints on ONE line, joined by a dim separator, for a screen that
-// keeps its keys on a single row (the Logs tab).
 [[nodiscard]] ftxui::Element key_hint_line(const std::vector<KeyHint>& hints);
 
-}  // namespace tui
+}

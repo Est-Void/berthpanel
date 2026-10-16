@@ -1,9 +1,6 @@
 #pragma once
 
-// tests/test_env.h — shared test fixtures: scoped env mutation (must run
-// under env_test_lock, dev.md §9) and temp dirs with a random suffix (§9:
-// never a predictable /tmp path).
-
+// Scoped env mutation MUST run under the process-wide env_test_lock (§9).
 #include <stdlib.h>
 #include <unistd.h>
 

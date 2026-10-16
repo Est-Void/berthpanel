@@ -1,5 +1,3 @@
-// src/berth/service_ops.cpp — see service_ops.h for the contract.
-
 #include "service_ops.h"
 
 #include <chrono>
@@ -19,13 +17,9 @@ namespace berth {
 
 namespace {
 
-// Every systemctl round trip here is bounded. The panel's live status list
-// must never be able to hang the panel: one unresponsive unit costs its own
-// row, not the whole screen (dev.md §5).
+// Bounded: one unresponsive unit costs its own row, not the whole screen.
 constexpr std::chrono::milliseconds kIsActiveTimeout{4000};
 
-// systemctl is-active exit codes are DATA (units.h): 0 active, 3 inactive
-// (also "failed" and "unit not found"), 4 unknown.
 constexpr int kExitActive = 0;
 constexpr int kExitInactive = 3;
 
@@ -53,8 +47,7 @@ Result<void> check_not_cancelled(std::atomic<bool>* cancel,
   return {};
 }
 
-}  // namespace
-
+}
 std::string_view service_state_label(const ServiceState state) {
   switch (state) {
     case ServiceState::kActive:
@@ -64,16 +57,12 @@ std::string_view service_state_label(const ServiceState state) {
     case ServiceState::kUnknown:
       return "unknown";
   }
-  // Unreachable: the enum has no other member, and a new one is a compile
-  // error above.
   std::abort();
 }
 
 Result<std::filesystem::path> unit_file_for(const Paths& paths,
                                             const std::string& service_name) {
-  // THE shared validator (dev.md §11): the unit creator validates, so the
-  // remover must too, or a hand-edited registry entry can delete outside the
-  // unit directory.
+  // The shared validator guards the remover too: a registry is hand-editable.
   if (!validate_unit_name(service_name)) {
     return Error("service_ops: invalid service name: '" + service_name + "'");
   }
@@ -100,9 +89,7 @@ Result<std::vector<ServiceRow>> service_rows(const Paths& paths,
     row.port = record.port;
     row.commit_short = commit_short(record.commit);
 
-    // A name that fails validation still gets a row — it shows up as
-    // "unknown" rather than disappearing, because a registry that cannot be
-    // listed is not a registry that is empty (§11).
+    // A bad name still gets a row: an unlistable registry is not an empty one.
     const Result<int> active =
         systemctl_user_code({"is-active", record.service_name + ".service"},
                             kIsActiveTimeout, cancel);
@@ -136,9 +123,7 @@ Result<void> service_restart(const std::string& service_name) {
   if (!validate_unit_name(service_name)) {
     return Error("service_ops: invalid service name: '" + service_name + "'");
   }
-  // `systemctl restart` exists, but stop-then-start is what the two verbs
-  // above already prove, and a restart that silently no-ops when the unit is
-  // not loaded would be a lie about a repair.
+  // stop+start, not `restart`: it silently no-ops when the unit is not loaded.
   Result<void> stopped = service_stop(service_name);
   if (stopped.is_err()) {
     return stopped;
@@ -159,12 +144,8 @@ Result<void> service_kill(const std::string& service_name) {
 
 namespace {
 
-// The unit's MainPID, as systemd reports it. One bounded call; "" when the
-// unit has none (never started, or failed to start).
 Result<std::string> main_pid_of(const std::string& unit) {
-  // `show --value` prints on stdout and systemctl_user() throws the output
-  // away, so this one call goes through run() directly — with the same argv
-  // array and timeout as everything else (§11: never a command string).
+  // systemctl_user() discards stdout, so this goes through run() directly.
   const Result<std::string> systemctl = resolve_executable("systemctl");
   if (systemctl.is_err()) {
     return with_context(std::move(systemctl).error(), "reading " + unit);
@@ -184,21 +165,14 @@ Result<std::string> main_pid_of(const std::string& unit) {
   return std::string(berth::trim(shown.value().out));
 }
 
-}  // namespace
-
+}
 char proc_stat_state(const std::string_view stat_line) {
-  // "1234 (some (weird) name) T 1234 ..." — the comm field is in parentheses
-  // and may contain both, so the LAST ')' is the only reliable separator.
   const std::size_t close = stat_line.rfind(')');
-  // `close + 2` is the index of the state character; it must be strictly
-  // inside the view. `>` let a line that ends exactly at the separating space
-  // (e.g. "1 (x) ") index one past the end — an OOB read on hostile input.
+  // `>=` not `>`: a line ending at the space would read one past the end.
   if (close == std::string_view::npos || close + 2 >= stat_line.size()) {
     return '\0';
   }
   const char state = stat_line[close + 2];
-  // Only the documented state letters are accepted; anything else means the
-  // line is not what we think it is.
   static constexpr std::string_view kStates = "RSDZTtWXxKWPslNNI";
   if (kStates.find(state) == std::string_view::npos) {
     return '\0';
@@ -215,12 +189,11 @@ Result<bool> service_is_frozen(const std::string& service_name) {
     return std::move(pid).error();
   }
   if (pid.value().empty() || pid.value() == "0") {
-    return false;  // no process, so nothing is stopped
+    return false;
   }
   const Result<std::string> stat = read_file("/proc/" + pid.value() + "/stat");
   if (stat.is_err()) {
-    // The process may have exited between the two calls; that is not a failure
-    // of the freeze check, it means there is nothing frozen.
+    // Exited between the two calls: nothing is frozen, so not a failure.
     return false;
   }
   const char state = proc_stat_state(stat.value());
@@ -242,8 +215,7 @@ Result<bool> service_freeze(const std::string& service_name) {
   if (sent.is_err()) {
     return with_context(std::move(sent).error(), "freezing " + service_name);
   }
-  // Sent is not stopped. Confirm against the process itself (§11: a signal
-  // that went out is not a state).
+  // Sent is not stopped: confirm against the process itself.
   return service_is_frozen(service_name);
 }
 
@@ -257,9 +229,7 @@ Result<bool> service_unfreeze(const std::string& service_name) {
   if (sent.is_err()) {
     return with_context(std::move(sent).error(), "unfreezing " + service_name);
   }
-  // Same meaning as service_freeze(): true = FROZEN NOW. Two functions whose
-  // bool means opposite things is a trap for the caller, and it already was
-  // one.
+  // Same meaning as service_freeze(): true = FROZEN NOW.
   return service_is_frozen(service_name);
 }
 
@@ -270,9 +240,7 @@ Result<void> service_uninstall(const Paths& paths,
   if (unit_file.is_err())
     return std::move(unit_file).error();
 
-  // The unit file's existence decides whether there is anything to disable.
-  // A missing unit is not an error here: the registry entry and the work dir
-  // may well outlive it, and uninstall has to be able to finish.
+  // A missing unit is not an error: the registry entry and work dir outlive it.
   std::error_code ec;
   const bool unit_present = std::filesystem::exists(unit_file.value(), ec);
   if (ec) {
@@ -281,8 +249,7 @@ Result<void> service_uninstall(const Paths& paths,
   }
 
   if (unit_present) {
-    // systemctl_disable is stop+disable+daemon-reload in one, and it
-    // validates the name itself.
+    // stop+disable+reload in one; it validates the name itself.
     Result<void> disabled = systemctl_disable(service_name);
     if (disabled.is_err()) {
       return with_context(std::move(disabled), "disabling " + service_name);
@@ -307,10 +274,7 @@ Result<void> service_uninstall(const Paths& paths,
                         "after uninstalling " + service_name);
   }
 
-  // The work dir under paths.services_dir stays: it holds the user's data,
-  // and a silent delete is forbidden. Removing it is a separate, explicit
-  // act (dev.md §12 open purge policy).
   return {};
 }
 
-}  // namespace berth
+}
