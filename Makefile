@@ -85,6 +85,7 @@ LIB_SRC := \
  	src/berth/catalog.cpp \
 	src/berth/deploy.cpp \
 	src/berth/service_ops.cpp \
+	src/berth/repair.cpp \
 	src/berth/serve.cpp \
 	src/berth/status.cpp \
 	src/berth/proxy.cpp \
@@ -169,10 +170,12 @@ TEST_SRC := \
  	tests/userrecipes_test.cpp \
  	tests/recipe_edit_test.cpp \
  	tests/stacks_test.cpp \
+ 	tests/stack_catalog_test.cpp \
  	tests/detect_test.cpp \
 	tests/wizard_test.cpp \
  	tests/deploy_test.cpp \
  	tests/deploy_stack_test.cpp \
+ 	tests/repair_test.cpp \
  	tests/cancel_test.cpp \
  	tests/gzip_test.cpp \
 	tests/ring_test.cpp \

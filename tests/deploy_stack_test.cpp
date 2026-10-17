@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "berth/catalog.h"
 #include "berth/deploy.h"
 #include "berth/journal.h"
 #include "berth/lock.h"
@@ -432,4 +433,30 @@ TEST(stack_interrupt_kill_reconcile_cleans_the_group_and_spares_the_registry) {
   CHECK(berth::journal_load(p).value().empty());
   // The registry is never the cleanup's to touch.
   CHECK(berth::registry_get(p, "berthpanel-neighbour").value().has_value());
+}
+
+TEST(builtin_pilot_stack_deploys_through_the_group_engine) {
+  const TempDir tmp;
+  const berth::Paths p = test_paths(tmp.path());
+  const auto stack = berth::builtin_stack("berthpanel-gitea-stack");
+  CHECK(stack.is_ok());
+  FakeStackOps ops;
+  berth::DeployOptions options;
+  const auto outcome = berth::run_stack_deploy(p, stack.value(), ops, options);
+  CHECK(outcome.is_ok());
+  CHECK(outcome.value().members.size() == 2);
+  // Dependency order: the stateful member is up before the app.
+  CHECK(outcome.value().members[0].service_name ==
+        "berthpanel-gitea-stack-db");
+  CHECK(outcome.value().members[1].service_name ==
+        "berthpanel-gitea-stack-app");
+  CHECK(ops.calls.front() == "fetch:berthpanel-gitea-stack-db");
+  CHECK(ops.calls.back() == "register:berthpanel-gitea-stack-app");
+  CHECK(berth::registry_get(p, "berthpanel-gitea-stack-db")
+            .value()
+            .has_value());
+  CHECK(berth::registry_get(p, "berthpanel-gitea-stack-app")
+            .value()
+            .has_value());
+  CHECK(berth::journal_load(p).value().empty());
 }

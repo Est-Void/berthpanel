@@ -6,6 +6,7 @@
 #include "../core/paths.h"
 #include "../util/result.h"
 #include "recipes.h"
+#include "stacks.h"
 
 namespace berth {
 
@@ -19,5 +20,14 @@ namespace berth {
 [[nodiscard]] std::string render_catalog_list();
 
 [[nodiscard]] nlohmann::json catalog_json();
+
+// Builtin multi-unit recipes (stage 9.3). The pilot is the only entry.
+[[nodiscard]] Result<std::vector<Stack>> builtin_stacks();
+
+[[nodiscard]] Result<Stack> builtin_stack(std::string_view service_name);
+
+[[nodiscard]] std::string render_stack_list();
+
+[[nodiscard]] nlohmann::json stacks_json();
 
 }

@@ -116,6 +116,89 @@ Recipe uptime_kuma_recipe() {
   return r;
 }
 
+// Stage 9.3 pilot: one app member plus one Redis-compatible stateful member.
+// PostgreSQL was the P0 pick, but the v1 prebuilt path extracts ONE archive
+// member and has no initdb step, so a multi-file database cannot deploy here.
+Recipe dragonfly_recipe() {
+  Recipe r;
+  r.owner = "dragonflydb";
+  r.name = "dragonfly";
+  r.commit = "8ce4bbb106586057fbd85f71ed353c60d0d5bf87";
+  r.language = "prebuilt";
+  r.service_name = "berthpanel-gitea-stack-db";
+  r.display_name = "Dragonfly";
+  r.description = "Redis-compatible stateful member";
+  r.prebuilt = PrebuiltBinary{
+      .url =
+          "https://github.com/dragonflydb/dragonfly/releases/download/v2.0.2/"
+          "dragonfly-x86_64.tar.gz",
+      .sha256 =
+          "eb9dfe654c69ab190cb3aa329ed3599ebe19c5e9a3a437bb7bc38ef52f665c88",
+      .member = "dragonfly-x86_64"};
+  r.binary_name = "dragonfly-x86_64";
+  // Fixed port: the app member references it by number (the schema has no
+  // cross-member port placeholder yet).
+  r.start_cmd =
+      "{self} --bind 127.0.0.1 --port {port} --dir {project}/data "
+      "--dbfilename dump --snapshot_cron \"*/1 * * * *\" "
+      "--maxmemory 256mb --proactor_threads 1";
+  r.health_path = "/";
+  r.port = 16379;
+  r.tools = {};
+  r.res = ResourceLimits{.memory_max = "384M", .tasks_max = 512};
+  return r;
+}
+
+Recipe gitea_app_recipe() {
+  Recipe r;
+  r.owner = "go-gitea";
+  r.name = "gitea";
+  r.commit = "4ebd5e319b6a9e629bfd7a04292a6fe85b08dee9";
+  r.language = "prebuilt";
+  r.service_name = "berthpanel-gitea-stack-app";
+  r.display_name = "Gitea";
+  r.description = "Git hosting (app member)";
+  r.prebuilt = PrebuiltBinary{
+      .url =
+          "https://github.com/go-gitea/gitea/releases/download/v28.1.0/"
+          "gitea-28.1.0-linux-amd64",
+      .sha256 =
+          "ea93cfa4a300564ac457d3903469fea49ec5a4da37d0cebaa435f8e329ea64d0",
+      .member = "gitea",
+      .archive = ToolArchive::kRaw};
+  r.binary_name = "gitea";
+  // Cache and session live in the db member; the bind default is the wildcard.
+  r.start_cmd =
+      "env GITEA__server__HTTP_ADDR=127.0.0.1 "
+      "GITEA__cache__ADAPTER=redis "
+      "GITEA__cache__HOST=redis://127.0.0.1:16379/0 "
+      "GITEA__session__PROVIDER=redis "
+      "GITEA__session__PROVIDER_CONFIG=redis://127.0.0.1:16379/0 "
+      "{self} web --port {port}";
+  r.health_path = "/";
+  r.port = 0;
+  r.tools = {};
+  r.res = ResourceLimits{.memory_max = "1024M", .tasks_max = 512};
+  return r;
+}
+
+Stack gitea_stack() {
+  Stack s;
+  s.service_name = "berthpanel-gitea-stack";
+  s.display_name = "Gitea + Dragonfly";
+  s.description = "single-binary app plus one stateful Redis-compatible member";
+  StackMember db;
+  db.name = "db";
+  db.recipe = dragonfly_recipe();
+  StackMember app;
+  app.name = "app";
+  app.recipe = gitea_app_recipe();
+  app.after = {"db"};
+  app.wants = {"db"};
+  s.members = {db, app};
+  return s;
+}
+
 }
 Result<std::vector<Recipe>> builtin_catalog() {
   std::vector<Recipe> catalog = {memos_recipe(), filebrowser_recipe(),
@@ -180,6 +263,59 @@ nlohmann::json catalog_json() {
   nlohmann::json array = nlohmann::json::array();
   for (const Recipe& recipe : sorted) array.push_back(recipe_to_json(recipe));
   doc["recipes"] = std::move(array);
+  return doc;
+}
+
+Result<std::vector<Stack>> builtin_stacks() {
+  std::vector<Stack> stacks = {gitea_stack()};
+  for (const Stack& stack : stacks) {
+    const Result<void> valid = validate_stack(stack);
+    if (valid.is_err())
+      return std::move(valid).error();
+  }
+  return stacks;
+}
+
+Result<Stack> builtin_stack(const std::string_view service_name) {
+  Result<std::vector<Stack>> stacks = builtin_stacks();
+  if (stacks.is_err())
+    return std::move(stacks).error();
+  for (const Stack& stack : stacks.value()) {
+    if (stack.service_name == service_name)
+      return stack;
+  }
+  return Error("catalog: no builtin stack named '" +
+               std::string(service_name) + "'");
+}
+
+std::string render_stack_list() {
+  Result<std::vector<Stack>> stacks = builtin_stacks();
+  if (stacks.is_err())
+    return "stacks: error: " + stacks.error().ctx() + "\n";
+  std::string out;
+  for (const Stack& stack : stacks.value()) {
+    out += "  " + stack.service_name + "  " + stack.display_name + "  (";
+    for (std::size_t i = 0; i < stack.members.size(); ++i) {
+      if (i != 0)
+        out += ", ";
+      out += stack.members[i].recipe.service_name;
+    }
+    out += ")\n";
+  }
+  return out;
+}
+
+nlohmann::json stacks_json() {
+  Result<std::vector<Stack>> stacks = builtin_stacks();
+  nlohmann::json doc = json_document("stacks");
+  if (stacks.is_err()) {
+    doc["error"] = stacks.error().ctx();
+    return doc;
+  }
+  nlohmann::json array = nlohmann::json::array();
+  for (const Stack& stack : stacks.value())
+    array.push_back(stack_to_json(stack));
+  doc["stacks"] = std::move(array);
   return doc;
 }
 

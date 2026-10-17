@@ -28,6 +28,7 @@
 #include "berth/proxy.h"
 #include "berth/recipe_edit.h"
 #include "berth/recipes.h"
+#include "berth/repair.h"
 #include "berth/sandbox.h"
 #include "berth/selftest.h"
 #include "berth/serve.h"
@@ -116,9 +117,12 @@ void print_usage() {
          "[--force]\n"
          "       berthpanel __deploy <service_name> [port] [--upgrade] "
          "[--json]\n"
+         "       berthpanel __stacks [--json] | "
+         "__deploy-stack <stack> [--json]\n"
          "       berthpanel proxy add <service> <domain> | proxy list | "
          "proxy remove <domain>\n"
          "       berthpanel __cleanup [--install] [--quiet]\n"
+         "       berthpanel __repair [--json]\n"
          "       berthpanel __serve-static <root> [--listen "
          "127.0.0.1:<port>]\n"
          "       berthpanel __serve-status [--listen "
@@ -211,6 +215,61 @@ int deploy_command(const std::string_view service,
   std::cout << "  port: " << outcome.value().port << "\n"
             << "  unit: " << outcome.value().unit_path.string() << "\n"
             << "  work: " << outcome.value().work_dir.string() << "\n";
+  return 0;
+}
+
+int stacks_command(const bool json) {
+  if (json) {
+    std::cout << berth::json_text(berth::stacks_json());
+    return 0;
+  }
+  std::cout << berth::render_stack_list();
+  return 0;
+}
+
+int deploy_stack_command(const std::string_view stack_name, const bool json) {
+  const berth::Result<berth::Paths> paths = berth::paths_from_env();
+  if (paths.is_err())
+    return fail(paths.error().ctx());
+  const berth::Result<berth::Stack> stack =
+      berth::builtin_stack(stack_name);
+  if (stack.is_err())
+    return fail(stack.error().ctx());
+
+  std::atomic<bool> cancel_flag{false};
+  const berth::Result<void> signalling =
+      berth::install_exit_signalling(&cancel_flag);
+  if (signalling.is_err())
+    return fail(signalling.error().ctx());
+
+  berth::RealDeployOps ops;
+  berth::DeployOptions options;
+  options.cancel = &cancel_flag;
+  const berth::Result<berth::StackDeployOutcome> outcome =
+      berth::run_stack_deploy(paths.value(), stack.value(), ops, options);
+  if (outcome.is_err()) {
+    std::cerr << "stack deploy failed:\n" << outcome.error().ctx() << "\n";
+    return 1;
+  }
+  if (json) {
+    nlohmann::json doc = berth::json_document("deploy-stack");
+    doc["stack"] = outcome.value().stack_name;
+    nlohmann::json members = nlohmann::json::array();
+    for (const berth::DeployOutcome& member : outcome.value().members) {
+      members.push_back({{"service_name", member.service_name},
+                         {"port", member.port},
+                         {"unit", member.unit_path.string()},
+                         {"work_dir", member.work_dir.string()}});
+    }
+    doc["members"] = std::move(members);
+    std::cout << berth::json_text(doc);
+    return 0;
+  }
+  std::cout << "deployed stack " << outcome.value().stack_name << "\n";
+  for (const berth::DeployOutcome& member : outcome.value().members) {
+    std::cout << "  " << member.service_name << "  port " << member.port
+              << "  unit " << member.unit_path.string() << "\n";
+  }
   return 0;
 }
 
@@ -485,6 +544,23 @@ int recipe_edit_command(const std::string_view service,
                                               updated.value().after)
             << "  stored: " << updated.value().stored_path.string() << "\n";
   return 0;
+}
+
+int repair_command(const bool json) {
+  const berth::Result<berth::Paths> paths = berth::paths_from_env();
+  if (paths.is_err())
+    return fail(paths.error().ctx());
+  const berth::Result<berth::RepairSnapshot> snapshot =
+      berth::collect_repair_snapshot(paths.value(),
+                                     berth::systemd_unit_probe());
+  if (snapshot.is_err())
+    return fail(snapshot.error().ctx());
+  const berth::RepairReport report = berth::repair_check(snapshot.value());
+  if (json)
+    std::cout << berth::json_text(berth::repair_json(report));
+  else
+    std::cout << berth::render_repair_report(report);
+  return report.findings.empty() ? 0 : 1;
 }
 
 int cleanup_command(const bool install, const bool quiet) {
@@ -808,10 +884,16 @@ std::optional<int> dispatch_verb(const std::span<const char* const>& args) {
     return recipe_draft_verb(args);
   if (first == "__deploy" && args.size() >= 2)
     return deploy_verb(args);
+  if (first == "__stacks")
+    return stacks_command(contains_flag(args, "--json"));
+  if (first == "__deploy-stack" && args.size() >= 2)
+    return deploy_stack_command(args[1], contains_flag(args, "--json"));
   if (first == "__cleanup") {
     return cleanup_command(contains_flag(args, "--install"),
                            contains_flag(args, "--quiet"));
   }
+  if (first == "__repair")
+    return repair_command(contains_flag(args, "--json"));
   if (first == "__serve-static" && args.size() >= 2)
     return serve_static_command(args[1], listen_arg(args, 2));
   if (first == "__serve-status")
