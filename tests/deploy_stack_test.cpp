@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -106,6 +107,8 @@ class FakeStackOps final : public berth::DeployOps {
   std::vector<std::string> calls;
   std::string fail_build_service;
   bool fail_stop = false;
+  std::map<std::string, std::vector<std::string>> after_by_service;
+  std::map<std::string, std::vector<std::string>> wants_by_service;
 
   Result<void> fetch_source(const Recipe& recipe,
                             const std::filesystem::path& work_dir,
@@ -142,9 +145,13 @@ class FakeStackOps final : public berth::DeployOps {
   }
   Result<std::filesystem::path> write_unit_file(
       const Recipe& recipe, const std::filesystem::path& work_dir,
-      std::uint16_t port, const berth::Paths& paths) override {
+      std::uint16_t port, const berth::Paths& paths,
+      const std::vector<std::string>& after_units,
+      const std::vector<std::string>& wants_units) override {
     static_cast<void>(port);
     static_cast<void>(paths);
+    after_by_service[recipe.service_name] = after_units;
+    wants_by_service[recipe.service_name] = wants_units;
     calls.push_back("unit:" + recipe.service_name);
     return work_dir / (recipe.service_name + ".service");
   }
@@ -265,6 +272,14 @@ TEST(stack_deploy_runs_members_in_dependency_order_and_registers_both) {
       "start:berthpanel-demo-app",  "await:berthpanel-demo-app",
       "listen:berthpanel-demo-app", "register:berthpanel-demo-app"};
   CHECK(ops.calls == expected);
+
+  // The app's unit carries the group ordering; the db has no upstream.
+  CHECK((ops.after_by_service["berthpanel-demo-app"] ==
+         std::vector<std::string>{"berthpanel-demo-db"}));
+  CHECK((ops.wants_by_service["berthpanel-demo-app"] ==
+         std::vector<std::string>{"berthpanel-demo-db"}));
+  CHECK(ops.after_by_service["berthpanel-demo-db"].empty());
+  CHECK(ops.wants_by_service["berthpanel-demo-db"].empty());
 
   CHECK(berth::registry_get(p, "berthpanel-demo-db").value().has_value());
   CHECK(berth::registry_get(p, "berthpanel-demo-app").value().has_value());

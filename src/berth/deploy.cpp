@@ -226,7 +226,9 @@ Result<void> RealDeployOps::build(const Recipe& recipe,
 
 Result<std::filesystem::path> RealDeployOps::write_unit_file(
     const Recipe& recipe, const std::filesystem::path& work_dir,
-    const std::uint16_t port, const Paths& paths) {
+    const std::uint16_t port, const Paths& paths,
+    const std::vector<std::string>& after_units,
+    const std::vector<std::string>& wants_units) {
   std::string binary;
   const Result<std::vector<std::string>> args =
       resolve_start_argv(recipe, work_dir, port, binary);
@@ -243,6 +245,8 @@ Result<std::filesystem::path> RealDeployOps::write_unit_file(
   spec.limits = UnitLimits{.memory_max = recipe.res.memory_max,
                            .tasks_max = recipe.res.tasks_max};
   spec.read_write_paths = {work_dir};
+  spec.after_units = after_units;
+  spec.wants_units = wants_units;
   if (!std::filesystem::exists(spec.secrets_file)) {
     Result<std::filesystem::path> written =
         write_secrets(paths, recipe.service_name, {});
@@ -924,7 +928,11 @@ Result<DeployOutcome> deploy_unit(const Paths& paths, const Recipe& recipe,
                                   DeployOps& ops,
                                   const DeployOptions& options,
                                   const StageWriter& stage,
-                                  const StageLogger& log) {
+                                  const StageLogger& log,
+                                  const std::vector<std::string>& after_units =
+                                      {},
+                                  const std::vector<std::string>& wants_units =
+                                      {}) {
   {
     const Result<void> staged = stage("cloning");
     if (staged.is_err())
@@ -966,7 +974,8 @@ Result<DeployOutcome> deploy_unit(const Paths& paths, const Recipe& recipe,
   }
   log("start " + recipe.service_name);
   Result<std::filesystem::path> unit =
-      ops.write_unit_file(recipe, work_dir, port, paths);
+      ops.write_unit_file(recipe, work_dir, port, paths, after_units,
+                          wants_units);
   if (unit.is_err()) {
     return Error("deploy: unit rendering failed: " +
                  std::move(unit).error().ctx());
@@ -1190,7 +1199,8 @@ Result<StackDeployOutcome> run_stack_deploy(const Paths& paths,
   StackDeployOutcome outcome;
   outcome.stack_name = stack.service_name;
   for (const std::size_t i : order.value()) {
-    const Recipe& recipe = stack.members[i].recipe;
+    const StackMember& stack_member = stack.members[i];
+    const Recipe& recipe = stack_member.recipe;
     const std::filesystem::path work_dir = paths.services_dir / member_units[i];
     const StageWriter stage =
         [&paths, &recipe, &stack, &member_units, i](
@@ -1200,11 +1210,29 @@ Result<StackDeployOutcome> run_stack_deploy(const Paths& paths,
                          recipe.owner_repo(), recipe.commit, stack.service_name,
                          name);
     };
-    Result<DeployOutcome> member =
-        deploy_unit(paths, recipe, ports[i], work_dir, ops, options, stage, log);
-    if (member.is_err())
-      return std::move(member).error();
-    outcome.members.push_back(std::move(member).value());
+    // Sibling ids become validated unit stems; render_unit re-checks them.
+    std::vector<std::string> after_units;
+    after_units.reserve(stack_member.after.size());
+    for (const std::string& dep : stack_member.after) {
+      Result<std::string> dep_unit = member_unit_name(stack.service_name, dep);
+      if (dep_unit.is_err())
+        return std::move(dep_unit).error();
+      after_units.push_back(std::move(dep_unit).value());
+    }
+    std::vector<std::string> wants_units;
+    wants_units.reserve(stack_member.wants.size());
+    for (const std::string& dep : stack_member.wants) {
+      Result<std::string> dep_unit = member_unit_name(stack.service_name, dep);
+      if (dep_unit.is_err())
+        return std::move(dep_unit).error();
+      wants_units.push_back(std::move(dep_unit).value());
+    }
+    Result<DeployOutcome> deployed =
+        deploy_unit(paths, recipe, ports[i], work_dir, ops, options, stage, log,
+                    after_units, wants_units);
+    if (deployed.is_err())
+      return std::move(deployed).error();
+    outcome.members.push_back(std::move(deployed).value());
   }
   return outcome;
 }

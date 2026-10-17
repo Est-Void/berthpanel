@@ -59,7 +59,9 @@ class DeployOps {
                              const DeployOptions& options) = 0;
   virtual Result<std::filesystem::path> write_unit_file(
       const Recipe& recipe, const std::filesystem::path& work_dir,
-      std::uint16_t port, const Paths& paths) = 0;
+      std::uint16_t port, const Paths& paths,
+      const std::vector<std::string>& after_units,
+      const std::vector<std::string>& wants_units) = 0;
   virtual Result<void> start_service(const std::string& service_name) = 0;
   // `enable --now` returns 0 for a unit that dies a moment later, so success is
   // only claimed here; on failure the unit's own output goes to deploy.log.
@@ -92,7 +94,9 @@ class RealDeployOps final : public DeployOps {
                      const Paths& paths, const DeployOptions& options) override;
   Result<std::filesystem::path> write_unit_file(
       const Recipe& recipe, const std::filesystem::path& work_dir,
-      std::uint16_t port, const Paths& paths) override;
+      std::uint16_t port, const Paths& paths,
+      const std::vector<std::string>& after_units,
+      const std::vector<std::string>& wants_units) override;
   Result<void> start_service(const std::string& service_name) override;
   Result<void> await_running(const std::string& service_name, const Paths& paths,
                              std::atomic<bool>* cancel) override;

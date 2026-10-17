@@ -194,6 +194,13 @@ Result<std::string> substitute_placeholders(
 
 namespace {
 
+bool valid_order_unit(const std::string& unit) {
+  // A stem must not already carry the suffix, or the unit would be
+  // `<stem>.service.service`. validate_unit_name rejects the characters a
+  // member id could use to inject a directive.
+  return validate_unit_name(unit) && !unit.ends_with(".service");
+}
+
 Result<void> check_unit_spec(const UnitSpec& spec) {
   if (!validate_unit_name(spec.service_name)) {
     return Error("units: invalid service name: '" + spec.service_name + "'");
@@ -219,7 +226,22 @@ Result<void> append_unit_section(std::string* out, const UnitSpec& spec) {
   *out +=
       "Description=" + description.value() + " (" + spec.service_name + ")\n";
   *out += "After=network-online.target\n";
-  *out += "Wants=network-online.target\n\n";
+  *out += "Wants=network-online.target\n";
+  for (const std::string& unit : spec.after_units) {
+    if (!valid_order_unit(unit))
+      return Error("units: invalid After unit: '" + unit + "'");
+    *out += "After=";
+    *out += unit;
+    *out += ".service\n";
+  }
+  for (const std::string& unit : spec.wants_units) {
+    if (!valid_order_unit(unit))
+      return Error("units: invalid Wants unit: '" + unit + "'");
+    *out += "Wants=";
+    *out += unit;
+    *out += ".service\n";
+  }
+  *out += "\n";
   return {};
 }
 

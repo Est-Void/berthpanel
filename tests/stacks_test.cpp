@@ -85,6 +85,8 @@ TEST(stacks_member_unit_name_is_group_plus_member) {
   CHECK(berth::member_unit_name("berthpanel-demo", "").is_err());
   CHECK(berth::member_unit_name("no-prefix", "app").is_err());
   CHECK(berth::member_unit_name("berthpanel-demo", "app/x").is_err());
+  CHECK(berth::member_unit_name("berthpanel-demo", "db\nAfter=evil").is_err());
+  CHECK(berth::member_unit_name("berthpanel-demo", "db;rm").is_err());
 }
 
 TEST(stacks_group_name_must_be_a_valid_unit_name) {

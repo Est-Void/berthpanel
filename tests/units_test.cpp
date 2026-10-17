@@ -243,3 +243,35 @@ TEST(units_cleanup_units_render_and_write) {
       std::filesystem::exists(paths.units_dir / "berthpanel-cleanup.service"));
   CHECK(std::filesystem::exists(paths.units_dir / "berthpanel-cleanup.timer"));
 }
+
+TEST(units_renders_stack_after_and_wants) {
+  UnitSpec spec = base_spec();
+  spec.after_units = {"berthpanel-db"};
+  spec.wants_units = {"berthpanel-db"};
+  const auto unit = render_unit(spec);
+  CHECK(unit.is_ok());
+  CHECK(unit.value().find("After=network-online.target") != std::string::npos);
+  CHECK(unit.value().find("After=berthpanel-db.service") != std::string::npos);
+  CHECK(unit.value().find("Wants=berthpanel-db.service") != std::string::npos);
+  // Ordering belongs to [Unit], before [Service].
+  CHECK(unit.value().find("After=berthpanel-db.service") <
+        unit.value().find("[Service]"));
+}
+
+TEST(units_refuses_ordering_names_that_could_inject) {
+  const std::vector<std::string> bad = {
+      "berthpanel-db\nAfter=evil.target",
+      "berthpanel-db x",
+      "berthpanel-db;rm",
+      "db",                     // missing prefix
+      "berthpanel-db.service",  // a stem, not a filename
+  };
+  for (const std::string& name : bad) {
+    UnitSpec after = base_spec();
+    after.after_units = {name};
+    CHECK(render_unit(after).is_err());
+    UnitSpec wants = base_spec();
+    wants.wants_units = {name};
+    CHECK(render_unit(wants).is_err());
+  }
+}

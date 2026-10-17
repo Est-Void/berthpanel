@@ -38,6 +38,11 @@ struct UnitSpec {
   UnitLimits limits;  // MANDATORY (§8): render_unit errs without them
   std::vector<std::filesystem::path> read_write_paths;
   std::vector<std::string> extra_environment;  // "KEY=VALUE", quoted per arg
+  // Stack ordering: sibling unit STEMS (already berthpanel- prefixed). Rendered
+  // as After=/Wants= and re-validated in render_unit; a raw member id must
+  // never reach here unvalidated.
+  std::vector<std::string> after_units;
+  std::vector<std::string> wants_units;
 };
 
 // ExecStart word syntax: empty becomes "", '"' and '\' escaped, '%' doubled.

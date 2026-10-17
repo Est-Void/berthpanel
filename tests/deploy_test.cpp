@@ -117,11 +117,15 @@ class FakeOps final : public DeployOps {
   }
   Result<std::filesystem::path> write_unit_file(
       const Recipe& recipe, const std::filesystem::path& work_dir,
-      std::uint16_t port, const berth::Paths& paths) override {
+      std::uint16_t port, const berth::Paths& paths,
+      const std::vector<std::string>& after_units,
+      const std::vector<std::string>& wants_units) override {
     static_cast<void>(recipe);
     static_cast<void>(work_dir);
     static_cast<void>(port);
     static_cast<void>(paths);
+    static_cast<void>(after_units);
+    static_cast<void>(wants_units);
     calls.push_back("unit");
     if (fail_unit)
       return berth::Error("fake unit failure");
