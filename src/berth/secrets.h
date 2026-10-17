@@ -24,4 +24,14 @@ using SecretEntry = std::pair<std::string, std::string>;
     const Paths& paths, const std::string& service_name,
     const std::vector<SecretEntry>& entries);
 
+// Rewrites ONE key in place, preserving every other line (comments included),
+// then stores the file 0600 atomically. No restart happens here.
+[[nodiscard]] Result<std::filesystem::path> set_environment_value(
+    const Paths& paths, const std::string& service_name, const std::string& key,
+    const std::string& value);
+
+// Keys only — never a value — so a caller can render an editor safely.
+[[nodiscard]] Result<std::vector<std::string>> list_secret_keys(
+    const Paths& paths, const std::string& service_name);
+
 }

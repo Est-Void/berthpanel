@@ -29,9 +29,12 @@
 #include "berth/recipe_edit.h"
 #include "berth/recipes.h"
 #include "berth/repair.h"
+#include "berth/secret_ops.h"
+#include "berth/secrets.h"
 #include "berth/sandbox.h"
 #include "berth/selftest.h"
 #include "berth/serve.h"
+#include "berth/service_ops.h"
 #include "berth/status.h"
 #include "berth/toolcheck.h"
 #include "berth/units.h"
@@ -115,6 +118,8 @@ void print_usage() {
          "[--name <display>] [--description <text>]\n"
          "       berthpanel __recipe-draft <github_url> [ref] [--apply] "
          "[--force]\n"
+         "       berthpanel __secret-set <service> <KEY>   (value on stdin)\n"
+         "       berthpanel __secret-keys <service>\n"
          "       berthpanel __deploy <service_name> [port] [--upgrade] "
          "[--json]\n"
          "       berthpanel __stacks [--json] | "
@@ -546,6 +551,40 @@ int recipe_edit_command(const std::string_view service,
   return 0;
 }
 
+int secret_set_command(const std::string_view service,
+                       const std::string_view key) {
+  const berth::Result<berth::Paths> paths = berth::paths_from_env();
+  if (paths.is_err())
+    return fail(paths.error().ctx());
+  // The value comes from stdin, never argv: argv is world-readable in ps.
+  std::string value;
+  if (!std::getline(std::cin, value)) {
+    std::cerr << "berthpanel: __secret-set: no value on stdin\n";
+    return 2;
+  }
+  const berth::Result<void> rotated = berth::rotate_secret(
+      paths.value(), std::string(service), std::string(key), value,
+      [](const std::string& name) { return berth::service_restart(name); });
+  if (rotated.is_err())
+    return fail(rotated.error().ctx());
+  std::cout << "rotated " << key << " for " << service << "; restarted "
+            << service << "\n";
+  return 0;
+}
+
+int secret_keys_command(const std::string_view service) {
+  const berth::Result<berth::Paths> paths = berth::paths_from_env();
+  if (paths.is_err())
+    return fail(paths.error().ctx());
+  const berth::Result<std::vector<std::string>> keys =
+      berth::list_secret_keys(paths.value(), std::string(service));
+  if (keys.is_err())
+    return fail(keys.error().ctx());
+  for (const std::string& key : keys.value())
+    std::cout << key << "\n";
+  return 0;
+}
+
 int repair_command(const bool json) {
   const berth::Result<berth::Paths> paths = berth::paths_from_env();
   if (paths.is_err())
@@ -882,6 +921,10 @@ std::optional<int> dispatch_verb(const std::span<const char* const>& args) {
     return recipe_edit_command(args[1], args.subspan(2));
   if (first == "__recipe-draft" && args.size() >= 2)
     return recipe_draft_verb(args);
+  if (first == "__secret-set" && args.size() == 3)
+    return secret_set_command(args[1], args[2]);
+  if (first == "__secret-keys" && args.size() == 2)
+    return secret_keys_command(args[1]);
   if (first == "__deploy" && args.size() >= 2)
     return deploy_verb(args);
   if (first == "__stacks")

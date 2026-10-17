@@ -67,6 +67,7 @@ LIB_SRC := \
 	src/berth/journal.cpp \
 	src/berth/units.cpp \
 	src/berth/secrets.cpp \
+	src/berth/secret_ops.cpp \
 	src/berth/gitclone.cpp \
 	src/berth/toolcheck.cpp \
 	src/berth/toolbox.cpp \
@@ -156,6 +157,7 @@ TEST_SRC := \
 	tests/units_test.cpp \
 	tests/service_ops_test.cpp \
 	tests/secrets_test.cpp \
+	tests/secret_ops_test.cpp \
 	tests/which_test.cpp \
 	tests/gitclone_test.cpp \
 	tests/toolcheck_test.cpp \
