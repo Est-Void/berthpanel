@@ -14,6 +14,7 @@
 
 #include "core/atomic.h"
 #include "core/docstore.h"
+#include "core/jsonout.h"
 #include "core/names.h"
 #include "core/state.h"
 #include "toolbox.h"
@@ -286,6 +287,23 @@ Result<void> proxy_routes_store(const Paths& paths,
   return route_store(paths).store(routes);
 }
 
+nlohmann::json proxy_routes_json(const std::vector<ProxyRoute>& routes) {
+  std::vector<ProxyRoute> sorted = routes;
+  std::sort(sorted.begin(), sorted.end(),
+            [](const ProxyRoute& a, const ProxyRoute& b) {
+              return a.domain < b.domain;
+            });
+  nlohmann::json array = nlohmann::json::array();
+  for (const ProxyRoute& route : sorted) {
+    array.push_back({{"domain", route.domain},
+                     {"service_name", route.service_name},
+                     {"port", route.port}});
+  }
+  nlohmann::json doc = json_document("proxy-list");
+  doc["routes"] = std::move(array);
+  return doc;
+}
+
 Result<std::vector<ProxyRoute>> upsert_proxy_route(
     const std::vector<ProxyRoute>& existing, const std::string_view service,
     const std::string_view domain, const std::uint16_t port) {
@@ -368,7 +386,38 @@ Result<void> ensure_caddy_installed(const Paths& paths,
   return {};
 }
 
+namespace {
+
+class RealProxyOps final : public ProxyOps {
+ public:
+  explicit RealProxyOps(std::atomic<bool>* cancel) : cancel_(cancel) {}
+
+  Result<void> install_caddy(const Paths& paths,
+                             std::atomic<bool>* cancel) override {
+    return ensure_caddy_installed(paths, cancel);
+  }
+  Result<void> daemon_reload() override { return systemctl_daemon_reload(); }
+  Result<int> is_active(const std::string& unit) override {
+    return systemctl_user_code({"is-active", unit},
+                               std::chrono::milliseconds(20000), cancel_);
+  }
+  Result<void> run(const std::vector<std::string>& argv) override {
+    return systemctl_user(argv);
+  }
+
+ private:
+  std::atomic<bool>* cancel_;
+};
+
+}
+
 Result<void> proxy_sync(const Paths& paths, std::atomic<bool>* cancel) {
+  RealProxyOps ops(cancel);
+  return proxy_sync_with(paths, cancel, ops);
+}
+
+Result<void> proxy_sync_with(const Paths& paths, std::atomic<bool>* cancel,
+                             ProxyOps& ops) {
   Result<std::vector<ProxyRoute>> routes = proxy_routes_load(paths);
   if (routes.is_err())
     return std::move(routes).error();
@@ -377,37 +426,46 @@ Result<void> proxy_sync(const Paths& paths, std::atomic<bool>* cancel) {
   if (wrote.is_err())
     return std::move(wrote).error();
 
-  // Nothing to run and nothing installed: `proxy remove` must not download.
-  if (routes.value().empty() && !caddy_installed(paths))
-    return {};
+  const std::string unit = std::string(kCaddyUnitStem) + ".service";
 
-  const Result<void> installed = ensure_caddy_installed(paths, cancel);
+  // Explicit policy (dev.md §8): admin off means there is no reload path. An
+  // empty set stops+disables Caddy; a non-empty set restarts an active Caddy
+  // or enables/starts an inactive one.
+  if (routes.value().empty()) {
+    const bool unit_present = std::filesystem::exists(paths.units_dir / unit);
+    Result<int> active = ops.is_active(unit);
+    if (active.is_err())
+      return std::move(active).error();
+    if (!unit_present && active.value() != 0)
+      return {};  // nothing installed and nothing running: do not download
+    return ops.run({"disable", "--now", unit});
+  }
+
+  const Result<void> installed = ops.install_caddy(paths, cancel);
   if (installed.is_err())
     return std::move(installed).error();
 
   Result<UnitSpec> spec = caddy_unit_spec(paths);
   if (spec.is_err())
     return std::move(spec).error();
-  Result<std::filesystem::path> unit = write_unit(paths, spec.value());
-  if (unit.is_err())
-    return std::move(unit).error();
+  Result<std::filesystem::path> unit_path = write_unit(paths, spec.value());
+  if (unit_path.is_err())
+    return std::move(unit_path).error();
 
-  const Result<void> reloaded = systemctl_daemon_reload();
+  const Result<void> reloaded = ops.daemon_reload();
   if (reloaded.is_err())
     return std::move(reloaded).error();
 
-  const std::string service = std::string(kCaddyUnitStem) + ".service";
-  const Result<int> active = systemctl_user_code(
-      {"is-active", service}, std::chrono::milliseconds(20000), cancel);
+  Result<int> active = ops.is_active(unit);
   if (active.is_err())
     return std::move(active).error();
 
-  const Result<void> started =
-      active.value() == 0 ? systemctl_user({"restart", service})
-                          : systemctl_user({"enable", "--now", service});
-  if (started.is_err()) {
+  Result<void> applied = active.value() == 0
+                             ? ops.run({"restart", unit})
+                             : ops.run({"enable", "--now", unit});
+  if (applied.is_err()) {
     return with_context(
-        std::move(started).error(),
+        std::move(applied).error(),
         "proxy: Caddy could not start. It must bind 80/443; on a default "
         "host an unprivileged user unit cannot, so either opt into "
         "net.ipv4.ip_unprivileged_port_start=0 (dev.md §6.8 / stage 5B.1) or "

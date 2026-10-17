@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "core/atomic.h"
 #include "core/names.h"
 #include "core/state.h"
 #include "runner.h"
@@ -19,6 +20,7 @@ using berth::ProxyRoute;
 using berth::render_caddyfile;
 using berth::render_reverse_proxy_line;
 using berth::render_route_block;
+using berth::Result;
 using berth::validate_proxy_domain;
 
 namespace {
@@ -28,9 +30,33 @@ berth::Paths proxy_paths(const std::filesystem::path& root) {
   p.state_dir = root / "state" / "berthpanel";
   p.data_dir = root / "data" / "berthpanel";
   p.config_dir = root / "config" / "berthpanel";
+  p.units_dir = root / "config" / "systemd" / "user";
   p.state_json = p.state_dir / "state.json";
   return p;
 }
+
+class FakeProxyOps final : public berth::ProxyOps {
+ public:
+  std::vector<std::vector<std::string>> run_calls;
+  int active_exit = 0;
+  bool installed = false;
+  int daemon_reload_calls = 0;
+
+  Result<void> install_caddy(const berth::Paths&,
+                             std::atomic<bool>*) override {
+    installed = true;
+    return {};
+  }
+  Result<void> daemon_reload() override {
+    ++daemon_reload_calls;
+    return {};
+  }
+  Result<int> is_active(const std::string&) override { return active_exit; }
+  Result<void> run(const std::vector<std::string>& argv) override {
+    run_calls.push_back(argv);
+    return {};
+  }
+};
 
 berth::ServiceRecord memos_record() {
   berth::ServiceRecord r;
@@ -219,4 +245,115 @@ TEST(proxy_caddy_unit_renders_through_units) {
   CHECK(unit.value().find("MemoryMax=384M") != std::string::npos);
   CHECK(unit.value().find("NoNewPrivileges=yes") != std::string::npos);
   CHECK(unit.value().find("ReadWritePaths=") != std::string::npos);
+}
+
+TEST(proxy_domain_cannot_be_claimed_by_two_services) {
+  const auto first = berth::upsert_proxy_route(
+      {}, "berthpanel-memos", "app.example.com", 8234);
+  CHECK(first.is_ok());
+  const auto clash = berth::upsert_proxy_route(
+      first.value(), "berthpanel-gitea", "app.example.com", 3000);
+  CHECK(clash.is_err());
+  CHECK(clash.error().ctx().find("app.example.com") != std::string::npos);
+  CHECK(clash.error().ctx().find("berthpanel-memos") != std::string::npos);
+}
+
+TEST(proxy_one_service_can_own_multiple_domains) {
+  const auto first = berth::upsert_proxy_route(
+      {}, "berthpanel-memos", "app.example.com", 8234);
+  CHECK(first.is_ok());
+  const auto second = berth::upsert_proxy_route(
+      first.value(), "berthpanel-memos", "www.example.com", 8234);
+  CHECK(second.is_ok());
+  CHECK(second.value().size() == 2);
+
+  const auto file =
+      berth::render_caddyfile(second.value(), "/tmp/berthpanel-caddy");
+  CHECK(file.is_ok());
+  CHECK(file.value().find("app.example.com {") != std::string::npos);
+  CHECK(file.value().find("www.example.com {") != std::string::npos);
+}
+
+TEST(proxy_routes_json_is_sorted_and_versioned) {
+  const std::vector<ProxyRoute> routes = {
+      {.domain = "z.example.com", .service_name = "berthpanel-b", .port = 2},
+      {.domain = "a.example.com", .service_name = "berthpanel-a", .port = 1},
+  };
+  const nlohmann::json doc = berth::proxy_routes_json(routes);
+  CHECK(doc.at("command") == "proxy-list");
+  CHECK(doc.at("schema") == 1);
+  CHECK(doc.at("routes").size() == 2);
+  CHECK(doc.at("routes")[0].at("domain") == "a.example.com");
+  CHECK(doc.at("routes")[0].at("service_name") == "berthpanel-a");
+  CHECK(doc.at("routes")[0].at("port") == 1);
+  CHECK(doc.at("routes")[1].at("domain") == "z.example.com");
+}
+
+TEST(proxy_sync_stops_caddy_when_the_route_set_is_empty) {
+  const TempDir tmp;
+  const berth::Paths p = proxy_paths(tmp.path());
+  CHECK(berth::ensure_dir(p.units_dir).is_ok());
+  CHECK(berth::atomic_write(p.units_dir / "berthpanel-caddy.service",
+                            "[Unit]\n")
+            .is_ok());
+
+  FakeProxyOps ops;
+  ops.active_exit = 0;  // Caddy is running
+  const auto synced = berth::proxy_sync_with(p, nullptr, ops);
+  CHECK(synced.is_ok());
+  CHECK(!ops.run_calls.empty());
+  CHECK((ops.run_calls.front() ==
+         std::vector<std::string>{"disable", "--now",
+                                  "berthpanel-caddy.service"}));
+  CHECK(!ops.installed);  // stopping must never trigger a download
+  CHECK(std::filesystem::exists(p.config_dir / "caddy" / "Caddyfile"));
+}
+
+TEST(proxy_sync_empty_state_without_a_unit_does_not_touch_systemd) {
+  const TempDir tmp;
+  const berth::Paths p = proxy_paths(tmp.path());
+  FakeProxyOps ops;
+  ops.active_exit = 3;  // inactive, and no unit file exists
+  const auto synced = berth::proxy_sync_with(p, nullptr, ops);
+  CHECK(synced.is_ok());
+  CHECK(ops.run_calls.empty());
+  CHECK(!ops.installed);
+}
+
+TEST(proxy_sync_restarts_an_active_caddy_when_routes_exist) {
+  const TempDir tmp;
+  const berth::Paths p = proxy_paths(tmp.path());
+  CHECK(berth::proxy_routes_store(
+            p, {{.domain = "app.example.com",
+                 .service_name = "berthpanel-memos",
+                 .port = 8234}})
+            .is_ok());
+  FakeProxyOps ops;
+  ops.active_exit = 0;
+  const auto synced = berth::proxy_sync_with(p, nullptr, ops);
+  CHECK(synced.is_ok());
+  CHECK(ops.installed);
+  CHECK(ops.daemon_reload_calls == 1);
+  CHECK((ops.run_calls.front() ==
+         std::vector<std::string>{"restart", "berthpanel-caddy.service"}));
+  CHECK(std::filesystem::exists(p.units_dir / "berthpanel-caddy.service"));
+  CHECK(std::filesystem::exists(p.config_dir / "caddy" / "Caddyfile"));
+}
+
+TEST(proxy_sync_enables_an_inactive_caddy_when_routes_exist) {
+  const TempDir tmp;
+  const berth::Paths p = proxy_paths(tmp.path());
+  CHECK(berth::proxy_routes_store(
+            p, {{.domain = "app.example.com",
+                 .service_name = "berthpanel-memos",
+                 .port = 8234}})
+            .is_ok());
+  FakeProxyOps ops;
+  ops.active_exit = 3;  // installed but not running
+  const auto synced = berth::proxy_sync_with(p, nullptr, ops);
+  CHECK(synced.is_ok());
+  CHECK(ops.installed);
+  CHECK((ops.run_calls.front() ==
+         std::vector<std::string>{"enable", "--now",
+                                  "berthpanel-caddy.service"}));
 }

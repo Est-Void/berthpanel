@@ -14,6 +14,8 @@
 #include <string_view>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "core/paths.h"
 #include "units.h"
 #include "util/result.h"
@@ -50,6 +52,10 @@ struct ProxyRoute {
 [[nodiscard]] Result<void> proxy_routes_store(
     const Paths& paths, const std::vector<ProxyRoute>& routes);
 
+// Sorted by domain; the versioned envelope for `proxy list --json`.
+[[nodiscard]] nlohmann::json proxy_routes_json(
+    const std::vector<ProxyRoute>& routes);
+
 // Same domain + same service updates the port; another service is a loud Err.
 [[nodiscard]] Result<std::vector<ProxyRoute>> upsert_proxy_route(
     const std::vector<ProxyRoute>& existing, std::string_view service,
@@ -71,16 +77,33 @@ struct ProxyRoute {
 [[nodiscard]] Result<void> ensure_caddy_installed(const Paths& paths,
                                                   std::atomic<bool>* cancel);
 
+// The systemd/toolbox seam. Injected so tests can pin the stop/restart policy
+// without a live user manager or a download.
+class ProxyOps {
+ public:
+  virtual ~ProxyOps() = default;
+  virtual Result<void> install_caddy(const Paths& paths,
+                                     std::atomic<bool>* cancel) = 0;
+  virtual Result<void> daemon_reload() = 0;
+  virtual Result<int> is_active(const std::string& unit) = 0;
+  virtual Result<void> run(const std::vector<std::string>& argv) = 0;
+};
+
 // BLOCKING (systemctl): never call on the TUI render thread.
 [[nodiscard]] Result<void> proxy_sync(const Paths& paths,
                                       std::atomic<bool>* cancel);
+
+[[nodiscard]] Result<void> proxy_sync_with(const Paths& paths,
+                                           std::atomic<bool>* cancel,
+                                           ProxyOps& ops);
 
 [[nodiscard]] Result<void> proxy_add(const Paths& paths,
                                      std::string_view service,
                                      std::string_view domain,
                                      std::atomic<bool>* cancel);
 
-// The last route leaves an empty Caddyfile; Caddy is not auto-stopped.
+// The last route leaves an empty Caddyfile AND stops+disables Caddy: no sites
+// means nothing should keep running (stage 10.5, debt 5B).
 [[nodiscard]] Result<bool> proxy_remove(const Paths& paths,
                                         std::string_view domain,
                                         std::atomic<bool>* cancel);

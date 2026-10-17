@@ -306,28 +306,47 @@ int services_command(const bool json) {
 namespace {
 
 void print_proxy_usage() {
-  std::cerr << "usage: berthpanel proxy add <service> <domain>\n"
-               "       berthpanel proxy list\n"
-               "       berthpanel proxy remove <domain>\n";
+  std::cerr << "usage: berthpanel proxy add <service> <domain> [--json]\n"
+               "       berthpanel proxy list [--json]\n"
+               "       berthpanel proxy remove <domain> [--json]\n";
 }
 
-int proxy_add_command(const berth::Paths& paths, const char* service,
-                      const char* domain) {
+int proxy_add_command(const berth::Paths& paths,
+                      const std::string_view service,
+                      const std::string_view domain, const bool json) {
   std::atomic<bool> cancel_flag{false};
   const berth::Result<void> signalling =
       berth::install_exit_signalling(&cancel_flag);
   if (signalling.is_err())
     return fail(signalling.error().ctx());
-  const berth::Result<void> added = berth::proxy_add(paths, service, domain,
-                                                     &cancel_flag);
+  const berth::Result<void> added =
+      berth::proxy_add(paths, service, domain, &cancel_flag);
   if (added.is_err())
     return fail(added.error().ctx());
-  std::cout << "routed " << berth::normalize_proxy_domain(domain) << " -> "
-            << service << "\n";
+  const std::string normalized = berth::normalize_proxy_domain(domain);
+  if (json) {
+    const berth::Result<std::vector<berth::ProxyRoute>> routes =
+        berth::proxy_routes_load(paths);
+    if (routes.is_err())
+      return fail(routes.error().ctx());
+    std::uint16_t port = 0;
+    for (const berth::ProxyRoute& route : routes.value()) {
+      if (route.domain == normalized)
+        port = route.port;
+    }
+    nlohmann::json doc = berth::json_document("proxy-add");
+    doc["domain"] = normalized;
+    doc["service"] = std::string(service);
+    doc["port"] = port;
+    std::cout << berth::json_text(doc);
+    return 0;
+  }
+  std::cout << "routed " << normalized << " -> " << service << "\n";
   return 0;
 }
 
-int proxy_remove_command(const berth::Paths& paths, const char* domain) {
+int proxy_remove_command(const berth::Paths& paths,
+                         const std::string_view domain, const bool json) {
   std::atomic<bool> cancel_flag{false};
   const berth::Result<void> signalling =
       berth::install_exit_signalling(&cancel_flag);
@@ -337,8 +356,16 @@ int proxy_remove_command(const berth::Paths& paths, const char* domain) {
       berth::proxy_remove(paths, domain, &cancel_flag);
   if (removed.is_err())
     return fail(removed.error().ctx());
-  std::cout << (removed.value() ? "removed " : "no route for ")
-            << berth::normalize_proxy_domain(domain) << "\n";
+  const std::string normalized = berth::normalize_proxy_domain(domain);
+  if (json) {
+    nlohmann::json doc = berth::json_document("proxy-remove");
+    doc["domain"] = normalized;
+    doc["removed"] = removed.value();
+    std::cout << berth::json_text(doc);
+    return removed.value() ? 0 : 1;
+  }
+  std::cout << (removed.value() ? "removed " : "no route for ") << normalized
+            << "\n";
   return removed.value() ? 0 : 1;
 }
 
@@ -352,13 +379,31 @@ int proxy_command(const std::span<const char* const>& args) {
   const berth::Result<berth::Paths> paths = berth::paths_from_env();
   if (paths.is_err())
     return fail(paths.error().ctx());
-  const std::string_view sub(args[1]);
+
+  bool json = false;
+  std::vector<std::string_view> positional;
+  for (std::size_t i = 1; i < args.size(); ++i) {
+    const std::string_view arg(args[i]);
+    if (arg == "--json")
+      json = true;
+    else
+      positional.push_back(arg);
+  }
+  if (positional.empty()) {
+    print_proxy_usage();
+    return 2;
+  }
+  const std::string_view sub = positional[0];
 
   if (sub == "list") {
     const berth::Result<std::vector<berth::ProxyRoute>> routes =
         berth::proxy_routes_load(paths.value());
     if (routes.is_err())
       return fail(routes.error().ctx());
+    if (json) {
+      std::cout << berth::json_text(berth::proxy_routes_json(routes.value()));
+      return 0;
+    }
     if (routes.value().empty()) {
       std::cout << "no proxy routes\n";
       return 0;
@@ -369,10 +414,11 @@ int proxy_command(const std::span<const char* const>& args) {
     }
     return 0;
   }
-  if (sub == "add" && args.size() == 4)
-    return proxy_add_command(paths.value(), args[2], args[3]);
-  if (sub == "remove" && args.size() == 3)
-    return proxy_remove_command(paths.value(), args[2]);
+  if (sub == "add" && positional.size() == 3)
+    return proxy_add_command(paths.value(), positional[1], positional[2],
+                             json);
+  if (sub == "remove" && positional.size() == 2)
+    return proxy_remove_command(paths.value(), positional[1], json);
 
   print_proxy_usage();
   return 2;
