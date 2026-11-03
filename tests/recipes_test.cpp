@@ -208,6 +208,41 @@ TEST(recipes_json_round_trip) {
   CHECK(validate_recipe(back.value()).is_ok());
 }
 
+TEST(recipes_json_egress_is_optional_and_round_trips) {
+  const Recipe plain = good();
+  CHECK(plain.egress.empty());
+  const nlohmann::json none = berth::recipe_to_json(plain);
+  CHECK(!none.contains("egress"));
+
+  Recipe isolated = good();
+  isolated.egress = "deny-all";
+  const nlohmann::json doc = berth::recipe_to_json(isolated);
+  CHECK(doc.at("egress") == "deny-all");
+  const auto back = berth::recipe_from_json(doc);
+  CHECK(back.is_ok());
+  CHECK(back.value().egress == "deny-all");
+
+  nlohmann::json absent = doc;
+  absent.erase("egress");
+  const auto restored = berth::recipe_from_json(absent);
+  CHECK(restored.is_ok());
+  CHECK(restored.value().egress.empty());
+}
+
+TEST(recipes_validator_egress_accepts_empty_or_deny_all) {
+  Recipe r = good();
+  CHECK(r.egress.empty());
+  CHECK(validate_recipe(r).is_ok());
+
+  r.egress = "deny-all";
+  CHECK(validate_recipe(r).is_ok());
+
+  r.egress = "open";
+  const auto rejected = validate_recipe(r);
+  CHECK(rejected.is_err());
+  CHECK(rejected.error().ctx().find("deny-all") != std::string::npos);
+}
+
 TEST(recipes_json_bind_is_optional_and_round_trips) {
   // An absent `bind` stays absent: existing recipe JSON must not churn.
   const Recipe plain = good();

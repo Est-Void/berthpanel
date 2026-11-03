@@ -53,6 +53,7 @@ struct Recipe {
   // The author's declaration of the address the app binds ITSELF when start_cmd
   // has no bind token. Only "127.0.0.1" is valid, never a silent default (§8).
   std::string bind;
+  std::string egress;  // "" = current behavior; "deny-all" = private netns
   std::string health_path = "/";
   std::uint16_t port = 0;  // 0 = pick a free one at deploy time
   std::vector<std::string> tools;

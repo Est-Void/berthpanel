@@ -275,6 +275,14 @@ Result<void> validate_bind(const Recipe& recipe, const std::string& joined) {
   return {};
 }
 
+Result<void> validate_egress(const Recipe& recipe) {
+  if (!recipe.egress.empty() && recipe.egress != "deny-all") {
+    return Error("recipe: egress must be 'deny-all' or empty, got '" +
+                 recipe.egress + "'");
+  }
+  return {};
+}
+
 }
 
 Result<void> validate_recipe(const Recipe& recipe) {
@@ -290,6 +298,9 @@ Result<void> validate_recipe(const Recipe& recipe) {
   const Result<void> pins = validate_pins(recipe);
   if (pins.is_err())
     return std::move(pins).error();
+  const Result<void> egress = validate_egress(recipe);
+  if (egress.is_err())
+    return std::move(egress).error();
   return validate_bind(recipe, start.value());
 }
 
@@ -340,6 +351,7 @@ Result<Recipe> recipe_from_json(const nlohmann::json& doc) {
   r.binary_name = doc.value("binary_name", "");
   r.start_cmd = doc.value("start_cmd", "");
   r.bind = doc.value("bind", "");
+  r.egress = doc.value("egress", "");
   r.health_path = doc.value("health_path", "/");
   r.port = doc.value("port", static_cast<std::uint16_t>(0));
   for (const nlohmann::json& tool :
@@ -403,9 +415,12 @@ nlohmann::json recipe_to_json(const Recipe& recipe) {
   doc["pre_build"] = to_json(recipe.pre_build);
   doc["build_steps"] = to_json(recipe.build_steps);
   doc["prefetch_steps"] = to_json(recipe.prefetch_steps);
-  // Only a DECLARED bind is written, so recipe JSON does not churn.
+  // Only a DECLARED bind or egress is written, so recipe JSON does not churn.
   if (!recipe.bind.empty()) {
     doc["bind"] = recipe.bind;
+  }
+  if (!recipe.egress.empty()) {
+    doc["egress"] = recipe.egress;
   }
   if (recipe.prebuilt.has_value()) {
     doc["prebuilt"] = {{"url", recipe.prebuilt->url},

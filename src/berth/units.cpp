@@ -265,6 +265,10 @@ void append_hardening_section(std::string* out, const UnitSpec& spec) {
     *out += directive;
     *out += "\n";
   }
+  // Opt-in isolation: the unit gets its own netns, and the host cannot dial it.
+  if (spec.private_network) {
+    *out += "PrivateNetwork=yes\n";
+  }
   // One directive per path (a space-joined list becomes nonexistent paths), and
   // ReadWritePaths= is a list, so the path is escaped as one.
   for (const std::filesystem::path& path : spec.read_write_paths) {

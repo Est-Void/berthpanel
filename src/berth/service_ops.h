@@ -52,6 +52,12 @@ struct ServiceRow {
 // systemd still reports SubState=running for a SIGSTOPped service; /proc rules.
 [[nodiscard]] Result<bool> service_is_frozen(const std::string& service_name);
 
+[[nodiscard]] Result<std::string> main_pid_of(const std::string& unit);
+
+// /proc/<pid>/ns/net symlinks: stat follows them; any failure is "not same".
+[[nodiscard]] bool same_network_namespace(const std::filesystem::path& a,
+                                          const std::filesystem::path& b);
+
 // State is the char after the LAST ')'; '\0' when unparseable, never "running".
 [[nodiscard]] char proc_stat_state(std::string_view stat_line);
 

@@ -43,6 +43,7 @@ struct UnitSpec {
   // never reach here unvalidated.
   std::vector<std::string> after_units;
   std::vector<std::string> wants_units;
+  bool private_network = false;
 };
 
 // ExecStart word syntax: empty becomes "", '"' and '\' escaped, '%' doubled.

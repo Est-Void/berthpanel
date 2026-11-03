@@ -1,5 +1,7 @@
 #include "service_ops.h"
 
+#include <sys/stat.h>
+
 #include <chrono>
 #include <cstdlib>
 #include <system_error>
@@ -142,8 +144,6 @@ Result<void> service_kill(const std::string& service_name) {
       "killing " + service_name);
 }
 
-namespace {
-
 Result<std::string> main_pid_of(const std::string& unit) {
   // systemctl_user() discards stdout, so this goes through run() directly.
   const Result<std::string> systemctl = resolve_executable("systemctl");
@@ -165,7 +165,16 @@ Result<std::string> main_pid_of(const std::string& unit) {
   return std::string(berth::trim(shown.value().out));
 }
 
+bool same_network_namespace(const std::filesystem::path& a,
+                            const std::filesystem::path& b) {
+  struct stat left {};
+  struct stat right {};
+  if (::stat(a.c_str(), &left) != 0 || ::stat(b.c_str(), &right) != 0) {
+    return false;
+  }
+  return left.st_dev == right.st_dev && left.st_ino == right.st_ino;
 }
+
 char proc_stat_state(const std::string_view stat_line) {
   const std::size_t close = stat_line.rfind(')');
   // `>=` not `>`: a line ending at the space would read one past the end.

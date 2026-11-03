@@ -65,6 +65,15 @@ TEST(proc_stat_state_reads_the_state_after_the_last_paren) {
 }
 
 }
+TEST(service_ops_same_network_namespace_compares_stat_identity) {
+  CHECK(berth::same_network_namespace("/proc/self/ns/net",
+                                      "/proc/self/ns/net"));
+  CHECK(!berth::same_network_namespace("/proc/self/ns/net",
+                                       "/proc/self/ns/mnt"));
+  CHECK(!berth::same_network_namespace("/proc/self/ns/net",
+                                       "/proc/self/ns/does-not-exist"));
+}
+
 TEST(service_ops_unit_file_stays_inside_units_dir) {
   const TempDir tmp;
   const berth::Paths p = test_paths(tmp.path());

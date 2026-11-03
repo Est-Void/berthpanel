@@ -101,6 +101,18 @@ TEST(units_renders_hardening_and_limits) {
   CHECK(text.find("not a security boundary") != std::string::npos);
 }
 
+TEST(units_private_network_is_opt_in) {
+  const auto default_unit = render_unit(base_spec());
+  CHECK(default_unit.is_ok());
+  CHECK(default_unit.value().find("PrivateNetwork=yes") == std::string::npos);
+
+  UnitSpec isolated = base_spec();
+  isolated.private_network = true;
+  const auto unit = render_unit(isolated);
+  CHECK(unit.is_ok());
+  CHECK(unit.value().find("PrivateNetwork=yes\n") != std::string::npos);
+}
+
 TEST(units_refuses_without_resource_limits) {
   UnitSpec no_memory = base_spec();
   no_memory.limits = UnitLimits{.memory_max = "", .tasks_max = 300};

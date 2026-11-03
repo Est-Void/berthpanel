@@ -33,6 +33,7 @@
 #include "preflight.h"
 #include "sandbox.h"
 #include "secrets.h"
+#include "service_ops.h"
 #include "toolbox.h"
 #include "toolchain.h"
 #include "units.h"
@@ -275,6 +276,7 @@ Result<std::filesystem::path> RealDeployOps::write_unit_file(
   spec.read_write_paths = {work_dir};
   spec.after_units = after_units;
   spec.wants_units = wants_units;
+  spec.private_network = (recipe.egress == "deny-all");
   if (!std::filesystem::exists(spec.secrets_file)) {
     Result<std::filesystem::path> written =
         write_secrets(paths, recipe.service_name, {});
@@ -483,8 +485,17 @@ Result<void> RealDeployOps::verify_listening(const std::string& service_name,
       return Error("deploy: cancelled while checking that " + service_name +
                    " is listening on port " + std::to_string(port));
     }
-    // /proc/net only — the dumb, unattributed reader: no /proc/<pid> walk.
-    Result<PortReport> report = listening_ports(paths);
+    // A private netns keeps its listener out of the host table, so read the
+    // unit's own table when its network namespace differs from ours.
+    std::filesystem::path proc_net_root = "/proc/net";
+    const Result<std::string> pid = main_pid_of(service_name + ".service");
+    if (pid.is_ok() && !pid.value().empty() && pid.value() != "0") {
+      const std::filesystem::path ns = "/proc/" + pid.value() + "/ns/net";
+      if (!same_network_namespace(ns, "/proc/self/ns/net")) {
+        proc_net_root = "/proc/" + pid.value() + "/net";
+      }
+    }
+    Result<PortReport> report = listening_ports(paths, proc_net_root);
     if (report.is_err()) {
       // A probe that cannot run is not evidence of absence: warn, never fail.
       const Result<void> warned = deploylog_append(
@@ -1019,6 +1030,32 @@ Result<DeployOutcome> deploy_unit(const Paths& paths, const Recipe& recipe,
   if (running.is_err()) {
     return Error(step_error("start", std::move(running).error().ctx()) +
                  " (journal entry kept for cleanup)");
+  }
+  if (recipe.egress == "deny-all") {
+    const Result<std::string> pid =
+        main_pid_of(recipe.service_name + ".service");
+    if (pid.is_err()) {
+      return Error(
+          "deploy: egress 'deny-all' was requested but the main pid of " +
+          recipe.service_name + " is unavailable: " + pid.error().ctx() +
+          " (journal entry kept for cleanup)");
+    }
+    if (pid.value().empty() || pid.value() == "0") {
+      return Error("deploy: egress 'deny-all' was requested but " +
+                   recipe.service_name +
+                   " has no main pid to verify the network namespace "
+                   "(journal entry kept for cleanup)");
+    }
+    if (same_network_namespace("/proc/" + pid.value() + "/ns/net",
+                               "/proc/self/ns/net")) {
+      return Error(
+          "deploy: egress 'deny-all' was requested but " + recipe.service_name +
+          " shares the host network namespace; PrivateNetwork=yes did not "
+          "apply (journal entry kept for cleanup)");
+    }
+    log("egress " + recipe.service_name +
+        ": private network namespace; the host cannot dial 127.0.0.1:" +
+        std::to_string(port));
   }
   // await_running does not prove the app serves the recorded port. Same
   // semantics as the other start failures: loud, journal kept, unregistered.
