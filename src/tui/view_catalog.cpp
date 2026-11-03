@@ -146,6 +146,23 @@ std::string_view recipe_source_label(const RecipeSource source) {
   std::abort();
 }
 
+std::size_t cursor_after_recipe_refresh(
+    const std::size_t cursor, const std::vector<std::string>& old_names,
+    const std::vector<std::string>& new_names) {
+  if (new_names.empty()) {
+    return 0;
+  }
+  if (cursor < old_names.size()) {
+    const std::string& anchor = old_names[cursor];
+    for (std::size_t i = 0; i < new_names.size(); ++i) {
+      if (new_names[i] == anchor) {
+        return i;
+      }
+    }
+  }
+  return cursor < new_names.size() ? cursor : 0;
+}
+
 std::string render_step(const std::vector<std::string>& step) {
   return berth::join(step, " ");
 }

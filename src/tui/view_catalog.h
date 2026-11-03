@@ -44,6 +44,12 @@ struct Catalog {
   std::vector<RecipeSource> sources;  // parallel to recipes
 };
 
+// The cursor follows the recipe NAME it was on: a reload can move the row, and
+// the highlight is what the next Enter deploys or x removes.
+[[nodiscard]] std::size_t cursor_after_recipe_refresh(
+    std::size_t cursor, const std::vector<std::string>& old_names,
+    const std::vector<std::string>& new_names);
+
 [[nodiscard]] berth::Result<Catalog> load_catalog(const berth::Paths& paths);
 
 [[nodiscard]] std::string_view recipe_source_label(RecipeSource source);

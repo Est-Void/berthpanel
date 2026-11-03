@@ -137,3 +137,76 @@ TEST(a_log_that_could_not_be_read_is_not_shown_as_an_empty_one) {
   CHECK(contains(lines, "Permission denied"));
   CHECK(contains(lines, "NOT the same as an empty file"));
 }
+
+TEST(log_window_pins_the_newest_rows_at_scroll_zero) {
+  const tui::LogWindow short_log = tui::log_window_range(3, 0, 10);
+  CHECK(short_log.first == 0);
+  CHECK(short_log.count == 3);
+
+  const tui::LogWindow exact = tui::log_window_range(10, 0, 10);
+  CHECK(exact.first == 0);
+  CHECK(exact.count == 10);
+
+  const tui::LogWindow live = tui::log_window_range(100, 0, 10);
+  CHECK(live.first == 90);
+  CHECK(live.count == 10);
+}
+
+TEST(log_window_moves_up_one_line_per_scroll_and_clamps_at_the_top) {
+  const tui::LogWindow up_one = tui::log_window_range(100, 1, 10);
+  CHECK(up_one.first == 89);
+  CHECK(up_one.count == 10);
+
+  // Scrolled past the oldest kept line: the window stays full, pinned at 0.
+  const tui::LogWindow top = tui::log_window_range(100, 1000, 10);
+  CHECK(top.first == 0);
+  CHECK(top.count == 10);
+
+  // A short log with a huge scroll cannot over-draw either.
+  const tui::LogWindow short_top = tui::log_window_range(4, 999, 10);
+  CHECK(short_top.first == 0);
+  CHECK(short_top.count == 4);
+}
+
+TEST(log_window_never_draws_more_rows_than_visible) {
+  for (std::size_t scroll = 0; scroll <= 200; ++scroll) {
+    const tui::LogWindow window = tui::log_window_range(100, scroll, 10);
+    CHECK(window.count <= 10);
+    CHECK(window.first + window.count <= 100);
+  }
+  const tui::LogWindow zero = tui::log_window_range(100, 0, 0);
+  CHECK(zero.count == 0);
+}
+
+TEST(classify_status_calls_a_real_failure_bad) {
+  CHECK(tui::classify_status("failed berthpanel-memos") ==
+        tui::StatusTone::kBad);
+  CHECK(tui::classify_status("catalog could not be read") ==
+        tui::StatusTone::kBad);
+  // Mixed text: the failure wins even when the prefix looks neutral.
+  CHECK(tui::classify_status(
+            "x: ok (the list could not be refreshed: y)") ==
+        tui::StatusTone::kBad);
+  CHECK(tui::classify_status("saved, then failed to reload") ==
+        tui::StatusTone::kBad);
+}
+
+TEST(classify_status_calls_work_in_progress_neutral) {
+  CHECK(tui::classify_status("starting berthpanel-memos...") ==
+        tui::StatusTone::kNeutral);
+  CHECK(tui::classify_status("removing the recipe memos...") ==
+        tui::StatusTone::kNeutral);
+  CHECK(tui::classify_status("storing the draft...") ==
+        tui::StatusTone::kNeutral);
+  CHECK(tui::classify_status("importing a user recipe...") ==
+        tui::StatusTone::kNeutral);
+}
+
+TEST(classify_status_calls_a_finished_ok_status_ok) {
+  CHECK(tui::classify_status("deployed berthpanel-memos") ==
+        tui::StatusTone::kOk);
+  CHECK(tui::classify_status("removed the recipe memos") ==
+        tui::StatusTone::kOk);
+  CHECK(tui::classify_status("starting berthpanel-memos") ==
+        tui::StatusTone::kOk);
+}

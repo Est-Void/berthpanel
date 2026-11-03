@@ -267,7 +267,7 @@ class AppComponent final : public ftxui::ComponentBase {
       switch_tab(1);
       return true;
     }
-    if (event == Event::ArrowLeft) {
+    if (event == Event::ArrowLeft || event == Event::TabReverse) {
       switch_tab(-1);
       return true;
     }
@@ -908,12 +908,10 @@ bool AppComponent::scroll_logs(const int delta) {
 
 void AppComponent::handle_logs_key(const std::string& key,
                                    const ftxui::Event& event) {
-  if (key == "1" || key == "2" || key == "3") {
+  const char highest = static_cast<char>('0' + kLogFileCount);
+  if (key.size() == 1 && key[0] >= '1' && key[0] <= highest) {
     const std::size_t index = static_cast<std::size_t>(key[0] - '1');
-    LogFile wanted = LogFile::kDeploy;
-    if (index < kLogFileCount) {
-      wanted = log_file_at(index);
-    }
+    const LogFile wanted = log_file_at(index);
     {
       std::lock_guard lock(panel_->mutex);
       if (panel_->log_selected == wanted) {

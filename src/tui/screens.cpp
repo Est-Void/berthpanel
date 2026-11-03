@@ -58,6 +58,28 @@ void absorb_deploy_lines(const std::shared_ptr<Panel>& panel,
   }
 }
 
+std::vector<std::string> recipe_names(const Catalog& catalog) {
+  std::vector<std::string> names;
+  names.reserve(catalog.recipes.size());
+  for (const berth::Recipe& recipe : catalog.recipes) {
+    names.push_back(recipe.service_name);
+  }
+  return names;
+}
+
+Element toned_status(const std::string& text, const StatusTone tone) {
+  Element line = ftxui::text(text);
+  switch (tone) {
+    case StatusTone::kBad:
+      return line | ftxui::color(Color::Red);
+    case StatusTone::kOk:
+      return line | ftxui::color(Color::Green);
+    case StatusTone::kNeutral:
+      return line | ftxui::dim;
+  }
+  return line;
+}
+
 // Shared: the tail worker outlives start_deploy(), so a reference dangles.
 struct TailGate {
   std::atomic<bool> ready{false};
@@ -66,9 +88,10 @@ struct TailGate {
 
 void follow_deploy_log(const std::shared_ptr<Panel>& panel,
                        const std::filesystem::path& log_path,
-                       const std::shared_ptr<TailGate>& gate) {
+                       const std::shared_ptr<TailGate>& gate,
+                       const std::size_t generation) {
   const std::shared_ptr<Panel> keep_alive = panel;
-  std::thread tail([keep_alive, log_path, gate]() {
+  std::thread tail([keep_alive, log_path, gate, generation]() {
     // Start at the current end: this screen shows THIS deploy. A POSIX fd, not
     // stdio: read() after EOF sees later appends, a FILE* freezes on its EOF.
     int fd = ::open(log_path.c_str(), O_RDONLY | O_CLOEXEC);
@@ -105,7 +128,9 @@ void follow_deploy_log(const std::shared_ptr<Panel>& panel,
 
     gate->ready.store(true, std::memory_order_release);
     while (keep_alive->deploy_running.load(std::memory_order_relaxed) &&
-           !keep_alive->shutting_down.load(std::memory_order_relaxed)) {
+           !keep_alive->shutting_down.load(std::memory_order_relaxed) &&
+           keep_alive->deploy_generation.load(std::memory_order_relaxed) ==
+               generation) {
       // A missing file means 'no first line yet', not 'no progress' — keep
       // trying rather than lose the whole stage ladder (§11).
       if (fd < 0) {
@@ -115,12 +140,22 @@ void follow_deploy_log(const std::shared_ptr<Panel>& panel,
       flush();
       std::this_thread::sleep_for(kDeployTailPoll);
     }
-    if (fd < 0) {
-      fd = ::open(log_path.c_str(), O_RDONLY | O_CLOEXEC);
+    // A newer deploy owns the file now: draining it here would duplicate lines.
+    if (keep_alive->deploy_generation.load(std::memory_order_relaxed) ==
+        generation) {
+      if (fd < 0) {
+        fd = ::open(log_path.c_str(), O_RDONLY | O_CLOEXEC);
+      }
+      if (fd >= 0) {
+        read_new();
+        if (!partial.empty()) {
+          fresh.push_back(partial);
+          partial.clear();
+        }
+        flush();
+      }
     }
     if (fd >= 0) {
-      read_new();
-      flush();
       ::close(fd);
     }
     gate->drained.store(true, std::memory_order_release);
@@ -132,6 +167,7 @@ void follow_deploy_log(const std::shared_ptr<Panel>& panel,
 void start_deploy(const std::shared_ptr<Panel>& panel,
                   const berth::Paths& paths, const berth::Recipe& recipe,
                   const std::uint16_t forced_port, DeployPreStore pre_store) {
+  std::size_t generation = 0;
   {
     std::lock_guard lock(panel->mutex);
     // One deploy at a time in the UI: deploy.lock is only the second line.
@@ -149,10 +185,12 @@ void start_deploy(const std::shared_ptr<Panel>& panel,
     panel->deploy_service = recipe.service_name;
     panel->deploy_log_lines.clear();
     panel->deploy_status = "starting " + recipe.service_name;
+    generation =
+        panel->deploy_generation.fetch_add(1, std::memory_order_relaxed) + 1;
   }
 
   const std::shared_ptr<TailGate> gate = std::make_shared<TailGate>();
-  follow_deploy_log(panel, paths.deploy_log, gate);
+  follow_deploy_log(panel, paths.deploy_log, gate, generation);
 
   run_on_worker<berth::DeployOutcome>(
       panel, "deploy " + recipe.service_name,
@@ -242,6 +280,7 @@ Element render_deploy_screen(const Panel& panel,
                 ftxui::color(Color::Magenta));
 
   Elements status;
+  bool dim_status = true;
   if (panel.deploy_running.load(std::memory_order_relaxed)) {
     const bool cancelling =
         panel.deploy_cancel_requested.load(std::memory_order_relaxed);
@@ -255,17 +294,22 @@ Element render_deploy_screen(const Panel& panel,
     const Color colour = verdict.success     ? Color::Green
                          : verdict.cancelled ? Color::Yellow
                                              : Color::Red;
+    // Dim would wash out the red on a failed deploy.
+    dim_status = false;
     status.push_back(ftxui::text(panel.deploy_status) | ftxui::color(colour));
   } else {
     status.push_back(ftxui::text("idle"));
   }
-  out.push_back(ftxui::hbox(std::move(status)) | ftxui::dim);
+  Element status_box = ftxui::hbox(std::move(status));
+  if (dim_status) {
+    status_box = status_box | ftxui::dim;
+  }
+  out.push_back(std::move(status_box));
   out.push_back(ftxui::separator());
 
   if (!panel.catalog_status.empty()) {
-    const bool bad = panel.catalog_status.rfind("could not", 0) == 0;
-    out.push_back(ftxui::text("  " + panel.catalog_status) |
-                  ftxui::color(bad ? Color::Red : Color::Green));
+    out.push_back(toned_status("  " + panel.catalog_status,
+                               classify_status(panel.catalog_status)));
   }
 
   // A refusal is a status line, not a modal: the screen is not lost.
@@ -498,10 +542,10 @@ void refresh_catalog(const std::shared_ptr<Panel>& panel,
           state.catalog_cursor = 0;
           return;
         }
+        const std::vector<std::string> old_names = recipe_names(state.catalog);
         state.catalog = std::move(loaded).value();
-        if (state.catalog_cursor >= state.catalog.recipes.size()) {
-          state.catalog_cursor = 0;
-        }
+        state.catalog_cursor = cursor_after_recipe_refresh(
+            state.catalog_cursor, old_names, recipe_names(state.catalog));
       });
 }
 
@@ -545,10 +589,10 @@ void remove_user_recipe(const std::shared_ptr<Panel>& panel,
               "could not remove " + service_name + ": " + loaded.error().ctx();
           return;
         }
+        const std::vector<std::string> old_names = recipe_names(state.catalog);
         state.catalog = std::move(loaded).value();
-        if (state.catalog_cursor >= state.catalog.recipes.size()) {
-          state.catalog_cursor = 0;
-        }
+        state.catalog_cursor = cursor_after_recipe_refresh(
+            state.catalog_cursor, old_names, recipe_names(state.catalog));
         state.catalog_status = "removed the recipe " + service_name +
                                " (a deployed service, if any, is unchanged)";
       });
@@ -934,10 +978,10 @@ void start_recipe_edit(const std::shared_ptr<Panel>& panel,
         state.edit_diff = std::move(save.diff);
         state.edit_status = "saved";
         state.edit_error.clear();
+        const std::vector<std::string> old_names = recipe_names(state.catalog);
         state.catalog = std::move(save.catalog);
-        if (state.catalog_cursor >= state.catalog.recipes.size()) {
-          state.catalog_cursor = 0;
-        }
+        state.catalog_cursor = cursor_after_recipe_refresh(
+            state.catalog_cursor, old_names, recipe_names(state.catalog));
       });
 }
 
@@ -1275,9 +1319,8 @@ Element render_services_screen(const Panel& panel) {
   } else if (panel.services_loading) {
     status.push_back(ftxui::text("\xe2\x8b\xb0 " + panel.services_status));
   } else if (!panel.services_status.empty()) {
-    const bool ok = panel.services_status.find(": ok") != std::string::npos;
-    status.push_back(ftxui::text(panel.services_status) |
-                     ftxui::color(ok ? Color::Green : Color::Red));
+    status.push_back(toned_status(panel.services_status,
+                                  classify_status(panel.services_status)));
   } else {
     status.push_back(ftxui::text("idle"));
   }

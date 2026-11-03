@@ -144,4 +144,26 @@ std::string log_tabs_line(
   return out;
 }
 
+LogWindow log_window_range(const std::size_t total, const std::size_t scroll,
+                           const std::size_t visible) {
+  if (total <= visible) {
+    return {0, total};
+  }
+  const std::size_t offset =
+      scroll < total - visible ? scroll : total - visible;
+  return {total - visible - offset, visible};
+}
+
+StatusTone classify_status(const std::string_view text) {
+  if (text.find("could not") != std::string_view::npos ||
+      text.find("failed") != std::string_view::npos) {
+    return StatusTone::kBad;
+  }
+  if (text.ends_with("...") || text.starts_with("removing ") ||
+      text.starts_with("storing ") || text.starts_with("importing ")) {
+    return StatusTone::kNeutral;
+  }
+  return StatusTone::kOk;
+}
+
 }

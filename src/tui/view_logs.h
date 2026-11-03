@@ -42,4 +42,22 @@ inline constexpr std::size_t kLogFileCount = 3;
 [[nodiscard]] std::string log_tabs_line(
     LogFile selected, const std::vector<std::optional<std::size_t>>& counts);
 
+struct LogWindow {
+  std::size_t first;
+  std::size_t count;
+};
+
+// scroll counts UP from the newest, so 0 pins the bottom; a huge scroll clamps
+// at the oldest still-kept line and never shrinks the window.
+[[nodiscard]] LogWindow log_window_range(std::size_t total, std::size_t scroll,
+                                         std::size_t visible);
+
+enum class StatusTone {
+  kNeutral,
+  kOk,
+  kBad,
+};
+
+[[nodiscard]] StatusTone classify_status(std::string_view text);
+
 }

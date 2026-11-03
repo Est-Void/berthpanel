@@ -79,6 +79,8 @@ struct Panel {
   // (render thread, log tail). deploy_in_flight is the guarded one, true from
   // the key press until the verdict is drawn.
   std::atomic<bool> deploy_running{false};
+  // A stale tail from an older deploy must not append to the new deploy's log.
+  std::atomic<std::size_t> deploy_generation{0};
   bool deploy_in_flight = false;
   std::atomic<bool> deploy_cancel_requested{false};
   // 'c' flips the same flag the quit path flips: one path to the engine.
@@ -232,16 +234,11 @@ template <typename T>
     return ftxui::text(" ") | ftxui::dim | ftxui::flex;
   }
   const std::size_t total = buffer.size();
-  // A scroll past the top clamps to the oldest line still kept.
-  const std::size_t wanted = scroll + visible;
-  const std::size_t from_end = wanted < total ? wanted : total;
-  std::size_t first = total - from_end;
-  if (first + visible > total) {
-    first = total > visible ? total - visible : 0;
-  }
+  const LogWindow window = log_window_range(total, scroll, visible);
   ftxui::Elements rows;
-  for (std::size_t i = first; i < total && rows.size() < visible; ++i) {
-    rows.push_back(ftxui::paragraph(buffer.at(i)) | ftxui::color(accent));
+  for (std::size_t i = 0; i < window.count; ++i) {
+    rows.push_back(ftxui::text(buffer.at(window.first + i)) |
+                   ftxui::color(accent));
   }
   return ftxui::vbox(std::move(rows)) | ftxui::flex;
 }

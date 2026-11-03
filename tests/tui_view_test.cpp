@@ -89,6 +89,24 @@ TEST(services_cursor_follows_its_service_across_a_refresh) {
   CHECK(tui::cursor_after_rows_refresh(7, before, only_ascii) == 0);
 }
 
+TEST(catalog_cursor_follows_its_recipe_across_a_reload) {
+  const std::vector<std::string> before{"berthpanel-memos",
+                                        "berthpanel-ascii-live"};
+  const std::vector<std::string> after{"berthpanel-ascii-live",
+                                       "berthpanel-memos", "berthpanel-other"};
+  CHECK(tui::cursor_after_recipe_refresh(1, before, after) == 0);
+  CHECK(tui::cursor_after_recipe_refresh(0, before, after) == 1);
+
+  // Selected recipe removed: move only as far as the new list reaches.
+  const std::vector<std::string> only_ascii{"berthpanel-ascii-live"};
+  CHECK(tui::cursor_after_recipe_refresh(1, before, only_ascii) == 0);
+
+  // Nothing left: 0, never an index the table draws past its own end.
+  CHECK(tui::cursor_after_recipe_refresh(1, before, {}) == 0);
+  CHECK(tui::cursor_after_recipe_refresh(0, {}, {}) == 0);
+  CHECK(tui::cursor_after_recipe_refresh(7, before, only_ascii) == 0);
+}
+
 }
 TEST(chrome_tabs_are_in_the_agreed_order_with_their_glyphs) {
   const std::span<const tui::TabSpec> specs = tui::tabs();
