@@ -32,4 +32,7 @@ constexpr std::filesystem::perms kPermShared =
 [[nodiscard]] Result<std::size_t> remove_tree(
     const std::filesystem::path& root);
 
+// A regular file with any execute bit for this user; symlinks are followed.
+[[nodiscard]] bool is_executable(const std::filesystem::path& path);
+
 }

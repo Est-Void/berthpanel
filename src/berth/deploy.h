@@ -39,7 +39,8 @@ struct StackDeployOutcome {
 // absent: systemd's PATH omits e.g. ~/.bun/bin.
 [[nodiscard]] Result<std::vector<std::string>> resolve_start_argv(
     const Recipe& recipe, const std::filesystem::path& work_dir,
-    std::uint16_t port, std::string& binary);
+    std::uint16_t port, std::string& binary,
+    const std::filesystem::path& program_dir = {});
 
 class DeployOps {
  public:

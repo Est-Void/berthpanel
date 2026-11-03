@@ -4,6 +4,7 @@
 #include <array>
 #include <cerrno>
 #include <cstddef>
+#include <cstdlib>
 #include <ctime>
 #include <functional>
 #include <string>
@@ -33,8 +34,8 @@
 #include "sandbox.h"
 #include "secrets.h"
 #include "toolbox.h"
+#include "toolchain.h"
 #include "units.h"
-#include "util/fs.h"
 
 namespace berth {
 
@@ -55,10 +56,19 @@ RecipeLike recipe_view(const Recipe& recipe) {
   return view;
 }
 
+std::string host_path() {
+  const char* value = std::getenv("PATH");
+  if (value == nullptr || value[0] == '\0') {
+    return "/usr/local/bin:/usr/bin:/bin";
+  }
+  return value;
+}
+
 }
 Result<std::vector<std::string>> resolve_start_argv(
     const Recipe& recipe, const std::filesystem::path& work_dir,
-    const std::uint16_t port, std::string& binary) {
+    const std::uint16_t port, std::string& binary,
+    const std::filesystem::path& program_dir) {
   const Result<std::vector<std::string>> tokens =
       split_command_template(recipe.start_cmd);
   if (tokens.is_err())
@@ -79,13 +89,18 @@ Result<std::vector<std::string>> resolve_start_argv(
   }
   std::string& program = resolved.front();
   if (program.empty() || program.front() != '/') {
-    const Result<std::string> absolute = resolve_executable(program);
-    if (absolute.is_err()) {
-      return with_context(
-          std::move(absolute).error(),
-          "deploy: resolving start interpreter '" + program + "'");
+    const std::filesystem::path candidate = program_dir / program;
+    if (!program_dir.empty() && is_executable(candidate)) {
+      program = candidate.string();
+    } else {
+      const Result<std::string> absolute = resolve_executable(program);
+      if (absolute.is_err()) {
+        return with_context(
+            std::move(absolute).error(),
+            "deploy: resolving start interpreter '" + program + "'");
+      }
+      program = absolute.value();
     }
-    program = absolute.value();
   }
   binary = program;
   resolved.erase(resolved.begin());
@@ -174,11 +189,14 @@ Result<void> RealDeployOps::prefetch(const Recipe& recipe,
                                      const std::filesystem::path& work_dir,
                                      const Paths& paths,
                                      const DeployOptions& options) {
-  static_cast<void>(paths);
   if (recipe.prefetch_steps.empty())
     return {};
+  const std::vector<std::string> env{
+      "PATH=" + path_with_toolbox(paths, host_path())};
   Result<std::size_t> ran =
-      run_prefetch(recipe.prefetch_steps, work_dir, options.cancel);
+      run_prefetch(recipe.prefetch_steps, work_dir, options.cancel,
+                   std::chrono::milliseconds(600000), toolbox_bin_dir(paths),
+                   env);
   if (ran.is_err())
     return std::move(ran).error();
   return {};
@@ -188,10 +206,11 @@ Result<void> RealDeployOps::build(const Recipe& recipe,
                                   const std::filesystem::path& work_dir,
                                   const std::uint16_t port, const Paths& paths,
                                   const DeployOptions& options) {
-  static_cast<void>(paths);
   Result<std::string> build_stem = build_unit_name(recipe.service_name);
   if (build_stem.is_err())
     return std::move(build_stem).error();
+  std::vector<std::string> env = build_environment(work_dir);
+  env.push_back("PATH=" + path_with_toolbox(paths, host_path()));
   for (const std::vector<std::string>& step : recipe.build_steps) {
     std::vector<std::string> argv;
     std::vector<std::pair<std::string, std::string>> values;
@@ -206,9 +225,17 @@ Result<void> RealDeployOps::build(const Recipe& recipe,
         return std::move(substituted).error();
       argv.push_back(std::move(substituted).value());
     }
+    if (!argv.empty() && argv.front().find('/') == std::string::npos) {
+      const std::filesystem::path candidate =
+          toolbox_bin_dir(paths) / argv.front();
+      // systemd-run searches no PATH: a bare toolbox tool must be absolute.
+      if (is_executable(candidate)) {
+        argv.front() = candidate.string();
+      }
+    }
     const SandboxSpec spec{.argv = argv,
                            .working_dir = work_dir,
-                           .env_extra = build_environment(work_dir),
+                           .env_extra = env,
                            .unit_name = build_stem.value(),
                            .memory_max_mb = 2048,
                            .tasks_max = 512,
@@ -231,8 +258,8 @@ Result<std::filesystem::path> RealDeployOps::write_unit_file(
     const std::vector<std::string>& after_units,
     const std::vector<std::string>& wants_units) {
   std::string binary;
-  const Result<std::vector<std::string>> args =
-      resolve_start_argv(recipe, work_dir, port, binary);
+  const Result<std::vector<std::string>> args = resolve_start_argv(
+      recipe, work_dir, port, binary, toolbox_bin_dir(paths));
   if (args.is_err())
     return std::move(args).error();
 
@@ -906,10 +933,10 @@ Result<void> write_stage(const Paths& paths, const std::string& service_name,
   return journal_upsert(paths, entry);
 }
 
-Result<void> preflight_unit(const Recipe& recipe,
+Result<void> preflight_unit(const Recipe& recipe, const Paths& paths,
                             const DeployOptions& options) {
   Result<std::vector<ToolStatus>> tools =
-      check_tools(recipe.tools, options.cancel);
+      resolve_tools(recipe.tools, paths, options.cancel);
   if (tools.is_err())
     return std::move(tools).error();
   const Result<PreflightReport> preflight =
@@ -1069,7 +1096,7 @@ Result<DeployOutcome> run_deploy(const Paths& paths, const Recipe& recipe,
     }
   }
 
-  const Result<void> ready = preflight_unit(recipe, options);
+  const Result<void> ready = preflight_unit(recipe, paths, options);
   if (ready.is_err())
     return std::move(ready).error();
 
@@ -1144,7 +1171,7 @@ Result<StackDeployOutcome> run_stack_deploy(const Paths& paths,
   }
 
   for (const StackMember& member : stack.members) {
-    const Result<void> ready = preflight_unit(member.recipe, options);
+    const Result<void> ready = preflight_unit(member.recipe, paths, options);
     if (ready.is_err())
       return std::move(ready).error();
   }

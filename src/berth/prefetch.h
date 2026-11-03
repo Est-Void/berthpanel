@@ -21,7 +21,9 @@ namespace berth {
     const std::vector<std::vector<std::string>>& steps,
     const std::filesystem::path& work_dir, std::atomic<bool>* cancel,
     std::chrono::milliseconds per_step_timeout =
-        std::chrono::milliseconds(600000));
+        std::chrono::milliseconds(600000),
+    const std::filesystem::path& program_dir = {},
+    const std::vector<std::string>& extra_env = {});
 
 [[nodiscard]] std::string render_prefetch_report(
     const std::vector<std::vector<std::string>>& steps,

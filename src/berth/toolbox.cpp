@@ -149,6 +149,40 @@ Result<std::filesystem::path> install_pinned_tool(const PinnedTool& tool,
       return Error("toolbox: " + tool.name + " member '" + tool.inner_path +
                    "' extends past the archive");
     }
+    if (tool.extract_archive) {
+      std::vector<std::filesystem::path> tops;
+      for (const TarEntry& entry : entries.value()) {
+        // The remove below runs before tar_extract, so validate here too.
+        if (!archive_path_safe(entry.name)) {
+          return Error("toolbox: " + tool.name + " archive has unsafe entry '" +
+                       entry.name + "'");
+        }
+        const std::filesystem::path rel(entry.name);
+        const auto first = rel.begin();
+        if (first == rel.end() || *first == ".") {
+          continue;
+        }
+        if (std::find(tops.begin(), tops.end(), *first) == tops.end()) {
+          tops.push_back(*first);
+        }
+      }
+      // A version bump must replace the whole tree, not fail on an old dist/.
+      for (const std::filesystem::path& top : tops) {
+        Result<std::size_t> removed = remove_tree(tool.install_dir / top);
+        if (removed.is_err())
+          return std::move(removed).error();
+      }
+      Result<std::size_t> extracted =
+          tar_extract(archive_bytes, tool.install_dir);
+      if (extracted.is_err())
+        return std::move(extracted).error();
+      std::error_code ec;
+      if (!std::filesystem::is_regular_file(target, ec) || ec) {
+        return Error("toolbox: " + tool.name + " archive did not install '" +
+                     tool.inner_path + "'");
+      }
+      return target;
+    }
     payload =
         std::string_view(archive_bytes)
             .substr(found->data_offset, static_cast<std::size_t>(found->size));

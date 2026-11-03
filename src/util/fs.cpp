@@ -200,4 +200,13 @@ Result<std::size_t> remove_tree(const std::filesystem::path& root) {
   return children.value() + 1;
 }
 
+
+bool is_executable(const std::filesystem::path& path) {
+  std::error_code ec;
+  if (!std::filesystem::is_regular_file(path, ec) || ec) {
+    return false;
+  }
+  return ::access(path.c_str(), X_OK) == 0;
+}
+
 }

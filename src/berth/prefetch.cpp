@@ -3,6 +3,7 @@
 #include <string>
 
 #include "../util/argv.h"
+#include "../util/fs.h"
 #include "../util/subprocess.h"
 #include "../util/which.h"
 #include "validate.h"
@@ -61,7 +62,9 @@ Result<void> validate_prefetch_step(const std::vector<std::string>& argv) {
 Result<std::size_t> run_prefetch(
     const std::vector<std::vector<std::string>>& steps,
     const std::filesystem::path& work_dir, std::atomic<bool>* cancel,
-    const std::chrono::milliseconds per_step_timeout) {
+    const std::chrono::milliseconds per_step_timeout,
+    const std::filesystem::path& program_dir,
+    const std::vector<std::string>& extra_env) {
   std::size_t done = 0;
   for (const std::vector<std::string>& step : steps) {
     if (cancel != nullptr && cancel->load(std::memory_order_relaxed)) {
@@ -71,17 +74,26 @@ Result<std::size_t> run_prefetch(
     if (allowed.is_err())
       return std::move(allowed).error();
 
-    Result<std::string> binary = resolve_executable(program_name(step));
-    if (binary.is_err())
-      return std::move(binary).error();
+    const std::string program = program_name(step);
+    const std::filesystem::path candidate = program_dir / program;
+    std::string binary;
+    if (!program_dir.empty() && is_executable(candidate)) {
+      binary = candidate.string();
+    } else {
+      Result<std::string> resolved = resolve_executable(program);
+      if (resolved.is_err())
+        return std::move(resolved).error();
+      binary = std::move(resolved).value();
+    }
 
-    std::vector<std::string> argv{std::move(binary).value()};
+    std::vector<std::string> argv{std::move(binary)};
     argv.insert(argv.end(), step.begin() + 1, step.end());
 
     RunLimits limits;
     limits.timeout = per_step_timeout;
     limits.cancel = cancel;
     limits.cwd = &work_dir;
+    limits.extra_env = &extra_env;
     Result<RunOutput> out = run(argv, limits);
     if (out.is_err())
       return std::move(out).error();

@@ -72,6 +72,7 @@ LIB_SRC := \
 	src/berth/toolcheck.cpp \
 	src/berth/toolbox.cpp \
 	src/berth/goenv.cpp \
+	src/berth/toolchain.cpp \
 	src/berth/preflight.cpp \
 	src/berth/prefetch.cpp \
  	src/berth/sandbox.cpp \
@@ -164,6 +165,7 @@ TEST_SRC := \
 	tests/toolcheck_test.cpp \
 	tests/toolbox_test.cpp \
 	tests/goenv_test.cpp \
+	tests/toolchain_test.cpp \
 	tests/preflight_test.cpp \
 	tests/prefetch_test.cpp \
 	tests/sandbox_test.cpp \

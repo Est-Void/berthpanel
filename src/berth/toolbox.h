@@ -26,6 +26,8 @@ struct PinnedTool {
   std::filesystem::path install_dir;  // where the tool lands
   bool executable = true;
   ToolArchive archive = ToolArchive::kTarGz;
+  // Some launchers load siblings from the extracted tree (pnpm needs dist/).
+  bool extract_archive = false;
 };
 
 [[nodiscard]] Result<void> verify_sha256_file(
