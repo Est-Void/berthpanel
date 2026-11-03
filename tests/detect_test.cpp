@@ -67,8 +67,9 @@ TEST(detect_go_draft_leaves_bind_undeclared_and_still_validates) {
 
 TEST(detect_bun_lockfile_picks_bun) {
   const TempDir tmp;
-  CHECK(berth::atomic_write(tmp.path() / "package.json",
-                            R"({"name":"myapp","version":"0.0.0"})")
+  CHECK(berth::atomic_write(
+            tmp.path() / "package.json",
+            R"({"name":"myapp","version":"0.0.0","scripts":{"start":"node ."}})")
             .is_ok());
   CHECK(berth::atomic_write(tmp.path() / "bun.lockb", "binary-lock").is_ok());
 
@@ -77,23 +78,67 @@ TEST(detect_bun_lockfile_picks_bun) {
   CHECK(draft.value().recipe.language == "node");
   CHECK(draft.value().recipe.tools == std::vector<std::string>{"bun"});
   CHECK(draft.value().recipe.build_steps.size() ==
-        1);  // install only, no script
+        1);  // install only, no build script
   CHECK(draft.value().recipe.binary_name ==
         "index.js");  // package.json default
-  CHECK(draft.value().recipe.start_cmd.find("{project}/index.js") !=
-        std::string::npos);
+  CHECK(draft.value().recipe.start_cmd.find("run start") != std::string::npos);
   CHECK(berth::validate_recipe(draft.value().recipe).is_ok());
 }
 
 TEST(detect_pnpm_lockfile_picks_pnpm) {
   const TempDir tmp;
-  CHECK(berth::atomic_write(tmp.path() / "package.json",
-                            R"({"name":"myapp","version":"0.0.0"})")
+  CHECK(berth::atomic_write(
+            tmp.path() / "package.json",
+            R"({"name":"myapp","version":"0.0.0","scripts":{"start":"node ."}})")
             .is_ok());
   CHECK(berth::atomic_write(tmp.path() / "pnpm-lock.yaml", "lock: v9").is_ok());
   const auto draft = berth::detect_recipe(request_for(tmp.path()));
   CHECK(draft.is_ok());
   CHECK(draft.value().recipe.tools == std::vector<std::string>{"pnpm"});
+}
+
+TEST(detect_refuses_a_node_package_without_a_start_script) {
+  const TempDir tmp;
+  CHECK(berth::atomic_write(tmp.path() / "package.json",
+                            R"({"name":"myapp","main":"lib/index.js"})")
+            .is_ok());
+  CHECK(berth::atomic_write(tmp.path() / "bun.lockb", "binary-lock").is_ok());
+  const auto draft = berth::detect_recipe(request_for(tmp.path()));
+  CHECK(draft.is_err());
+  CHECK(draft.error().ctx().find("no start script") != std::string::npos);
+  CHECK(draft.error().ctx().find("manifest") != std::string::npos);
+}
+
+TEST(detect_node_start_script_drafts_loopback) {
+  const TempDir tmp;
+  CHECK(berth::atomic_write(
+            tmp.path() / "package.json",
+            R"({"name":"myapp","scripts":{"start":"node server.js"}})")
+            .is_ok());
+  CHECK(berth::atomic_write(tmp.path() / "bun.lockb", "binary-lock").is_ok());
+  const auto draft = berth::detect_recipe(request_for(tmp.path()));
+  CHECK(draft.is_ok());
+  CHECK(draft.value().recipe.start_cmd.find("run start") != std::string::npos);
+  CHECK(draft.value().recipe.start_cmd.find("127.0.0.1") != std::string::npos);
+  CHECK(draft.value().recipe.start_cmd.find("{port}") != std::string::npos);
+  CHECK(berth::validate_recipe(draft.value().recipe).is_ok());
+}
+
+TEST(detect_names_nested_project_markers_instead_of_no_stack) {
+  const TempDir tmp;
+  CHECK(berth::ensure_dir(tmp.path() / "server").is_ok());
+  CHECK(berth::ensure_dir(tmp.path() / "web").is_ok());
+  CHECK(berth::atomic_write(tmp.path() / "server" / "go.mod", kGoMod).is_ok());
+  CHECK(berth::atomic_write(tmp.path() / "web" / "package.json",
+                            R"({"name":"web"})")
+            .is_ok());
+
+  const auto draft = berth::detect_recipe(request_for(tmp.path()));
+  CHECK(draft.is_err());
+  CHECK(draft.error().ctx().find("server/go.mod") != std::string::npos);
+  CHECK(draft.error().ctx().find("web/package.json") != std::string::npos);
+  CHECK(draft.error().ctx().find("manifest") != std::string::npos);
+  CHECK(draft.error().ctx().find("no supported stack") == std::string::npos);
 }
 
 TEST(detect_uses_package_json_scripts_and_main) {
@@ -186,8 +231,9 @@ TEST(detect_prefetch_steps_download_without_executing) {
          std::vector<std::string>{"go", "mod", "download"}));
 
   const TempDir tmp2;
-  CHECK(berth::atomic_write(tmp2.path() / "package.json",
-                            R"({"name":"myapp","version":"0.0.0"})")
+  CHECK(berth::atomic_write(
+            tmp2.path() / "package.json",
+            R"({"name":"myapp","version":"0.0.0","scripts":{"start":"node ."}})")
             .is_ok());
   CHECK(berth::atomic_write(tmp2.path() / "bun.lockb", "binary-lock").is_ok());
   const auto bun = berth::detect_recipe(request_for(tmp2.path()));

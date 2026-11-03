@@ -289,6 +289,14 @@ Result<void> detect_node_stack(const DetectRequest& request,
   Result<PackageJson> pkg = read_package_json(dir);
   if (pkg.is_err())
     return std::move(pkg).error();
+  // No start script means a library or plugin: `runner {main}` is a guess at a
+  // server entry point and would produce a deployable but broken recipe.
+  if (!pkg.value().has_start_script) {
+    return Error("detect: " + detected_from(request) +
+                 ": package.json has no start script; a library or plugin is "
+                 "not a runnable server. Write a manifest (see __check-manifest) "
+                 "or add a start script upstream.");
+  }
   const std::string runner = tool.value() == NodeTool::kPnpm ? "pnpm" : "bun";
   r.language = "node";
   r.tools = {runner};
@@ -299,12 +307,7 @@ Result<void> detect_node_stack(const DetectRequest& request,
   // §6.5 on the host: prefetch downloads, never executes.
   r.prefetch_steps = {{runner, "install", "--ignore-scripts"}};
   r.binary_name = pkg.value().main;
-  if (pkg.value().has_start_script) {
-    r.start_cmd = runner + " run start --addr 127.0.0.1 --port {port}";
-  } else {
-    r.start_cmd =
-        runner + " {project}/" + pkg.value().main + " --addr 127.0.0.1 --port {port}";
-  }
+  r.start_cmd = runner + " run start --addr 127.0.0.1 --port {port}";
   r.description = "Detected Node app from " + detected_from(request);
   return {};
 }
@@ -332,6 +335,36 @@ Result<void> detect_python_stack(const DetectRequest& request,
       "prefetch step, which this draft does not add yet");
   r.description = "Detected Python app from " + detected_from(request);
   return {};
+}
+
+// A monorepo root often has no marker; naming its nested projects is the
+// difference between "no supported stack" and "look over there, by hand".
+std::vector<std::string> nested_markers(const std::filesystem::path& dir) {
+  const std::vector<std::string> markers = {"go.mod", "package.json",
+                                            "pyproject.toml",
+                                            "requirements.txt"};
+  const std::vector<std::string> skip = {
+      ".git", "node_modules", "vendor", "target",
+      "dist", "build",        ".venv",  "venv"};
+  std::vector<std::string> found;
+  std::error_code ec;
+  std::filesystem::directory_iterator it(dir, ec);
+  if (ec)
+    return found;
+  for (const std::filesystem::directory_entry& entry : it) {
+    std::error_code entry_ec;
+    if (!entry.is_directory(entry_ec) || entry_ec)
+      continue;
+    const std::string name = entry.path().filename().string();
+    if (std::find(skip.begin(), skip.end(), name) != skip.end())
+      continue;
+    for (const std::string& marker : markers) {
+      if (present(entry.path() / marker))
+        found.push_back(name + "/" + marker);
+    }
+  }
+  std::sort(found.begin(), found.end());
+  return found;
 }
 
 // Heal tools coverage first: a failure after this is a bug here.
@@ -371,6 +404,22 @@ Result<RecipeDraft> detect_recipe(const DetectRequest& request) {
   int families =
       (go_stack ? 1 : 0) + (node_stack ? 1 : 0) + (python_stack ? 1 : 0);
   if (families == 0) {
+    const std::vector<std::string> nested = nested_markers(dir);
+    if (!nested.empty()) {
+      std::string listed;
+      const std::size_t shown = std::min<std::size_t>(nested.size(), 8);
+      for (std::size_t i = 0; i < shown; ++i) {
+        if (i != 0)
+          listed += ", ";
+        listed += nested[i];
+      }
+      if (nested.size() > shown)
+        listed += ", …";
+      return Error(
+          "detect: no stack marker at the repository root; found " + listed +
+          ". Nested projects are not auto-deployed — write a manifest (see "
+          "__check-manifest) and add it with __recipe-add.");
+    }
     return Error("detect: no supported stack in " + dir.string() +
                  " (looked for go.mod, package.json, pyproject.toml, "
                  "requirements.txt)");
