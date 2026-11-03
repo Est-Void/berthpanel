@@ -229,6 +229,20 @@ TEST(recipes_json_egress_is_optional_and_round_trips) {
   CHECK(restored.value().egress.empty());
 }
 
+TEST(recipes_json_repo_is_a_legacy_alias_for_name) {
+  nlohmann::json doc = berth::recipe_to_json(good());
+  doc.erase("name");
+  doc["repo"] = "legacy-slug";
+  const auto parsed = berth::recipe_from_json(doc);
+  CHECK(parsed.is_ok());
+  CHECK(parsed.value().name == "legacy-slug");
+
+  doc["name"] = "explicit-name";
+  const auto both = berth::recipe_from_json(doc);
+  CHECK(both.is_ok());
+  CHECK(both.value().name == "explicit-name");
+}
+
 TEST(recipes_validator_egress_accepts_empty_or_deny_all) {
   Recipe r = good();
   CHECK(r.egress.empty());

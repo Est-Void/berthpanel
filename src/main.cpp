@@ -3,6 +3,7 @@
 #include <atomic>
 #include <csignal>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <optional>
 #include <span>
@@ -23,6 +24,7 @@
 #include "berth/gitclone.h"
 #include "berth/journal.h"
 #include "berth/lock.h"
+#include "berth/manifest.h"
 #include "berth/net/egress.h"
 #include "berth/net/github_api.h"
 #include "berth/proxy.h"
@@ -117,7 +119,8 @@ void print_usage() {
          "              [--memory <512M>] [--tasks <n>] [--health <path>] "
          "[--name <display>] [--description <text>]\n"
          "       berthpanel __recipe-draft <github_url> [ref] [--apply] "
-         "[--force]\n"
+         "[--force] [--json]\n"
+         "       berthpanel __check-manifest <file.json> [--json]\n"
          "       berthpanel __secret-set <service> <KEY>   (value on stdin)\n"
          "       berthpanel __secret-keys <service>\n"
          "       berthpanel __deploy <service_name> [port] [--upgrade] "
@@ -812,10 +815,22 @@ int serve_status_command(const std::string_view listen_arg) {
   return 0;
 }
 
+int check_manifest_command(const std::string_view file, const bool json) {
+  const berth::Result<berth::Recipe> loaded =
+      berth::load_manifest(std::filesystem::path(file));
+  if (loaded.is_err())
+    return fail(loaded.error().ctx());
+  if (json)
+    std::cout << berth::json_text(berth::manifest_json(loaded.value()));
+  else
+    std::cout << berth::render_manifest_plan(loaded.value());
+  return 0;
+}
+
 // The clone+detect FLOW lives in berth/wizard.cpp; a second copy would drift.
 int recipe_draft_command(const std::string_view url_arg,
                          const std::string_view ref_arg, const bool apply,
-                         const bool force) {
+                         const bool force, const bool json) {
   const berth::Result<berth::Paths> paths = berth::paths_from_env();
   if (paths.is_err())
     return fail(paths.error().ctx());
@@ -830,7 +845,10 @@ int recipe_draft_command(const std::string_view url_arg,
       paths.value(),
       berth::DraftRequest{.url = std::string(url_arg),
                           .ref = std::string(ref_arg)},
-      &cancel_flag, [](const std::string& line) { std::cout << line << "\n"; });
+      &cancel_flag, [json](const std::string& line) {
+        if (!json)
+          std::cout << line << "\n";
+      });
   if (prepared.is_err())
     return fail(prepared.error().ctx());
   const berth::DraftResult& result = prepared.value();
@@ -859,6 +877,15 @@ int recipe_draft_command(const std::string_view url_arg,
       berth::store_draft(paths.value(), result.draft, clash.value().exists);
   if (stored.is_err())
     return fail(stored.error().ctx());
+
+  if (json) {
+    nlohmann::json doc = berth::json_document("recipe-draft");
+    doc["recipe"] = berth::recipe_to_json(result.draft);
+    doc["saved"] = stored.value().string();
+    doc["clash"] = clash.value().exists;
+    std::cout << berth::json_text(doc);
+    return 0;
+  }
 
   std::cout << berth::render_draft_report(result, clash.value())
             << "  saved: " << stored.value().string() << "\n"
@@ -911,16 +938,20 @@ int recipe_draft_verb(const std::span<const char* const>& args) {
   std::string_view ref;
   bool apply = false;
   bool force = false;
+  bool json = false;
   for (std::size_t i = 2; i < args.size(); ++i) {
-    if (std::string_view(args[i]) == "--apply") {
+    const std::string_view arg(args[i]);
+    if (arg == "--apply") {
       apply = true;
-    } else if (std::string_view(args[i]) == "--force") {
+    } else if (arg == "--force") {
       force = true;
+    } else if (arg == "--json") {
+      json = true;
     } else if (ref.empty()) {
       ref = args[i];
     }
   }
-  return recipe_draft_command(args[1], ref, apply, force);
+  return recipe_draft_command(args[1], ref, apply, force, json);
 }
 
 int restore_verb(const std::span<const char* const>& args) {
@@ -967,6 +998,8 @@ std::optional<int> dispatch_verb(const std::span<const char* const>& args) {
     return recipe_edit_command(args[1], args.subspan(2));
   if (first == "__recipe-draft" && args.size() >= 2)
     return recipe_draft_verb(args);
+  if (first == "__check-manifest" && args.size() >= 2)
+    return check_manifest_command(args[1], contains_flag(args, "--json"));
   if (first == "__secret-set" && args.size() == 3)
     return secret_set_command(args[1], args[2]);
   if (first == "__secret-keys" && args.size() == 2)

@@ -79,6 +79,7 @@ LIB_SRC := \
  	src/berth/cancel.cpp \
  	src/berth/selftest.cpp \
  	src/berth/recipes.cpp \
+	src/berth/manifest.cpp \
  	src/berth/userrecipes.cpp \
  	src/berth/recipe_edit.cpp \
  	src/berth/stacks.cpp \
@@ -171,6 +172,7 @@ TEST_SRC := \
 	tests/sandbox_test.cpp \
 	tests/selftest_test.cpp \
 	tests/recipes_test.cpp \
+	tests/manifest_test.cpp \
  	tests/catalog_test.cpp \
  	tests/userrecipes_test.cpp \
  	tests/recipe_edit_test.cpp \

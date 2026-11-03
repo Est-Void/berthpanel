@@ -343,6 +343,10 @@ Result<Recipe> recipe_from_json(const nlohmann::json& doc) {
   Recipe r;
   r.owner = doc.value("owner", "");
   r.name = doc.value("name", "");
+  // `name` is the repo slug; a legacy hand-written `repo` is the same field.
+  if (r.name.empty()) {
+    r.name = doc.value("repo", "");
+  }
   r.commit = doc.value("commit", "");
   r.language = doc.value("language", "");
   r.service_name = doc.value("service_name", "");

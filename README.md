@@ -17,7 +17,8 @@
   <p>
     <b>Status: alpha.</b> See <a href="#known-limitations-alpha">Known limitations</a> —
     in particular, the source must be a public <code>github.com</code> repository,
-    toolchains are not auto-provisioned, and a detected <code>start_cmd</code> must be verified.
+    only <code>pnpm</code> is pinned and provisioned automatically, and a detected
+    <code>start_cmd</code> must be verified.
   </p>
   <p>
     <img src="https://img.shields.io/badge/License-GPL--3.0-blue?style=for-the-badge" alt="License: GPL-3.0" />
@@ -233,15 +234,42 @@ Run `berthpanel --selftest` after installing to confirm your user manager works.
   />
 </div>
 
+## Usage
+
+### Manifest
+
+A user recipe is a JSON manifest. Its fields are `owner`, `name` (a legacy
+`repo` field is accepted), `commit` (a pinned 40-hex SHA), `service_name`,
+`display_name`, `description`, `binary_name`, `bind`, `egress` (`deny-all`;
+empty keeps the current network behavior), `pre_build`/`build_steps`/
+`prefetch_steps` (argv arrays), `start_cmd`, `tools`, `port`, `health_path`,
+and `res.memory_max`/`res.tasks_max`.
+
+Validate one without network access or writes:
+
+```sh
+berthpanel __check-manifest <file.json> [--json]
+```
+
+`--json` emits the versioned envelope with the parsed `recipe`.
+
+<div align="center">
+  <img
+    src="assets/divider.svg"
+    width="900"
+    alt="Art Deco divider"
+  />
+</div>
+
 ## Known limitations (alpha)
 
 - **`github.com` only.** The source front door accepts an https GitHub URL and
   nothing else; other forges are not supported.
 - **Public repositories only.** Pins are resolved without a token, so a private
   repository cannot be deployed.
-- **Toolchains are limited to `bun`, `pnpm`, `go` and `python3`** and must
-  already be on `PATH`; the alpha does not auto-provision a toolchain into the
-  sandbox.
+- **Toolchains must be on `PATH`, except `pnpm`.** The pinned `pnpm` (x86_64)
+  is provisioned on demand when a recipe declares it in `tools`; every other
+  tool (`bun`, `go`, `python3`, ...) must already be installed.
 - **A detected `start_cmd` is a heuristic.** A service can deploy and still
   never answer; verify it and correct it with `__recipe-edit` (or `E`).
 - **The builtin catalog is frozen at wave 1** (Memos, Filebrowser, Gitea,
