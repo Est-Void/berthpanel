@@ -21,6 +21,7 @@
 #include "../util/strutil.h"
 #include "../util/subprocess.h"
 #include "../util/which.h"
+#include "buildenv.h"
 #include "cancel.h"
 #include "catalog.h"
 #include "gitclone.h"
@@ -207,7 +208,7 @@ Result<void> RealDeployOps::build(const Recipe& recipe,
     }
     const SandboxSpec spec{.argv = argv,
                            .working_dir = work_dir,
-                           .env_extra = {},
+                           .env_extra = build_environment(work_dir),
                            .unit_name = build_stem.value(),
                            .memory_max_mb = 2048,
                            .tasks_max = 512,

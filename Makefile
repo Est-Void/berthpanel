@@ -84,6 +84,7 @@ LIB_SRC := \
  	src/berth/detect.cpp \
 	src/berth/wizard.cpp \
  	src/berth/catalog.cpp \
+	src/berth/buildenv.cpp \
 	src/berth/deploy.cpp \
 	src/berth/service_ops.cpp \
 	src/berth/repair.cpp \
@@ -176,6 +177,7 @@ TEST_SRC := \
  	tests/detect_test.cpp \
 	tests/wizard_test.cpp \
  	tests/deploy_test.cpp \
+ 	tests/buildenv_test.cpp \
  	tests/deploy_stack_test.cpp \
  	tests/repair_test.cpp \
  	tests/cancel_test.cpp \
