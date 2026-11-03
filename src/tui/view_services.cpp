@@ -1,9 +1,9 @@
 #include "view_services.h"
 
-#include <algorithm>
 #include <cstddef>
 
 #include "../core/names.h"
+#include "text_width.h"
 
 namespace tui {
 
@@ -16,8 +16,9 @@ constexpr std::size_t kCommitWidth = 7;
 
 void pad_to(std::string& out, const std::string_view text,
             const std::size_t width) {
-  const std::size_t used = std::min(text.size(), width);
-  out.append(text.substr(0, used));
+  const std::string truncated = truncate_to_width(text, width);
+  out.append(truncated);
+  const std::size_t used = display_width(truncated);
   if (used < width) {
     out.append(width - used, ' ');
   }

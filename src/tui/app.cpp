@@ -48,6 +48,17 @@ bool key_goes_to_field(const ftxui::Event& event) {
          event == Event::End;
 }
 
+Element field_element(ftxui::ComponentBase* input, const bool focused,
+                      const std::string& value, const char* placeholder) {
+  if (focused) {
+    return input->Render();
+  }
+  if (value.empty()) {
+    return ftxui::text(placeholder) | ftxui::dim;
+  }
+  return ftxui::text(value);
+}
+
 class AppComponent final : public ftxui::ComponentBase {
  public:
   explicit AppComponent(const std::shared_ptr<Panel>& panel) : panel_(panel) {
@@ -293,12 +304,14 @@ class AppComponent final : public ftxui::ComponentBase {
         return true;
       case Tab::kDeploy:
         if (event == Event::Return) {
-          bool draft_up = false;
+          bool busy = false;
           {
             std::lock_guard lock(panel_->mutex);
-            draft_up = panel_->draft_ready || panel_->draft_running;
+            busy = panel_->draft_ready || panel_->draft_running ||
+                   panel_->deploy_in_flight ||
+                   panel_->deploy_running.load(std::memory_order_relaxed);
           }
-          if (!draft_up) {
+          if (!busy) {
             start_selected_deploy();
           }
           return true;
@@ -531,10 +544,27 @@ ftxui::ComponentBase* AppComponent::edit_input_for(const EditField field) {
 }
 
 ftxui::Elements AppComponent::edit_input_elements() {
-  return {edit_start_cmd_->Render(),   edit_bind_->Render(),
-          edit_health_path_->Render(), edit_display_name_->Render(),
-          edit_description_->Render(), edit_port_->Render(),
-          edit_memory_max_->Render(),  edit_tasks_max_->Render()};
+  const EditField focus = panel_->edit_field;
+  return {
+      field_element(edit_start_cmd_.get(), focus == EditField::kStartCmd,
+                    panel_->edit.start_cmd,
+                    "e.g. {self} --addr 127.0.0.1 --port {port}"),
+      field_element(edit_bind_.get(), focus == EditField::kBind,
+                    panel_->edit.bind,
+                    "127.0.0.1 (when start_cmd has no bind flag)"),
+      field_element(edit_health_path_.get(), focus == EditField::kHealthPath,
+                    panel_->edit.health_path, "/"),
+      field_element(edit_display_name_.get(), focus == EditField::kDisplayName,
+                    panel_->edit.display_name, "display name"),
+      field_element(edit_description_.get(), focus == EditField::kDescription,
+                    panel_->edit.description, "one line"),
+      field_element(edit_port_.get(), focus == EditField::kPort,
+                    panel_->edit.port, "empty = free at deploy"),
+      field_element(edit_memory_max_.get(), focus == EditField::kMemoryMax,
+                    panel_->edit.memory_max, "e.g. 512M"),
+      field_element(edit_tasks_max_.get(), focus == EditField::kTasksMax,
+                    panel_->edit.tasks_max, "e.g. 300"),
+  };
 }
 
 ftxui::ComponentBase* AppComponent::create_input_for(const CreateField field) {
@@ -568,12 +598,32 @@ ftxui::ComponentBase* AppComponent::create_input_for(const CreateField field) {
 }
 
 ftxui::Elements AppComponent::create_input_elements() {
-  return {create_url_->Render(),          create_ref_->Render(),
-          create_deploy_port_->Render(),  create_start_cmd_->Render(),
-          create_bind_->Render(),         create_health_path_->Render(),
-          create_display_name_->Render(), create_description_->Render(),
-          create_app_port_->Render(),     create_memory_max_->Render(),
-          create_tasks_max_->Render()};
+  const CreateField focus = panel_->create_field;
+  return {
+      field_element(create_url_.get(), focus == CreateField::kUrl,
+                    panel_->create_url, "https://github.com/owner/repo"),
+      field_element(create_ref_.get(), focus == CreateField::kRef,
+                    panel_->create_ref, "default branch or tag"),
+      field_element(create_deploy_port_.get(), focus == CreateField::kDeployPort,
+                    panel_->create_deploy_port, "auto"),
+      field_element(create_start_cmd_.get(), focus == CreateField::kStartCmd,
+                    panel_->create.start_cmd,
+                    "{self} --addr 127.0.0.1 --port {port}"),
+      field_element(create_bind_.get(), focus == CreateField::kBind,
+                    panel_->create.bind, "127.0.0.1"),
+      field_element(create_health_path_.get(), focus == CreateField::kHealthPath,
+                    panel_->create.health_path, "/"),
+      field_element(create_display_name_.get(), focus == CreateField::kDisplayName,
+                    panel_->create.display_name, "display name"),
+      field_element(create_description_.get(), focus == CreateField::kDescription,
+                    panel_->create.description, "one line"),
+      field_element(create_app_port_.get(), focus == CreateField::kAppPort,
+                    panel_->create.port, "empty = free at deploy"),
+      field_element(create_memory_max_.get(), focus == CreateField::kMemoryMax,
+                    panel_->create.memory_max, "e.g. 512M"),
+      field_element(create_tasks_max_.get(), focus == CreateField::kTasksMax,
+                    panel_->create.tasks_max, "e.g. 300"),
+  };
 }
 
 void AppComponent::set_create_field(const CreateField field) {
@@ -893,6 +943,10 @@ bool AppComponent::start_selected_deploy() {
   std::uint16_t port = 0;
   {
     std::lock_guard lock(panel_->mutex);
+    if (panel_->deploy_in_flight ||
+        panel_->deploy_running.load(std::memory_order_relaxed)) {
+      return false;
+    }
     if (panel_->catalog_cursor >= panel_->catalog.recipes.size()) {
       return false;
     }

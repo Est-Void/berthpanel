@@ -1,6 +1,5 @@
 #include "view_catalog.h"
 
-#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <string_view>
@@ -8,6 +7,7 @@
 #include "../berth/catalog.h"
 #include "../berth/userrecipes.h"
 #include "../util/strutil.h"
+#include "text_width.h"
 
 namespace tui {
 
@@ -24,8 +24,9 @@ constexpr std::string_view kUnknown = "-";
 
 void pad_to(std::string& out, const std::string_view text,
             const std::size_t width) {
-  const std::size_t used = std::min(text.size(), width);
-  out.append(text.substr(0, used));
+  const std::string truncated = truncate_to_width(text, width);
+  out.append(truncated);
+  const std::size_t used = display_width(truncated);
   if (used < width) {
     out.append(width - used, ' ');
   }

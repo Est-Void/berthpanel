@@ -104,6 +104,7 @@ LIB_SRC := \
 	src/util/tail.cpp \
 	src/tui/chrome.cpp \
 	src/tui/ops.cpp \
+	src/tui/text_width.cpp \
 	src/tui/view_catalog.cpp \
 	src/tui/view_deploy.cpp \
 	src/tui/view_edit.cpp \
@@ -194,6 +195,7 @@ TEST_SRC := \
 	tests/scan_view_test.cpp \
 	tests/deploy_view_test.cpp \
 	tests/tui_view_test.cpp \
+	tests/text_width_test.cpp \
 	tests/edit_view_test.cpp \
 	tests/refresh_view_test.cpp \
 	tests/serve_test.cpp \
