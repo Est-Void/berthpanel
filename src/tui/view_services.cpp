@@ -1,5 +1,6 @@
 #include "view_services.h"
 
+#include <algorithm>
 #include <cstddef>
 
 #include "../core/names.h"
@@ -8,15 +9,17 @@ namespace tui {
 
 namespace {
 
-constexpr std::size_t kNameWidth = 26;
-constexpr std::size_t kStateWidth = 10;
-constexpr std::size_t kPortWidth = 8;
+constexpr std::size_t kNameWidth = 24;
+constexpr std::size_t kStateWidth = 8;
+constexpr std::size_t kPortWidth = 7;
+constexpr std::size_t kCommitWidth = 7;
 
 void pad_to(std::string& out, const std::string_view text,
             const std::size_t width) {
-  out.append(text);
-  if (text.size() < width) {
-    out.append(width - text.size(), ' ');
+  const std::size_t used = std::min(text.size(), width);
+  out.append(text.substr(0, used));
+  if (used < width) {
+    out.append(width - used, ' ');
   }
 }
 
@@ -26,7 +29,7 @@ std::string services_header_line() {
   pad_to(head, "SERVICE", kNameWidth);
   pad_to(head, "STATE", kStateWidth);
   pad_to(head, "PORT", kPortWidth);
-  head.append("COMMIT");
+  pad_to(head, "COMMIT", kCommitWidth);
   return head;
 }
 
@@ -50,7 +53,7 @@ std::vector<std::string> services_row_lines(
     } else {
       pad_to(line, std::to_string(row.port), kPortWidth);
     }
-    line.append(row.commit_short);
+    pad_to(line, row.commit_short, kCommitWidth);
     lines.push_back(std::move(line));
   }
   return lines;

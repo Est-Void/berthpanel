@@ -40,6 +40,7 @@ namespace tui {
 inline constexpr std::size_t kSignWidth = 5;
 inline constexpr std::size_t kSignGap = 3;
 inline constexpr std::size_t kVisibleRows = 12;
+inline constexpr std::size_t kContentScrollStep = 8;
 // Bounded (§5): a runaway build must not grow the panel's memory.
 inline constexpr std::size_t kLogCapacity = 2000;
 
@@ -107,8 +108,8 @@ struct Panel {
   bool draft_clash_confirming = false;
   bool draft_pending_deploy = false;
 
-  // create_field is the insert-mode focus, kNone until 'i'; the eight values
-  // are the view model's EditFields, so two forms cannot disagree.
+  // create_field is the insert-mode focus; kUrl on open, kNone after Esc.
+  // The values are the view model's EditFields, so two forms cannot disagree.
   bool create_active = false;
   CreateField create_field = CreateField::kNone;
   EditFields create;
@@ -164,6 +165,9 @@ struct Panel {
 
   // Reported on stderr: a quit must say what it interrupted (§11).
   std::size_t cancelled_on_quit = 0;
+
+  // Reset on tab switch and modal open: a dialog must start at its first line.
+  std::size_t content_scroll = 0;
 
   std::size_t tab = 0;
 };
@@ -241,6 +245,10 @@ template <typename T>
   }
   return ftxui::vbox(std::move(rows)) | ftxui::flex;
 }
+
+// Natural height, scrolled by `scroll`; a vbox would shrink rows to zero.
+[[nodiscard]] ftxui::Element scroll_view(ftxui::Element content,
+                                         std::size_t* scroll);
 
 // REPLACES the screen; a dbox over a full-width table lets the table bleed
 // through.

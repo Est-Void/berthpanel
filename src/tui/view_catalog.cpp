@@ -1,5 +1,6 @@
 #include "view_catalog.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <string_view>
@@ -15,17 +16,18 @@ namespace {
 constexpr std::size_t kCommitShortLen = 7;
 
 // Fixed widths: the table must not jitter as the cursor moves.
-constexpr std::size_t kNameWidth = 24;
-constexpr std::size_t kLangWidth = 10;
-constexpr std::size_t kLimitsWidth = 16;
+constexpr std::size_t kNameWidth = 22;
+constexpr std::size_t kLangWidth = 9;
+constexpr std::size_t kLimitsWidth = 9;
 
 constexpr std::string_view kUnknown = "-";
 
 void pad_to(std::string& out, const std::string_view text,
             const std::size_t width) {
-  out.append(text);
-  if (text.size() < width) {
-    out.append(width - text.size(), ' ');
+  const std::size_t used = std::min(text.size(), width);
+  out.append(text.substr(0, used));
+  if (used < width) {
+    out.append(width - used, ' ');
   }
 }
 
@@ -152,7 +154,7 @@ std::string catalog_header_line() {
   pad_to(head, "SERVICE", kNameWidth);
   pad_to(head, "LANG", kLangWidth);
   pad_to(head, "PIN", kLimitsWidth);
-  head.append("LIMITS");
+  pad_to(head, "LIMITS", kLimitsWidth);
   return head;
 }
 
@@ -170,7 +172,7 @@ std::vector<std::string> catalog_row_lines(const Catalog& catalog) {
     pad_to(line, recipe.language.empty() ? kUnknown : recipe.language,
            kLangWidth);
     pad_to(line, short_commit(recipe.commit), kLimitsWidth);
-    line.append(limits_cell(recipe));
+    pad_to(line, limits_cell(recipe), kLimitsWidth);
     lines.push_back(std::move(line));
   }
   return lines;

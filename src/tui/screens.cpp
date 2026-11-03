@@ -299,9 +299,8 @@ Element render_deploy_screen(const Panel& panel,
     out.push_back(paragraph_lines(
         catalog_detail_lines(panel.catalog, panel.catalog_cursor)));
   }
-  out.push_back(ftxui::separator());
-
   if (panel.create_active || panel.create_running) {
+    out.push_back(ftxui::separator());
     out.push_back(ftxui::text("NEW SERVICE") | ftxui::bold |
                   ftxui::color(Color::Magenta));
     out.push_back(
@@ -330,7 +329,6 @@ Element render_deploy_screen(const Panel& panel,
       row.push_back(create_inputs[i] | ftxui::xflex);
       out.push_back(ftxui::hbox(std::move(row)) | ftxui::flex);
     }
-    out.push_back(ftxui::separator());
     for (const KeyHint& hint :
          create_key_hints(panel.create_field, panel.create_running)) {
       out.push_back(key_hint(hint));
@@ -789,6 +787,7 @@ void accept_draft(const std::shared_ptr<Panel>& panel,
   if (clash_needs_an_answer) {
 // Nothing is stored until the user says (§8).
     std::lock_guard lock(panel->mutex);
+    panel->content_scroll = 0;
     panel->draft_clash_confirming = true;
     panel->draft_pending_deploy = deploy_after;
     return;

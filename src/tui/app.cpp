@@ -98,12 +98,13 @@ class AppComponent final : public ftxui::ComponentBase {
 
   Element OnRender() override {
     std::lock_guard lock(panel_->mutex);
+    Element content = scroll_view(render_content(), &panel_->content_scroll);
     return ftxui::vbox({
         header_bar(berth::netstatus_snapshot()),
         ftxui::hbox({
             tab_strip(panel_->tab),
             ftxui::separator(),
-            render_content() | ftxui::borderRounded | ftxui::flex,
+            std::move(content) | ftxui::borderRounded | ftxui::flex,
         }) | ftxui::flex,
         footer_bar(),
     });
@@ -118,6 +119,14 @@ class AppComponent final : public ftxui::ComponentBase {
     // Ctrl-C takes the SAME path as q, ahead of every modal.
     if (event == Event::CtrlC) {
       quit(panel_->ops.cancel_all());
+      return true;
+    }
+
+    // Viewport keys, even under a modal: a tall dialog must show its y/n.
+    if (event == Event::PageUp || event == Event::PageDown) {
+      scroll_content(event == Event::PageDown
+                         ? static_cast<int>(kContentScrollStep)
+                         : -static_cast<int>(kContentScrollStep));
       return true;
     }
 
@@ -224,11 +233,20 @@ class AppComponent final : public ftxui::ComponentBase {
       if (scroll_logs(1)) {
         return true;
       }
+      // System Scan has no cursor: the arrows are the scroll keys there.
+      if (tabs()[panel_->tab].tab == Tab::kCatalog) {
+        scroll_content(-1);
+        return true;
+      }
       move_cursor(-1);
       return true;
     }
     if (event == Event::ArrowDown || key == "j") {
       if (scroll_logs(-1)) {
+        return true;
+      }
+      if (tabs()[panel_->tab].tab == Tab::kCatalog) {
+        scroll_content(1);
         return true;
       }
       move_cursor(1);
@@ -316,6 +334,7 @@ class AppComponent final : public ftxui::ComponentBase {
       panel_->tab =
           (panel_->tab + static_cast<std::size_t>(delta) + count) % count;
       panel_->catalog_details = false;
+      panel_->content_scroll = 0;
       if (tabs()[panel_->tab].tab == Tab::kCatalog && !panel_->scan_ever_ran) {
         panel_->scan_ever_ran = true;
         scan_the_first_time = true;
@@ -340,6 +359,8 @@ class AppComponent final : public ftxui::ComponentBase {
   void handle_logs_key(const std::string& key, const ftxui::Event& event);
 
   bool scroll_logs(int delta);
+
+  void scroll_content(int delta);
 
   bool handle_edit_key(const ftxui::Event& event, const std::string& key);
   ftxui::ComponentBase* edit_input_for(EditField field);
@@ -476,6 +497,7 @@ void AppComponent::handle_deploy_key(const std::string& key) {
     }
     panel_->recipe_remove_target =
         panel_->catalog.recipes[panel_->catalog_cursor].service_name;
+    panel_->content_scroll = 0;
     panel_->confirming_recipe_remove = true;
     return;
   }
@@ -576,7 +598,7 @@ void AppComponent::open_create() {
     panel_->create_status.clear();
     panel_->create_error.clear();
   }
-  set_create_field(CreateField::kNone);
+  set_create_field(CreateField::kUrl);
 }
 
 void AppComponent::close_create() {
@@ -667,6 +689,12 @@ bool AppComponent::handle_create_key(const ftxui::Event& event,
   }
   if (focus == CreateField::kNone && key == "q") {
     return false;  // fall through to the global quit
+  }
+  // No field to land in: keep a pasted url intact after Esc (§12.16).
+  if (focus == CreateField::kNone && event.is_character()) {
+    set_create_field(CreateField::kUrl);
+    create_url_->OnEvent(event);
+    return true;
   }
   return true;
 }
@@ -803,6 +831,17 @@ bool AppComponent::handle_edit_key(const ftxui::Event& event,
   return true;
 }
 
+void AppComponent::scroll_content(const int delta) {
+  std::lock_guard lock(panel_->mutex);
+  if (delta >= 0) {
+    panel_->content_scroll += static_cast<std::size_t>(delta);
+  } else {
+    const std::size_t step = static_cast<std::size_t>(-delta);
+    panel_->content_scroll =
+        panel_->content_scroll > step ? panel_->content_scroll - step : 0;
+  }
+}
+
 bool AppComponent::scroll_logs(const int delta) {
   if (tabs()[panel_->tab].tab != Tab::kLogs) {
     return false;
@@ -840,6 +879,11 @@ void AppComponent::handle_logs_key(const std::string& key,
   }
   if (key == "r" || event == Event::Return) {
     refresh_logs(panel_, panel_->paths);
+    return;
+  }
+  if (event == Event::End) {
+    std::lock_guard lock(panel_->mutex);
+    panel_->log_scroll = 0;
   }
 }
 
@@ -886,12 +930,14 @@ void AppComponent::handle_services_key(const std::string& key) {
     name = selected.service_name;
     if (key == "u") {
       panel_->uninstall_target = selected;
+      panel_->content_scroll = 0;
       panel_->confirming_uninstall = true;
       return;
     }
     // K, not k: 'k' is the vim cursor key panel-wide.
     if (key == "K") {
       panel_->kill_target = selected;
+      panel_->content_scroll = 0;
       panel_->confirming_kill = true;
       return;
     }
