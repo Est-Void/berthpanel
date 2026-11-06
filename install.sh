@@ -14,7 +14,9 @@
 # itself; the release artifacts it installs are still verified (below).
 #
 # Usage:
-#   install.sh [--prefix DIR] [--source DIR] [--pub FILE] [--version V] [--allow-checksum-only] [--dry-run]
+#   install.sh [--prefix DIR] [--source DIR] [--pub FILE] [--version V]
+#              [--allow-checksum-only] [--dry-run] [--add-to-path|--no-add-to-path]
+#              [--enable-linger] [--selftest]
 #   install.sh --uninstall [--prefix DIR] [--dry-run]
 #
 # Environment:
@@ -23,6 +25,7 @@
 #   BERTHPANEL_RELEASE_URL   base URL for the release artifacts (default: the
 #                            pinned release below); when artifacts are not
 #                            already present locally they are fetched from it
+#   BERTHPANEL_PROFILE_FILE  shell profile edited by --add-to-path
 
 set -eu
 # pipefail where the shell has it (bash/ksh); dash does not, and that is fine.
@@ -62,6 +65,7 @@ install.sh — install AND uninstall berthpanel.
 Usage:
   install.sh [--prefix DIR] [--source DIR] [--pub FILE] [--version V]
              [--allow-checksum-only] [--dry-run]
+             [--add-to-path|--no-add-to-path] [--enable-linger] [--selftest]
   install.sh --uninstall [--prefix DIR] [--dry-run]
 
 One-liner (the script itself is not verified this way; see the README Install
@@ -72,10 +76,15 @@ Verify-first, fail-closed: the release's SHA256SUMS is checked against a
 minisign signature before anything is installed. --allow-checksum-only is the
 explicit opt-out. No sudo, no system packages.
 
+After installing, the script checks git/python3/systemd, reports how to make
+systemd user services survive logout, and can run --selftest. With the default
+prefix (~/.local), the PATH block is added unless --no-add-to-path is passed.
+
 Environment:
   BERTHPANEL_MINISIGN     minisign/rsign binary (skips detection)
   BERTHPANEL_RELEASE_PUB  trusted public key (default <source>/release.pub)
   BERTHPANEL_RELEASE_URL  base URL for release artifacts
+  BERTHPANEL_PROFILE_FILE shell profile edited by --add-to-path
 EOF
 }
 
@@ -89,6 +98,10 @@ version=""
 release_url="${BERTHPANEL_RELEASE_URL:-}"
 allow_checksum_only=0
 dry_run=0
+add_to_path="auto"
+enable_linger=0
+run_selftest=0
+profile_file="${BERTHPANEL_PROFILE_FILE:-}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -115,6 +128,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --allow-checksum-only) allow_checksum_only=1 ;;
     --dry-run) dry_run=1 ;;
+    --add-to-path) add_to_path=1 ;;
+    --no-add-to-path) add_to_path=0 ;;
+    --enable-linger) enable_linger=1 ;;
+    --selftest) run_selftest=1 ;;
     -h|--help)
       usage
       exit 0
@@ -208,6 +225,214 @@ verify_signature() {
   esac
 }
 
+# --- install experience ------------------------------------------------------
+
+have_command() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+current_user() {
+  if command -v id >/dev/null 2>&1; then
+    id -un 2>/dev/null || true
+  elif [ -n "${USER:-}" ]; then
+    printf '%s' "$USER"
+  fi
+}
+
+package_hint() {
+  if have_command apt-get; then
+    echo "sudo apt-get install git python3 systemd"
+  elif have_command dnf; then
+    echo "sudo dnf install git python3 systemd"
+  elif have_command pacman; then
+    echo "sudo pacman -S git python systemd"
+  elif have_command zypper; then
+    echo "sudo zypper install git python3 systemd"
+  elif have_command apk; then
+    echo "sudo apk add git python3 systemd"
+  else
+    echo "install git, python3 >= 3.10, systemctl and systemd-run with your package manager"
+  fi
+}
+
+check_runtime_deps() {
+  missing=""
+  for tool in git python3 systemctl systemd-run; do
+    if ! have_command "$tool"; then
+      missing="$missing $tool"
+    fi
+  done
+  if [ -n "$missing" ]; then
+    echo "install: warning: missing runtime tools:$missing" >&2
+    echo "install: berthpanel is installed, but deploys need them." >&2
+    echo "install: install them yourself (this script never runs sudo):" >&2
+    echo "  $(package_hint)" >&2
+  fi
+  if have_command python3 &&
+    ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+    echo "install: warning: python3 is older than 3.10; some builds will refuse to run" >&2
+  fi
+  if have_command systemctl &&
+    ! systemctl --user show-environment >/dev/null 2>&1; then
+    echo "install: warning: systemd --user is not reachable from this shell" >&2
+    echo "install: log in to a normal user session before deploying or running --selftest" >&2
+  fi
+}
+
+profile_file_for_shell() {
+  if [ -n "$profile_file" ]; then
+    printf '%s' "$profile_file"
+    return 0
+  fi
+  case "$(basename -- "${SHELL:-sh}")" in
+    zsh)
+      printf '%s' "${ZDOTDIR:-$HOME}/.zshrc"
+      ;;
+    bash)
+      if [ -f "$HOME/.bash_profile" ] && [ ! -f "$HOME/.bashrc" ]; then
+        printf '%s' "$HOME/.bash_profile"
+      else
+        printf '%s' "$HOME/.bashrc"
+      fi
+      ;;
+    *)
+      printf '%s' "$HOME/.profile"
+      ;;
+  esac
+}
+
+path_has_dir() {
+  case ":${PATH:-}:" in
+    *":$1:"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+shell_single_quote() {
+  escaped="$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+  printf "'%s'" "$escaped"
+}
+
+remove_path_block() {
+  file="$1"
+  [ -f "$file" ] || return 0
+  tmp="${file}.berthpanel.$$"
+  if ! awk '
+    $0 == "# >>> berthpanel installer: PATH >>>" { skip = 1; next }
+    $0 == "# <<< berthpanel installer: PATH <<<" { skip = 0; next }
+    skip != 1 { print }
+  ' "$file" > "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  cat "$tmp" > "$file"
+  rm -f "$tmp"
+}
+
+write_path_block() {
+  file="$1"
+  dir="$2"
+  remove_path_block "$file" || return 1
+  {
+    printf '%s\n' "# >>> berthpanel installer: PATH >>>"
+    printf 'PATH=%s:"$PATH"\n' "$(shell_single_quote "$dir")"
+    printf 'export PATH\n'
+    printf '%s\n' "# <<< berthpanel installer: PATH <<<"
+  } >> "$file" || return 1
+}
+
+maybe_add_to_path() {
+  dir="$1"
+  if path_has_dir "$dir"; then
+    echo "install: ${dir} is already on PATH"
+    return 0
+  fi
+  if [ "$add_to_path" = "auto" ]; then
+    if [ "$prefix" = "${HOME}/.local" ]; then
+      add_to_path=1
+    else
+      add_to_path=0
+    fi
+  fi
+  if [ "$add_to_path" -eq 0 ]; then
+    echo "install: ${dir} is not on PATH; add it for this shell with:"
+    echo "  export PATH=$(shell_single_quote "$dir"):\"\$PATH\""
+    echo "install: or rerun with --add-to-path to update a shell profile"
+    return 0
+  fi
+  profile="$(profile_file_for_shell)"
+  if [ -z "$profile" ]; then
+    echo "install: warning: could not determine a shell profile; add ${dir} to PATH yourself" >&2
+    return 0
+  fi
+  if [ "$dry_run" -eq 1 ]; then
+    echo "install: would add ${dir} to PATH in ${profile}"
+    return 0
+  fi
+  mkdir -p "$(dirname -- "$profile")" 2>/dev/null || true
+  if write_path_block "$profile" "$dir"; then
+    echo "install: added ${dir} to PATH in ${profile}"
+    echo "install: open a new shell, or run: . ${profile}"
+  else
+    echo "install: warning: could not update ${profile}; add ${dir} to PATH yourself" >&2
+  fi
+}
+
+linger_state() {
+  if ! have_command loginctl; then
+    printf 'unknown'
+    return 0
+  fi
+  user="$(current_user)"
+  if [ -z "$user" ]; then
+    printf 'unknown'
+    return 0
+  fi
+  loginctl show-user "$user" -p Linger 2>/dev/null |
+    sed -n 's/^Linger=//p' || true
+  return 0
+}
+
+report_linger() {
+  state="$(linger_state)"
+  case "$state" in
+    yes|1)
+      echo "install: lingering is enabled — services keep running after logout"
+      return 0
+      ;;
+  esac
+  user="$(current_user)"
+  if [ "$enable_linger" -eq 1 ] && [ "$dry_run" -eq 0 ] &&
+    have_command loginctl && [ -n "$user" ]; then
+    if loginctl enable-linger "$user" >/dev/null 2>&1; then
+      echo "install: enabled lingering for ${user}"
+      return 0
+    fi
+    echo "install: warning: could not enable lingering without more privileges" >&2
+  fi
+  if [ "$dry_run" -eq 1 ] && [ "$enable_linger" -eq 1 ]; then
+    echo "install: would try to enable lingering for ${user:-$USER}"
+    return 0
+  fi
+  echo "install: tip: enable lingering so services keep running after logout:"
+  echo "  sudo loginctl enable-linger ${user:-${USER:-your-user}}"
+}
+
+remove_path_block_if_present() {
+  file="$1"
+  [ -f "$file" ] || return 0
+  grep -q "# >>> berthpanel installer: PATH >>>" "$file" || return 0
+  if [ "$dry_run" -eq 1 ]; then
+    echo "install: would remove the PATH block from ${file}"
+    return 0
+  fi
+  if remove_path_block "$file"; then
+    echo "install: removed the PATH block from ${file}"
+  else
+    echo "install: warning: could not update ${file}" >&2
+  fi
+}
+
 # --- uninstall ---------------------------------------------------------------
 
 uninstall() {
@@ -258,6 +483,14 @@ uninstall() {
     else
       rm -f "$bin"
     fi
+  fi
+
+  remove_path_block_if_present "$HOME/.profile"
+  remove_path_block_if_present "$HOME/.bashrc"
+  remove_path_block_if_present "$HOME/.bash_profile"
+  remove_path_block_if_present "${ZDOTDIR:-$HOME}/.zshrc"
+  if [ -n "$profile_file" ]; then
+    remove_path_block_if_present "$profile_file"
   fi
 
   if [ "$dry_run" -eq 1 ]; then
@@ -350,6 +583,8 @@ install() {
   dest="${dest_dir}/${BIN_NAME}"
   if [ "$dry_run" -eq 1 ]; then
     echo "install: would install $(cd "$work_dir" && pwd)/${BIN_NAME} -> ${dest}"
+    maybe_add_to_path "$dest_dir"
+    report_linger
     return 0
   fi
 
@@ -360,7 +595,19 @@ install() {
   mv -f "$tmp" "$dest"
 
   echo "install: installed ${dest}"
-  echo "install: run '${BIN_NAME} --selftest' to confirm your user manager works"
+  check_runtime_deps
+  maybe_add_to_path "$dest_dir"
+  report_linger
+
+  if [ "$run_selftest" -eq 1 ]; then
+    echo "install: running ${dest} --selftest"
+    if ! "$dest" --selftest; then
+      die "selftest failed — the binary is installed, but your user manager needs attention (see above)"
+    fi
+    echo "install: selftest passed"
+  else
+    echo "install: run '${BIN_NAME} --selftest' after opening a new shell to confirm your user manager works"
+  fi
 }
 
 case "$action" in

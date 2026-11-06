@@ -256,6 +256,95 @@ TEST(installer_pipe_safe_from_stdin) {
   CHECK(!fs::exists(prefix / "bin" / "berthpanel"));
 }
 
+TEST(installer_adds_one_path_block_and_uninstall_removes_it) {
+  const fs::path root = repo_root();
+  CHECK(!root.empty());
+
+  const TempDir tmp;
+  const fs::path home = tmp.path() / "home";
+  const fs::path bin = tmp.path() / "bin";
+  const fs::path src = make_source(tmp.path() / "src", "BIN", true);
+  const fs::path prefix = home / ".local";
+  fs::create_directories(home);
+  fs::create_directories(bin);
+  write_executable(
+      bin / "systemctl",
+      "#!/bin/sh\ncase \"$1\" in --user) shift ;; esac\n"
+      "case \"$1\" in list-*) exit 0 ;; esac\nexit 0\n");
+  write_executable(bin / "loginctl", "#!/bin/sh\nexit 1\n");
+
+  const std::vector<std::string> env{
+      "HOME=" + home.string(),
+      "SHELL=/bin/sh",
+      "PATH=" + bin.string() + ":/usr/bin:/bin",
+  };
+  const std::vector<std::string> install_argv{
+      root / "install.sh", "--source", src.string(), "--prefix",
+      prefix.string(), "--allow-checksum-only"};
+  const berth::Result<berth::RunOutput> first = run_cmd(install_argv, env);
+  CHECK(first.is_ok());
+  CHECK(first.value().exit_code == 0);
+  CHECK(fs::exists(prefix / "bin" / "berthpanel"));
+
+  const fs::path profile = home / ".profile";
+  const std::string body = read_file(profile);
+  CHECK(body.find("# >>> berthpanel installer: PATH >>>") != std::string::npos);
+  CHECK(body.find((prefix / "bin").string()) != std::string::npos);
+
+  // Re-running must replace the block, never append a second one.
+  const berth::Result<berth::RunOutput> second = run_cmd(install_argv, env);
+  CHECK(second.is_ok());
+  CHECK(second.value().exit_code == 0);
+  const std::string again = read_file(profile);
+  const std::string marker = "# >>> berthpanel installer: PATH >>>";
+  std::size_t count = 0;
+  for (std::size_t at = again.find(marker); at != std::string::npos;
+       at = again.find(marker, at + marker.size())) {
+    ++count;
+  }
+  CHECK(count == 1);
+
+  const berth::Result<berth::RunOutput> removed = run_cmd(
+      {root / "install.sh", "--uninstall", "--prefix", prefix.string()}, env);
+  CHECK(removed.is_ok());
+  CHECK(removed.value().exit_code == 0);
+  CHECK(!fs::exists(prefix / "bin" / "berthpanel"));
+  CHECK(read_file(profile).find(marker) == std::string::npos);
+}
+
+TEST(installer_selftest_runs_the_installed_binary) {
+  const fs::path root = repo_root();
+  CHECK(!root.empty());
+
+  const TempDir tmp;
+  const fs::path home = tmp.path() / "home";
+  const fs::path bin = tmp.path() / "bin";
+  const fs::path src = make_source(tmp.path() / "src",
+                                   "#!/bin/sh\necho selftest-ok\nexit 0\n",
+                                   true);
+  const fs::path prefix = tmp.path() / "prefix";
+  fs::create_directories(home);
+  fs::create_directories(bin);
+  write_executable(bin / "systemctl", "#!/bin/sh\nexit 0\n");
+  write_executable(bin / "loginctl", "#!/bin/sh\nexit 0\n");
+
+  const std::vector<std::string> env{
+      "HOME=" + home.string(),
+      "SHELL=/bin/sh",
+      "PATH=" + bin.string() + ":/usr/bin:/bin",
+  };
+  const berth::Result<berth::RunOutput> result = run_cmd(
+      {root / "install.sh", "--source", src.string(), "--prefix",
+       prefix.string(), "--allow-checksum-only", "--no-add-to-path",
+       "--selftest"},
+      env);
+  CHECK(result.is_ok());
+  CHECK(result.value().exit_code == 0);
+  CHECK(result.value().out.find("selftest-ok") != std::string::npos);
+  CHECK(result.value().out.find("selftest passed") != std::string::npos);
+  CHECK(!fs::exists(home / ".profile"));
+}
+
 TEST(uninstaller_only_touches_the_prefix) {
   const fs::path root = repo_root();
   CHECK(!root.empty());
