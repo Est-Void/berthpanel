@@ -210,6 +210,7 @@ std::vector<std::string> deploy_idle_lines(const berth::Recipe& recipe,
 std::vector<KeyHint> deploy_key_hints(const bool running) {
   if (running) {
     return {{"c", "cancel the deploy (the journal entry stays for __cleanup)"},
+            {"[ ]", "scroll deploy.log (] returns to the newest)"},
             {"q", "quit — the deploy is cancelled and unwound first"}};
   }
   return {
@@ -218,6 +219,8 @@ std::vector<KeyHint> deploy_key_hints(const bool running) {
       {"e", "recipe details (pin, tools, build steps, start command)"},
       {"E", "edit the selected USER recipe (builtin: make an override first)"},
       {"x", "remove the selected USER recipe (builtin: nothing to remove)"},
+      {"[ ]", "scroll deploy.log (] returns to the newest)"},
+      {"C", "clear the deploy output and verdict"},
       {"r", "reload the catalog"},
       {"\xe2\x86\x91\xe2\x86\x93", "select a recipe"},
   };
@@ -282,6 +285,35 @@ CreateField next_create_field(const CreateField field) {
   return CreateField::kUrl;
 }
 
+CreateField previous_create_field(const CreateField field) {
+  switch (field) {
+    case CreateField::kNone:
+    case CreateField::kUrl:
+      return CreateField::kTasksMax;
+    case CreateField::kRef:
+      return CreateField::kUrl;
+    case CreateField::kDeployPort:
+      return CreateField::kRef;
+    case CreateField::kStartCmd:
+      return CreateField::kDeployPort;
+    case CreateField::kBind:
+      return CreateField::kStartCmd;
+    case CreateField::kHealthPath:
+      return CreateField::kBind;
+    case CreateField::kDisplayName:
+      return CreateField::kHealthPath;
+    case CreateField::kDescription:
+      return CreateField::kDisplayName;
+    case CreateField::kAppPort:
+      return CreateField::kDescription;
+    case CreateField::kMemoryMax:
+      return CreateField::kAppPort;
+    case CreateField::kTasksMax:
+      return CreateField::kMemoryMax;
+  }
+  return CreateField::kTasksMax;
+}
+
 CreateField create_field_at(const std::size_t index) {
   switch (index) {
     case 0:
@@ -321,6 +353,7 @@ std::vector<KeyHint> create_key_hints(const CreateField focus,
   }
   if (focus != CreateField::kNone) {
     return {{"Tab", "next field"},
+            {"Shift+Tab", "previous field"},
             {"Enter", "create the recipe from these fields, then review it"},
             {"Esc", "leave the fields — the form's own keys work again"}};
   }
@@ -420,6 +453,7 @@ std::vector<KeyHint> draft_key_hints(const bool running, const bool ready) {
             {"s", "store the draft only (then select it and press Enter)"},
             {"Esc", "discard the draft — Enter, e and x work again"},
             {"i", "paste another URL"},
+            {"[ ]", "scroll deploy.log (] returns to the newest)"},
             {"\xe2\x86\x91\xe2\x86\x93", "select a recipe"}};
   }
   return {

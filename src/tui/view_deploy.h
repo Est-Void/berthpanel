@@ -71,6 +71,8 @@ inline constexpr std::size_t kCreateFieldCount = 11;
 [[nodiscard]] std::string_view create_field_label(CreateField field);
 // Tab walks the whole form and wraps; kNone enters at the url.
 [[nodiscard]] CreateField next_create_field(CreateField field);
+// Shift+Tab walks it backwards; kNone enters at the last field.
+[[nodiscard]] CreateField previous_create_field(CreateField field);
 [[nodiscard]] CreateField create_field_at(std::size_t index);
 
 // `creating` is true while the worker runs, which locks the fields.

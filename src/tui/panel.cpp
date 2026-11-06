@@ -264,7 +264,7 @@ Element tab_strip(const std::size_t active) {
                                 ftxui::text(" "), std::move(label)}));
   }
   rows.push_back(ftxui::text("\xe2\x86\x90\xe2\x86\x92 tab") | ftxui::dim);
-  rows.push_back(ftxui::text("PgUp/PgDn scroll") | ftxui::dim);
+  rows.push_back(ftxui::text("Shift+Tab back") | ftxui::dim);
   return ftxui::vbox(std::move(rows)) |
          ftxui::size(ftxui::WIDTH, ftxui::EQUAL,
                      static_cast<float>(kTabsWidth));

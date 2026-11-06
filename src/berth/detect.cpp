@@ -359,8 +359,12 @@ std::vector<std::string> nested_markers(const std::filesystem::path& dir) {
     if (std::find(skip.begin(), skip.end(), name) != skip.end())
       continue;
     for (const std::string& marker : markers) {
-      if (present(entry.path() / marker))
-        found.push_back(name + "/" + marker);
+      if (present(entry.path() / marker)) {
+        std::string nested = name;
+        nested += '/';
+        nested += marker;
+        found.push_back(std::move(nested));
+      }
     }
   }
   std::sort(found.begin(), found.end());

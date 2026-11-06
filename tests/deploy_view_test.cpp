@@ -217,6 +217,33 @@ TEST(create_fields_cycle_visits_every_field_then_wraps) {
         tui::CreateField::kUrl);
 }
 
+TEST(create_fields_shift_tab_visits_every_field_backwards_then_wraps) {
+  using tui::CreateField;
+  CHECK(tui::previous_create_field(CreateField::kRef) == CreateField::kUrl);
+  CHECK(tui::previous_create_field(CreateField::kDeployPort) ==
+        CreateField::kRef);
+  CHECK(tui::previous_create_field(CreateField::kStartCmd) ==
+        CreateField::kDeployPort);
+  CHECK(tui::previous_create_field(CreateField::kBind) ==
+        CreateField::kStartCmd);
+  CHECK(tui::previous_create_field(CreateField::kHealthPath) ==
+        CreateField::kBind);
+  CHECK(tui::previous_create_field(CreateField::kDisplayName) ==
+        CreateField::kHealthPath);
+  CHECK(tui::previous_create_field(CreateField::kDescription) ==
+        CreateField::kDisplayName);
+  CHECK(tui::previous_create_field(CreateField::kAppPort) ==
+        CreateField::kDescription);
+  CHECK(tui::previous_create_field(CreateField::kMemoryMax) ==
+        CreateField::kAppPort);
+  CHECK(tui::previous_create_field(CreateField::kTasksMax) ==
+        CreateField::kMemoryMax);
+  CHECK(tui::previous_create_field(CreateField::kUrl) ==
+        CreateField::kTasksMax);
+  CHECK(tui::previous_create_field(CreateField::kNone) ==
+        CreateField::kTasksMax);
+}
+
 TEST(create_field_at_matches_the_input_slot_order) {
   for (std::size_t i = 0; i < tui::kCreateFieldCount; ++i) {
     CHECK(tui::create_field_at(i) != tui::CreateField::kNone);
@@ -239,6 +266,8 @@ TEST(create_key_hints_promise_a_review_not_a_store) {
       tui::create_key_hints(tui::CreateField::kStartCmd, false);
   CHECK(hint_contains(typing, "Tab"));
   CHECK(hint_contains(typing, "next field"));
+  CHECK(hint_contains(typing, "Shift+Tab"));
+  CHECK(hint_contains(typing, "previous field"));
   CHECK(hint_contains(typing, "Esc"));
 
   const std::vector<tui::KeyHint> running =
@@ -351,11 +380,14 @@ TEST(deploy_hints_name_the_launch_key_and_the_cancel_key) {
   // 'i' opens the NEW SERVICE form — it is not recipe editing (that is E).
   CHECK(hint_contains(idle, "create a new service"));
   CHECK(hint_contains(idle, "remove the selected USER recipe"));
+  CHECK(hint_contains(idle, "scroll deploy.log"));
+  CHECK(hint_contains(idle, "clear the deploy output"));
   // 'c' would be a letter in the port field, so not a cancel key here.
   CHECK(!hint_contains(idle, "cancel"));
 
   const std::vector<tui::KeyHint> running = tui::deploy_key_hints(true);
   CHECK(hint_contains(running, "cancel"));
+  CHECK(hint_contains(running, "scroll deploy.log"));
   CHECK(hint_contains(running, "quit"));
 }
 

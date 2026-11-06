@@ -43,6 +43,10 @@ void start_deploy(const std::shared_ptr<Panel>& panel,
 // The journal entry stays for __cleanup (§6.7).
 void cancel_deploy(const std::shared_ptr<Panel>& panel);
 
+// Wipes the previous deploy's log, verdict and stage so a new launch or an
+// explicit clear never shows one deploy's output under another's status.
+void clear_deploy_output(Panel& panel);
+
 // The user's own eight values, applied ON TOP of what detection found, through
 // the PURE engine (apply_recipe_edits, which runs validate_recipe). Nothing is
 // stored by this call: it ends with a draft on the review, where s/d keep their

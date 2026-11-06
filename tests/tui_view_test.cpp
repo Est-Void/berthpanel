@@ -289,6 +289,25 @@ TEST(services_table_names_the_unit_the_state_the_port_and_the_pin) {
   CHECK(contains({lines[1]}, "-"));
 }
 
+TEST(services_columns_keep_a_gap_even_when_a_cell_fills_its_width) {
+  // "inactive" is exactly kStateWidth wide: without the gutter it reads as
+  // "inactive34043" and the port looks like part of the state.
+  berth::ServiceRow row;
+  row.service_name = "berthpanel-KinoLink_by_someone";
+  row.state = berth::ServiceState::kInactive;
+  row.port = 34043;
+  row.commit_short = "a1b2c3d";
+
+  const std::string line = tui::services_row_lines({row})[0];
+  CHECK(line.find("inactive 34043") != std::string::npos);
+  CHECK(line.find("inactive34043") == std::string::npos);
+
+  const std::string header = tui::services_header_line();
+  CHECK(header.find("SERVICE") < header.find("STATE"));
+  CHECK(header.find("STATE") < header.find("PORT"));
+  CHECK(header.find("PORT") < header.find("COMMIT"));
+}
+
 TEST(services_uninstall_confirmation_says_the_data_stays) {
   // A silent data delete is forbidden; the dialog MUST name the survivor.
   berth::ServiceRow row;

@@ -453,6 +453,23 @@ void AppComponent::move_cursor(const int delta) {
 }
 
 void AppComponent::handle_deploy_key(const std::string& key) {
+  if (key == "[" || key == "]") {
+    std::lock_guard lock(panel_->mutex);
+    if (key == "[") {
+      ++panel_->deploy_log_scroll;
+    } else if (panel_->deploy_log_scroll > 0) {
+      --panel_->deploy_log_scroll;
+    }
+    return;
+  }
+  if (key == "C") {
+    std::lock_guard lock(panel_->mutex);
+    if (!panel_->deploy_in_flight &&
+        !panel_->deploy_running.load(std::memory_order_relaxed)) {
+      clear_deploy_output(*panel_);
+    }
+    return;
+  }
   if (key == "c") {
     // ONE key for both, but only THAT operation's flag (§6.7).
     std::shared_ptr<Op> draft;
@@ -703,8 +720,9 @@ bool AppComponent::handle_create_key(const ftxui::Event& event,
         panel_->create_op->cancel.store(true, std::memory_order_relaxed);
       }
       request_render(*panel_);
+      return true;
     }
-    return true;
+    return key != "q";
   }
   ftxui::ComponentBase* focused = create_input_for(focus);
   if (focused != nullptr) {
@@ -714,6 +732,10 @@ bool AppComponent::handle_create_key(const ftxui::Event& event,
     }
     if (event == Event::Tab) {
       set_create_field(next_create_field(focus));
+      return true;
+    }
+    if (event == Event::TabReverse) {
+      set_create_field(previous_create_field(focus));
       return true;
     }
     if (key_goes_to_field(event)) {
@@ -854,11 +876,15 @@ bool AppComponent::handle_edit_key(const ftxui::Event& event,
     return true;
   }
   if (running) {
-    return true;  // the write is in flight
+    return key != "q";
   }
   if ((event == Event::Tab || event == Event::Return) &&
       focus != EditField::kNone) {
     set_edit_field(next_edit_field(focus));
+    return true;
+  }
+  if (event == Event::TabReverse && focus != EditField::kNone) {
+    set_edit_field(previous_edit_field(focus));
     return true;
   }
   if (focus != EditField::kNone && key_goes_to_field(event)) {
@@ -948,6 +974,7 @@ bool AppComponent::start_selected_deploy() {
     if (panel_->catalog_cursor >= panel_->catalog.recipes.size()) {
       return false;
     }
+    clear_deploy_output(*panel_);
     recipe = panel_->catalog.recipes[panel_->catalog_cursor];
     paths = panel_->paths;
     // Loud refusal before a worker spawns: coercing to 0 deploys elsewhere.

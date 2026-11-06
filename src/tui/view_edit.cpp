@@ -92,6 +92,29 @@ EditField next_edit_field(const EditField field) {
   return EditField::kStartCmd;
 }
 
+EditField previous_edit_field(const EditField field) {
+  switch (field) {
+    case EditField::kNone:
+    case EditField::kStartCmd:
+      return EditField::kTasksMax;
+    case EditField::kBind:
+      return EditField::kStartCmd;
+    case EditField::kHealthPath:
+      return EditField::kBind;
+    case EditField::kDisplayName:
+      return EditField::kHealthPath;
+    case EditField::kDescription:
+      return EditField::kDisplayName;
+    case EditField::kPort:
+      return EditField::kDescription;
+    case EditField::kMemoryMax:
+      return EditField::kPort;
+    case EditField::kTasksMax:
+      return EditField::kMemoryMax;
+  }
+  return EditField::kTasksMax;
+}
+
 EditField edit_field_at(const std::size_t index) {
   switch (index) {
     case 0:
@@ -182,6 +205,7 @@ std::vector<KeyHint> edit_key_hints(const EditField focus, const bool running) {
   }
   if (focus != EditField::kNone) {
     return {{"Tab", "next field"},
+            {"Shift+Tab", "previous field"},
             {"Esc", "release the field — s and q work again"}};
   }
   return {{"i", "edit the fields"},

@@ -93,6 +93,7 @@ struct Panel {
   berth::DeployOutcome deploy_outcome;
   std::string deploy_service;
   RingBuffer<std::string> deploy_log_lines{kLogCapacity};
+  std::size_t deploy_log_scroll = 0;  // lines up from the newest (0 = live)
 
   // Insert mode, so q / e / r / c keep working with no field focused (§12.16).
   bool draft_running = false;

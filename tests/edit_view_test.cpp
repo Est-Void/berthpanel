@@ -70,6 +70,24 @@ TEST(edit_focus_cycle_visits_every_field_then_wraps) {
   CHECK(tui::next_edit_field(EditField::kTasksMax) == EditField::kStartCmd);
 }
 
+TEST(edit_focus_cycle_visits_every_field_backwards_then_wraps) {
+  using tui::EditField;
+  CHECK(tui::previous_edit_field(EditField::kBind) == EditField::kStartCmd);
+  CHECK(tui::previous_edit_field(EditField::kHealthPath) == EditField::kBind);
+  CHECK(tui::previous_edit_field(EditField::kDisplayName) ==
+        EditField::kHealthPath);
+  CHECK(tui::previous_edit_field(EditField::kDescription) ==
+        EditField::kDisplayName);
+  CHECK(tui::previous_edit_field(EditField::kPort) ==
+        EditField::kDescription);
+  CHECK(tui::previous_edit_field(EditField::kMemoryMax) == EditField::kPort);
+  CHECK(tui::previous_edit_field(EditField::kTasksMax) ==
+        EditField::kMemoryMax);
+  CHECK(tui::previous_edit_field(EditField::kStartCmd) ==
+        EditField::kTasksMax);
+  CHECK(tui::previous_edit_field(EditField::kNone) == EditField::kTasksMax);
+}
+
 TEST(edit_field_labels_match_the_slots) {
   CHECK(tui::edit_field_label(tui::EditField::kStartCmd) == "start_cmd");
   CHECK(tui::edit_field_label(tui::EditField::kBind) == "bind");
@@ -255,6 +273,8 @@ TEST(edit_key_hints_follow_the_state_they_are_in) {
       tui::edit_key_hints(tui::EditField::kStartCmd, false);
   CHECK(hint_contains(typing, "Tab"));
   CHECK(hint_contains(typing, "next field"));
+  CHECK(hint_contains(typing, "Shift+Tab"));
+  CHECK(hint_contains(typing, "previous field"));
   CHECK(hint_contains(typing, "Esc"));
   CHECK(hint_contains(typing, "release the field"));
 

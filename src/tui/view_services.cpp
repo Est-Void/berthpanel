@@ -24,13 +24,20 @@ void pad_to(std::string& out, const std::string_view text,
   }
 }
 
+// A full-width cell (e.g. "inactive") otherwise touches the next column.
+void pad_cell(std::string& out, const std::string_view text,
+              const std::size_t width) {
+  pad_to(out, text, width);
+  out.push_back(' ');
+}
+
 }
 std::string services_header_line() {
   std::string head;
-  pad_to(head, "SERVICE", kNameWidth);
-  pad_to(head, "STATE", kStateWidth);
-  pad_to(head, "PORT", kPortWidth);
-  pad_to(head, "COMMIT", kCommitWidth);
+  pad_cell(head, "SERVICE", kNameWidth);
+  pad_cell(head, "STATE", kStateWidth);
+  pad_cell(head, "PORT", kPortWidth);
+  pad_cell(head, "COMMIT", kCommitWidth);
   return head;
 }
 
@@ -41,20 +48,20 @@ std::vector<std::string> services_row_lines(
 
   for (const berth::ServiceRow& row : rows) {
     std::string line;
-    pad_to(line, row.service_name, kNameWidth);
+    pad_cell(line, row.service_name, kNameWidth);
     std::string state(berth::service_state_label(row.state));
     // is-active still answers "active" for a SIGSTOPped service, so the
     // freeze has to be visible here.
     if (row.frozen && row.state == berth::ServiceState::kActive) {
       state = "frozen";
     }
-    pad_to(line, state, kStateWidth);
+    pad_cell(line, state, kStateWidth);
     if (row.port == 0) {
-      pad_to(line, "-", kPortWidth);
+      pad_cell(line, "-", kPortWidth);
     } else {
-      pad_to(line, std::to_string(row.port), kPortWidth);
+      pad_cell(line, std::to_string(row.port), kPortWidth);
     }
-    pad_to(line, row.commit_short, kCommitWidth);
+    pad_cell(line, row.commit_short, kCommitWidth);
     lines.push_back(std::move(line));
   }
   return lines;

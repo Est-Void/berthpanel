@@ -1,5 +1,6 @@
 docs/*
 plan_v2.md
+plan_v3.md
 # The one doc that IS tracked: the pinned public release key CI verifies
 # against (dev.md §10). Everything else under docs/ is local-only.
 !docs/release.pub

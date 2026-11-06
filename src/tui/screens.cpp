@@ -37,7 +37,7 @@ constexpr std::chrono::milliseconds kTailDrainBudget{2000};
 // The tail must know where this deploy's log starts before its first line.
 constexpr std::chrono::milliseconds kTailReadyBudget{1000};
 
-constexpr std::size_t kDeployListRows = 6;
+constexpr std::size_t kDeployListRows = kVisibleRows;
 constexpr std::size_t kDeployTailRows = 8;
 // A draft takes the rows a vbox would DROP — silently eating the port field.
 constexpr std::size_t kDraftListRows = 2;
@@ -47,8 +47,14 @@ constexpr std::size_t kDraftTailRows = 3;
 namespace {
 
 void absorb_deploy_lines(const std::shared_ptr<Panel>& panel,
-                         const std::vector<std::string>& lines) {
+                         const std::vector<std::string>& lines,
+                         const std::size_t generation) {
   std::lock_guard lock(panel->mutex);
+  // Checked under the same lock that start_deploy clears the buffer with:
+  // a stale tail must not append one deploy's lines to another's log.
+  if (panel->deploy_generation.load(std::memory_order_relaxed) != generation) {
+    return;
+  }
   for (const std::string& line : lines) {
     panel->deploy_log_lines.push_back(line);
     const DeployLogLine parsed = parse_deploy_log_line(line);
@@ -121,7 +127,7 @@ void follow_deploy_log(const std::shared_ptr<Panel>& panel,
       if (fresh.empty()) {
         return;
       }
-      absorb_deploy_lines(keep_alive, fresh);
+      absorb_deploy_lines(keep_alive, fresh, generation);
       fresh.clear();
       request_render(*keep_alive);
     };
@@ -164,6 +170,18 @@ void follow_deploy_log(const std::shared_ptr<Panel>& panel,
 }
 
 }
+void clear_deploy_output(Panel& panel) {
+  panel.deploy_log_lines.clear();
+  panel.deploy_log_scroll = 0;
+  panel.deploy_status.clear();
+  panel.deploy_error.clear();
+  panel.deploy_finished = false;
+  panel.deploy_cancelled = false;
+  panel.deploy_outcome = berth::DeployOutcome{};
+  panel.deploy_stage = DeployStage::kOther;
+  panel.deploy_service.clear();
+}
+
 void start_deploy(const std::shared_ptr<Panel>& panel,
                   const berth::Paths& paths, const berth::Recipe& recipe,
                   const std::uint16_t forced_port, DeployPreStore pre_store) {
@@ -177,13 +195,8 @@ void start_deploy(const std::shared_ptr<Panel>& panel,
     panel->deploy_in_flight = true;
     panel->deploy_running.store(true, std::memory_order_relaxed);
     panel->deploy_cancel_requested.store(false, std::memory_order_relaxed);
-    panel->deploy_error.clear();
-    panel->deploy_finished = false;
-    panel->deploy_cancelled = false;
-    panel->deploy_outcome = berth::DeployOutcome{};
-    panel->deploy_stage = DeployStage::kOther;
+    clear_deploy_output(*panel);
     panel->deploy_service = recipe.service_name;
-    panel->deploy_log_lines.clear();
     panel->deploy_status = "starting " + recipe.service_name;
     generation =
         panel->deploy_generation.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -380,6 +393,28 @@ Element render_deploy_screen(const Panel& panel,
   }
   out.push_back(ftxui::separator());
 
+  Elements tail_label;
+  tail_label.push_back(ftxui::text("deploy.log") | ftxui::bold);
+  if (panel.deploy_log_lines.dropped() > 0) {
+    tail_label.push_back(
+        ftxui::text("  (" + std::to_string(panel.deploy_log_lines.dropped()) +
+                    " earlier lines dropped — the buffer is "
+                    "bounded)") |
+        ftxui::dim);
+  }
+  if (panel.deploy_log_scroll > 0) {
+    tail_label.push_back(
+        ftxui::text("  (scrolled up " +
+                    std::to_string(panel.deploy_log_scroll) +
+                    " lines — ] returns to the newest)") |
+        ftxui::dim);
+  }
+  out.push_back(ftxui::hbox(std::move(tail_label)) | ftxui::dim);
+  out.push_back(log_window(panel.deploy_log_lines, panel.deploy_log_scroll,
+                           drafting ? kDraftTailRows : kDeployTailRows,
+                           Color::Cyan));
+  out.push_back(ftxui::separator());
+
   if (!drafting) {
     out.push_back(paragraph_lines(deploy_stage_lines(
         panel.deploy_stage, panel.deploy_finished, panel.deploy_status)));
@@ -427,21 +462,6 @@ Element render_deploy_screen(const Panel& panel,
       out.push_back(ftxui::paragraph("  " + part) | ftxui::color(Color::Red));
     }
   }
-  out.push_back(ftxui::separator());
-
-  Elements tail_label;
-  tail_label.push_back(ftxui::text("deploy.log") | ftxui::bold);
-  if (panel.deploy_log_lines.dropped() > 0) {
-    tail_label.push_back(
-        ftxui::text("  (" + std::to_string(panel.deploy_log_lines.dropped()) +
-                    " earlier lines dropped — the buffer is "
-                    "bounded)") |
-        ftxui::dim);
-  }
-  out.push_back(ftxui::hbox(std::move(tail_label)) | ftxui::dim);
-  out.push_back(log_window(panel.deploy_log_lines, 0,
-                           drafting ? kDraftTailRows : kDeployTailRows,
-                           Color::Cyan));
   out.push_back(ftxui::separator());
   const std::vector<KeyHint> hints =
       panel.draft_running || panel.draft_ready

@@ -38,6 +38,8 @@ inline constexpr std::size_t kEditFieldCount = 8;
 [[nodiscard]] std::string_view edit_field_label(EditField field);
 
 [[nodiscard]] EditField next_edit_field(EditField field);
+// Shift+Tab walks the fields backwards; kNone enters at the last field.
+[[nodiscard]] EditField previous_edit_field(EditField field);
 
 // Out-of-range index is an invariant violation, not an Err.
 [[nodiscard]] EditField edit_field_at(std::size_t index);
